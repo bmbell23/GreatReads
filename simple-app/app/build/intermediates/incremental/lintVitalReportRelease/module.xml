@@ -3,7 +3,7 @@
     dir="/home/brandon/projects/Ereader/simple-app/app"
     name=":app"
     type="APP"
-    maven="Ereader:app:"
+    maven="GreatReads:app:"
     agpVersion="8.1.0"
     buildFolder="build"
     bootClassPath="/home/brandon/android-sdk/platforms/android-34/android.jar:/home/brandon/android-sdk/build-tools/33.0.1/core-lambda-stubs.jar"
