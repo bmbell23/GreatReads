@@ -8,7 +8,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>My Ereader</title>
+    <title>GreatReads</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+    <link rel="apple-touch-icon" href="/icon-192.png">
     <style>
         * {
             margin: 0;
@@ -51,6 +53,19 @@
             color: rgba(255, 255, 255, 0.55);
             letter-spacing: 0.3px;
             pointer-events: none;
+        }
+        /* Brand wordmark — purple→pink→blue gradient sampled from the
+           GreatReads launcher icon. Sits between clock and build stamp. */
+        .brand {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            font-weight: 700;
+            font-size: 13px;
+            letter-spacing: 0.4px;
+            background: linear-gradient(90deg, #4067EF 0%, #8640C0 50%, #C940B0 100%);
+            -webkit-background-clip: text;
+            background-clip: text;
+            color: transparent;
+            -webkit-text-fill-color: transparent;
         }
         .status-bar-row2 {
             display: flex;
@@ -247,6 +262,7 @@
     <div class="status-bar">
         <div class="status-bar-row1">
             <span id="status-clock"></span>
+            <span class="brand">GreatReads</span>
             <span id="build-stamp"></span>
         </div>
         <div class="status-bar-row2">
@@ -290,7 +306,7 @@
         // The semantic app version comes from /api/version (read live from
         // version.txt by the Flask backend); that's the one `gvc` bumps.
         // The pill shows both: "v<semver> · b<BUILD>".
-        const BUILD = '2026-05-29.11-FONTDEBOUNCE';
+        const BUILD = '2026-05-29.13-BRAND';
         const buildStamp = document.getElementById('build-stamp');
         buildStamp.textContent = 'b' + BUILD;
         fetch('http://100.69.184.113:8091/api/version').then(r => r.json()).then(d => {

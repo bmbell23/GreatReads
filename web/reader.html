@@ -9,7 +9,9 @@
     <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
     <meta http-equiv="Pragma" content="no-cache">
     <meta http-equiv="Expires" content="0">
-    <title>Reader</title>
+    <title>GreatReads — Reader</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+    <link rel="apple-touch-icon" href="/icon-192.png">
     <style>
         * {
             margin: 0;
@@ -125,6 +127,10 @@
             /* Avoid orphans/widows splitting awkwardly across columns */
             orphans: 2;
             widows: 2;
+            /* Explicit so Android WebView allows long-press selection. */
+            -webkit-user-select: text;
+            user-select: text;
+            -webkit-touch-callout: default;
         }
         #epub-content p {
             margin-bottom: 1em;
@@ -325,6 +331,94 @@
             font-family: ui-monospace, monospace;
         }
         .slider-ticks span { width: 1px; }
+
+        /* ---------- Highlights ---------- */
+        /* Visually wrap selected text. Translucent so the underlying
+           prose stays legible; rounded so adjacent highlights touching
+           don't look like one big bar. cursor:pointer because tapping
+           reveals the action popup. */
+        .ereader-hl {
+            background: rgba(255, 213, 79, 0.45);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: background 0.15s;
+        }
+        .ereader-hl:hover { background: rgba(255, 213, 79, 0.7); }
+
+        /* Floating popup that appears when an existing highlight is
+           tapped. Position is set inline by JS (top/left in viewport
+           coordinates). Three icon buttons: delete / dictionary / wiki. */
+        .hl-popup {
+            position: fixed;
+            z-index: 12000;
+            background: #1f1f1f;
+            border: 1px solid #444;
+            border-radius: 10px;
+            padding: 6px;
+            display: flex;
+            gap: 4px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+        }
+        .hl-popup button {
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 20px;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .hl-popup button:hover { background: #333; }
+        .hl-popup button.danger:hover { background: #5a1e1e; }
+
+        /* Lookup-URL settings modal (reached from reader-controls). */
+        .hl-settings-modal {
+            position: fixed;
+            inset: 0;
+            background: rgba(0,0,0,0.85);
+            z-index: 11000;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        .hl-settings-modal.open { display: flex; }
+        .hl-settings-modal .card {
+            background: #1f1f1f;
+            border-radius: 12px;
+            padding: 20px;
+            max-width: 520px;
+            width: 100%;
+            color: #fff;
+        }
+        .hl-settings-modal h3 { margin: 0 0 12px 0; }
+        .hl-settings-modal label {
+            display: block;
+            color: #bbb;
+            font-size: 13px;
+            margin: 12px 0 4px 0;
+        }
+        .hl-settings-modal input[type="text"] {
+            width: 100%;
+            padding: 10px;
+            background: #111;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            font-size: 14px;
+            font-family: ui-monospace, monospace;
+        }
+        .hl-settings-modal .hint { color: #888; font-size: 12px; margin-top: 4px; }
+        .hl-settings-modal .row {
+            display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px;
+        }
+        .hl-settings-modal button {
+            padding: 10px 16px; border-radius: 8px; border: none; font-size: 14px;
+            cursor: pointer;
+        }
+        .hl-settings-modal .save { background: #2196F3; color: #fff; }
+        .hl-settings-modal .cancel { background: #333; color: #ccc; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -390,6 +484,10 @@
         </div>
 
         <div class="control-row">
+            <button class="control-btn" onclick="openLookupSettings()">🔧 Lookup URLs (dictionary / wiki)</button>
+        </div>
+
+        <div class="control-row">
             <span class="progress-text" id="progress-text">0%</span>
         </div>
 
@@ -416,13 +514,39 @@
         </div>
     </div>
 
+    <!-- Highlight-action popup. JS positions it next to the tapped highlight. -->
+    <div id="hl-popup" class="hl-popup" style="display:none;">
+        <button title="Look up in dictionary" onclick="lookupHL('dict')">📖</button>
+        <button title="Look up in wiki"       onclick="lookupHL('wiki')">🌐</button>
+        <button class="danger" title="Delete highlight" onclick="deleteHL()">🗑️</button>
+    </div>
+
+    <!-- Lookup-URL settings modal -->
+    <div id="hl-settings" class="hl-settings-modal">
+        <div class="card">
+            <h3>Lookup URLs</h3>
+            <label for="dict-url">Dictionary URL pattern</label>
+            <input type="text" id="dict-url" placeholder="https://www.merriam-webster.com/dictionary/{word}">
+            <div class="hint">Use <code>{word}</code> where the highlighted text goes.</div>
+
+            <label for="wiki-url">Wiki URL pattern</label>
+            <input type="text" id="wiki-url" placeholder="https://en.wikipedia.org/wiki/Special:Search?search={word}">
+            <div class="hint">Same — use <code>{word}</code> as the placeholder. Per-fandom wikis work: e.g. <code>https://redrising.fandom.com/wiki/Special:Search?query={word}</code></div>
+
+            <div class="row">
+                <button class="cancel" onclick="closeLookupSettings()">Cancel</button>
+                <button class="save" onclick="saveLookupSettings()">Save</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // BUILD is a short cache-bust / HTML-version tag I bump on every
         // web edit so I can verify the WebView picked up the new HTML.
         // The semantic app version comes from /api/version (read live from
         // version.txt by the Flask backend); that's the one `gvc` bumps.
         // The pill shows both: "v<semver> · b<BUILD>".
-        const BUILD = '2026-05-29.11-FONTDEBOUNCE';
+        const BUILD = '2026-05-29.13-BRAND';
         const buildStamp = document.getElementById('build-stamp');
         buildStamp.textContent = 'b' + BUILD;
         fetch('http://100.69.184.113:8091/api/version').then(r => r.json()).then(d => {
@@ -698,8 +822,14 @@
                 });
             });
 
-            // Calculate pages after content renders
-            setTimeout(calculatePages, 100);
+            // Load + visually apply server-side highlights BEFORE pagination
+            // so the wrapping spans (which split text nodes but don't change
+            // metrics) are present when calculatePages measures geometry.
+            // Fire and forget — calculatePages runs after either path.
+            initHighlights();
+            loadHighlightsForBook().finally(() => {
+                setTimeout(calculatePages, 100);
+            });
         }
 
         // ---------- Word-anchored reading position ----------
@@ -1278,6 +1408,114 @@
             clearTimeout(flashToast._h);
             flashToast._h = setTimeout(() => { t.style.opacity = '0'; }, 1800);
         }
+        // ---------- Highlights ----------
+        // Selecting text in #epub-content auto-saves a highlight (no popup
+        // on create). Tapping an existing highlight opens a small popup
+        // with three actions: delete / dictionary lookup / wiki lookup.
+        // Lookup URLs are user-configurable (settings modal in the reader
+        // controls menu); both default to sensible public services.
+        //
+        // Position is pinned to (anchor, offset, length) where:
+        //   anchor = data-anchor index of the containing paragraph
+        //   offset = char offset into that paragraph's textContent
+        //   length = char count of the selected text
+        // This survives font-size + viewport changes because anchors are
+        // keyed to source-DOM nodes, and offset/length are computed on
+        // the same textContent the EPUB always exposes.
+        const HL_DICT_KEY = 'ereader.lookup.dict';
+        const HL_WIKI_KEY = 'ereader.lookup.wiki';
+        const HL_DICT_DEFAULT = 'https://www.merriam-webster.com/dictionary/{word}';
+        const HL_WIKI_DEFAULT = 'https://en.wikipedia.org/wiki/Special:Search?search={word}';
+        let _activeHLId = null;
+        let _activeHLText = '';
+        let _hlInited = false;
+
+        function getLookupURL(kind) {
+            const key = kind === 'dict' ? HL_DICT_KEY : HL_WIKI_KEY;
+            const def = kind === 'dict' ? HL_DICT_DEFAULT : HL_WIKI_DEFAULT;
+            try { return localStorage.getItem(key) || def; } catch (_) { return def; }
+        }
+
+        function findAnchorAncestor(node) {
+            let el = node && (node.nodeType === 1 ? node : node.parentNode);
+            while (el && el.id !== 'epub-content') {
+                if (el.dataset && el.dataset.anchor != null) return el;
+                el = el.parentNode;
+            }
+            return null;
+        }
+
+        // Walk text nodes inside `root`, accumulating char count until we
+        // hit (targetNode, targetOffset). Returns the accumulated offset
+        // or -1 if the target wasn't encountered.
+        function charOffsetWithin(root, targetNode, targetOffset) {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let count = 0; let n;
+            while ((n = walker.nextNode())) {
+                if (n === targetNode) return count + targetOffset;
+                count += n.nodeValue.length;
+            }
+            return -1;
+        }
+
+        // Inverse of charOffsetWithin: given a char position, return the
+        // {node, offset} that lands on that character.
+        function findTextPosition(root, charOffset) {
+            const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+            let count = 0; let last = null; let n;
+            while ((n = walker.nextNode())) {
+                const len = n.nodeValue.length;
+                if (charOffset <= count + len) return { node: n, offset: charOffset - count };
+                count += len; last = n;
+            }
+            if (last) return { node: last, offset: last.nodeValue.length };
+            return null;
+        }
+
+        // Wrap every text-node fragment intersected by `range` in
+        // <span class="ereader-hl" data-hl-id="…">. Splits text nodes at
+        // the range boundaries. Handles selections that cross inline tags
+        // (e.g. through an <em>) — each crossed text node becomes its own
+        // wrap, all sharing the same hlId so delete removes them together.
+        function wrapRangeAsHighlight(range, hlId) {
+            const rootEl = range.commonAncestorContainer.nodeType === 1
+                ? range.commonAncestorContainer
+                : range.commonAncestorContainer.parentNode;
+            const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
+                acceptNode(node) {
+                    const r = document.createRange();
+                    r.selectNodeContents(node);
+                    // intersects(range) without using the unsupported helper.
+                    const after  = range.compareBoundaryPoints(Range.END_TO_START, r) > 0;
+                    const before = range.compareBoundaryPoints(Range.START_TO_END, r) < 0;
+                    return (after || before) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
+                }
+            });
+            const nodes = []; let n;
+            while ((n = walker.nextNode())) nodes.push(n);
+            nodes.forEach(node => {
+                let start = 0, end = node.nodeValue.length;
+                if (node === range.startContainer) start = range.startOffset;
+                if (node === range.endContainer)   end   = range.endOffset;
+                if (start >= end) return;
+                let target = node;
+                if (start > 0) target = target.splitText(start);
+                if (end - start < target.nodeValue.length) target.splitText(end - start);
+                const span = document.createElement('span');
+                span.className = 'ereader-hl';
+                span.dataset.hlId = hlId;
+                target.parentNode.insertBefore(span, target);
+                span.appendChild(target);
+            });
+        }
+
+        function unwrapHL(span) {
+            const parent = span.parentNode;
+            if (!parent) return;
+            while (span.firstChild) parent.insertBefore(span.firstChild, span);
+            parent.removeChild(span);
+            parent.normalize();
+        }
         function saveFontSizePref() {
             try { localStorage.setItem(FONT_KEY, String(fontSize)); } catch (e) {}
         }
@@ -1287,6 +1525,169 @@
                 if (v >= 12 && v <= 32) return v;
             } catch (e) {}
             return null;
+        }
+
+        // Pull the current selection if it lies entirely inside #epub-content.
+        function getEpubSelectionRange() {
+            const sel = window.getSelection();
+            if (!sel || sel.isCollapsed || sel.rangeCount === 0) return null;
+            const range = sel.getRangeAt(0);
+            if (range.collapsed) return null;
+            const content = document.getElementById('epub-content');
+            if (!content || !content.contains(range.startContainer) || !content.contains(range.endContainer)) return null;
+            return range;
+        }
+
+        // Called on touchend/mouseup. If the user selected text → save as
+        // highlight (optimistic wrap, then POST). Otherwise no-op; the
+        // existing page-turn handler runs separately.
+        async function handleSelectionMaybe() {
+            const range = getEpubSelectionRange();
+            if (!range) return false;
+            const text = range.toString().trim();
+            if (!text) return false;
+            const startAnchor = findAnchorAncestor(range.startContainer);
+            const endAnchor   = findAnchorAncestor(range.endContainer);
+            if (!startAnchor || startAnchor !== endAnchor) {
+                flashToast('⚠️ Highlight within a single paragraph only');
+                window.getSelection().removeAllRanges();
+                return true;
+            }
+            const offset    = charOffsetWithin(startAnchor, range.startContainer, range.startOffset);
+            const endOffset = charOffsetWithin(startAnchor, range.endContainer,   range.endOffset);
+            if (offset < 0 || endOffset < 0 || endOffset <= offset) return true;
+            const length    = endOffset - offset;
+            const anchorIdx = parseInt(startAnchor.dataset.anchor, 10);
+
+            const tmpId = 'tmp-' + Date.now();
+            try { wrapRangeAsHighlight(range, tmpId); } catch (e) { console.warn('wrap failed', e); }
+            window.getSelection().removeAllRanges();
+
+            try {
+                const r = await fetch(`${API_URL}/highlights`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        type: 'highlight', bookId, bookTitle: title,
+                        anchor: anchorIdx, offset, length,
+                        page: currentEpubPage, total: totalPages,
+                        text, color: 'yellow'
+                    })
+                });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const saved = await r.json();
+                document.querySelectorAll(`[data-hl-id="${tmpId}"]`).forEach(s => {
+                    s.dataset.hlId = saved.id;
+                });
+                flashToast('✏️ Highlight saved');
+            } catch (e) {
+                document.querySelectorAll(`[data-hl-id="${tmpId}"]`).forEach(unwrapHL);
+                flashToast('⚠️ Save failed: ' + e.message);
+            }
+            return true;
+        }
+
+        // ---------- Highlight action popup ----------
+        function showHLPopup(hl) {
+            _activeHLId = hl.dataset.hlId;
+            _activeHLText = hl.textContent.trim();
+            const popup = document.getElementById('hl-popup');
+            popup.style.display = 'flex';
+            // Measure after display.
+            const rect = hl.getBoundingClientRect();
+            const popW = popup.offsetWidth  || 168;
+            const popH = popup.offsetHeight || 52;
+            let left = rect.left + rect.width / 2 - popW / 2;
+            let top  = rect.top - popH - 8;
+            if (top < 8) top = rect.bottom + 8;
+            left = Math.max(8, Math.min(left, window.innerWidth  - popW - 8));
+            top  = Math.max(8, Math.min(top,  window.innerHeight - popH - 8));
+            popup.style.left = left + 'px';
+            popup.style.top  = top + 'px';
+        }
+        function hideHLPopup() {
+            const popup = document.getElementById('hl-popup');
+            if (popup) popup.style.display = 'none';
+            _activeHLId = null; _activeHLText = '';
+        }
+        async function deleteHL() {
+            if (!_activeHLId) return;
+            const id = _activeHLId;
+            hideHLPopup();
+            try {
+                const r = await fetch(`${API_URL}/highlights/${id}`, { method: 'DELETE' });
+                if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
+                document.querySelectorAll(`[data-hl-id="${id}"]`).forEach(unwrapHL);
+                flashToast('🗑️ Deleted');
+            } catch (e) {
+                flashToast('⚠️ Delete failed');
+            }
+        }
+        function lookupHL(kind) {
+            if (!_activeHLText) return;
+            const url = getLookupURL(kind);
+            const target = url.replace('{word}', encodeURIComponent(_activeHLText));
+            hideHLPopup();
+            window.open(target, '_blank');
+        }
+
+        // ---------- Apply server-side highlights on load ----------
+        async function loadHighlightsForBook() {
+            if (!bookId) return;
+            try {
+                const r = await fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(bookId)}&type=highlight`);
+                if (!r.ok) return;
+                const data = await r.json();
+                const content = document.getElementById('epub-content');
+                if (!content) return;
+                for (const it of (data.items || [])) {
+                    if (typeof it.anchor !== 'number' || typeof it.offset !== 'number' || typeof it.length !== 'number') continue;
+                    const el = content.querySelector(`[data-anchor="${it.anchor}"]`);
+                    if (!el) continue;
+                    const start = findTextPosition(el, it.offset);
+                    const end   = findTextPosition(el, it.offset + it.length);
+                    if (!start || !end) continue;
+                    try {
+                        const range = document.createRange();
+                        range.setStart(start.node, start.offset);
+                        range.setEnd(end.node, end.offset);
+                        wrapRangeAsHighlight(range, it.id);
+                    } catch (e) { console.warn('apply highlight failed', it.id, e); }
+                }
+            } catch (e) { console.warn('loadHighlightsForBook', e); }
+        }
+
+        // ---------- Lookup-URL settings modal ----------
+        function openLookupSettings() {
+            document.getElementById('dict-url').value = getLookupURL('dict');
+            document.getElementById('wiki-url').value = getLookupURL('wiki');
+            document.getElementById('hl-settings').classList.add('open');
+        }
+        function closeLookupSettings() {
+            document.getElementById('hl-settings').classList.remove('open');
+        }
+        function saveLookupSettings() {
+            const d = document.getElementById('dict-url').value.trim() || HL_DICT_DEFAULT;
+            const w = document.getElementById('wiki-url').value.trim() || HL_WIKI_DEFAULT;
+            try {
+                localStorage.setItem(HL_DICT_KEY, d);
+                localStorage.setItem(HL_WIKI_KEY, w);
+            } catch (_) {}
+            closeLookupSettings();
+            flashToast('✅ Lookup URLs saved');
+        }
+
+        // Wire selection + popup once per page load. The popup closes on
+        // any click that isn't inside the popup itself or on a highlight.
+        function initHighlights() {
+            if (_hlInited) return;
+            _hlInited = true;
+            document.addEventListener('click', (e) => {
+                const hl = e.target.closest && e.target.closest('.ereader-hl');
+                const inPopup = e.target.closest && e.target.closest('#hl-popup');
+                if (hl) { showHLPopup(hl); return; }
+                if (!inPopup) hideHLPopup();
+            }, true);
         }
 
         // ---------- IndexedDB book cache (shared with index.html) ----------
@@ -1479,11 +1880,22 @@
                 touchStartY = e.changedTouches[0].screenY;
             }, { passive: true });
 
-            viewport.addEventListener('touchend', (e) => {
+            viewport.addEventListener('touchend', async (e) => {
                 touchEndX = e.changedTouches[0].screenX;
                 touchEndY = e.changedTouches[0].screenY;
+                // If the user finished a text selection, save it as a
+                // highlight and skip page-turn handling. Same for taps
+                // that landed on an existing highlight (the click
+                // listener installed by initHighlights opens the popup).
+                if (await handleSelectionMaybe()) return;
+                const tgt = e.target;
+                if (tgt && tgt.closest && (tgt.closest('.ereader-hl') || tgt.closest('#hl-popup'))) return;
+                const popup = document.getElementById('hl-popup');
+                if (popup && popup.style.display !== 'none') { hideHLPopup(); return; }
                 handleSwipe();
             }, { passive: true });
+            // Mouse selection for desktop debugging — same code path.
+            document.addEventListener('mouseup', () => { handleSelectionMaybe(); });
 
             function handleSwipe() {
                 const diffX = touchStartX - touchEndX;

@@ -14,5 +14,5 @@ dependencyResolutionManagement {
     }
 }
 
-rootProject.name = "Ereader"
+rootProject.name = "GreatReads"
 include ':app'

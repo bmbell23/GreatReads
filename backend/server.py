@@ -324,6 +324,12 @@ def create_highlight():
         'bookTitle': body.get('bookTitle') or '',
         'bookAuthor': body.get('bookAuthor') or '',
         'anchor': body.get('anchor'),
+        # offset = character index into the anchor element's textContent;
+        # length = number of characters selected. Together they re-locate
+        # the exact span on reload, surviving font-size / pagination changes.
+        # Pre-highlight bookmarks omit both (null).
+        'offset': body.get('offset'),
+        'length': body.get('length'),
         'page': body.get('page'),
         'total': body.get('total'),
         'text': body.get('text') or '',
