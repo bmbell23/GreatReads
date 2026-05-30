@@ -145,15 +145,58 @@
             break-after: avoid;
             page-break-after: avoid;
         }
-        /* Force every chapter (h1) and major section (h2) onto a fresh column.
-           In single-column mode this == new page. In dual-page mode it lands
-           at the top of either the left or right column; better than getting
-           jammed mid-page. */
-        #epub-content h1, #epub-content h2 {
+        /* Force top-level chapter headings onto a fresh column.
+           h1 is the only heading level we break universally — it is almost
+           always a chapter or major-part opener regardless of EPUB.
+           h2/h3 are intentionally excluded: they are used inconsistently
+           across publishers (subtitles, pull quotes, character names, scene
+           labels…) and forcing a column break on all of them causes spurious
+           mid-chapter blank pages. Cross-file chapter/part breaks are already
+           handled by the .epub-spine-item wrapper; within-file explicit breaks
+           are picked up from the publisher's inline page-break-before:always
+           styles (converted below) and epub:type class names. */
+        #epub-content h1 {
             break-before: column;
             page-break-before: always;
             -webkit-column-break-before: always;
         }
+        /* Suppress double-break: the spine-item wrapper already forces a column
+           break before each chapter file. The first heading inside that wrapper
+           would trigger a SECOND break, creating a blank page. Tag applied in JS
+           after content injection. */
+        #epub-content .epub-spine-first-heading {
+            break-before: auto !important;
+            page-break-before: auto !important;
+            -webkit-column-break-before: auto !important;
+        }
+        /* Separator injected between EPUB spine items (chapter files) so that
+           the join between two concatenated files always starts on a new page. */
+        #epub-content .epub-chapter-sep {
+            break-before: column;
+            display: block;
+            height: 0;
+        }
+        /* Per-spine-item wrapper. Carries data-spine-href so the TOC can
+           resolve hrefs (which are scoped per-file in nav.xhtml / toc.ncx)
+           against the correct slice of the concatenated DOM. Every wrapper
+           except the first starts on a new column so chapter files never
+           run together — replaces the old .epub-chapter-sep sentinel. */
+        #epub-content .epub-spine-item {
+            break-before: column;
+            display: block;
+        }
+        #epub-content .epub-spine-item-first {
+            break-before: auto;
+        }
+        /* NOTE: do NOT add a CSS rule that breaks on .pagebreak /
+           [epub:type="pagebreak"]. In EPUB 3 those mark the location of
+           the ORIGINAL PRINT page numbers (for cross-referencing), not
+           reader page breaks. Random House / Pierce Brown books in
+           particular pepper these throughout every chapter and forcing a
+           column break on them produces a blank page every couple of
+           paragraphs. Real publisher-requested breaks come through as
+           inline style="page-break-before:always" and are converted to
+           column breaks in JS below. */
         /* Images must:
            - Never exceed the column width (so wide images don't bleed into the
              next column on square-aspect unfolded screens).
@@ -290,11 +333,11 @@
         }
         #status-clock {
             position: absolute;
-            left: 28px;
+            left: 36px;
         }
         #build-stamp {
             position: absolute;
-            right: 28px;
+            right: 36px;
             cursor: pointer;
             pointer-events: auto; /* allow tapping to download APK */
             -webkit-tap-highlight-color: transparent;
@@ -516,9 +559,6 @@
         <h3 style="color: #fff; margin: 0 0 10px 0;">Reading Options</h3>
 
         <div class="control-row">
-            <span style="color: #aaa; width: 100%; text-align: center;">Font Size: <span id="font-size-label">18</span>px</span>
-        </div>
-        <div class="control-row">
             <div class="slider-row">
                 <input type="range" class="font-slider" id="font-slider"
                        min="12" max="32" step="2" value="18"
@@ -547,10 +587,6 @@
 
         <div class="control-row">
             <button class="control-btn" onclick="bookmarkCurrentPage()">🔖 Bookmark this page</button>
-        </div>
-
-        <div class="control-row">
-            <button class="control-btn" onclick="openLookupSettings()">🔧 Lookup URLs (dictionary / wiki)</button>
         </div>
 
         <div class="control-row">
@@ -624,7 +660,14 @@
         buildStamp.textContent = BUILD;
         buildStamp.title = 'Tap to download latest APK';
         buildStamp.addEventListener('click', () => {
-            window.location.href = 'http://100.69.184.113:8090/ereader.apk';
+            // Use a hidden <a download> so Android's DownloadListener fires
+            // instead of navigating the WebView away from the page.
+            const a = document.createElement('a');
+            a.href = 'http://100.69.184.113:8090/ereader.apk';
+            a.download = 'ereader.apk';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
         });
 
         // Status-bar clock (HH:MM, 24h). Updates each minute.
@@ -637,6 +680,41 @@
         }
         tickClock();
         setInterval(tickClock, 30000);
+
+        // ---------- Screen wake lock ----------
+        // Honours the "Keep screen awake while reading" preference from Settings.
+        // Tries the Web Wake Lock API first; falls back to window.Android.keepScreenOn
+        // if the APK bridge is available (requires a future APK build to add the method).
+        let _wakeLock = null;
+        async function applyWakeLock() {
+            const want = localStorage.getItem('ereader.settings.keepAwake') === '1';
+            if (!want) { releaseWakeLock(); return; }
+            // Try Web Wake Lock API (works in secure contexts; may work in WebView too).
+            if ('wakeLock' in navigator) {
+                try {
+                    if (!_wakeLock || _wakeLock.released) {
+                        _wakeLock = await navigator.wakeLock.request('screen');
+                    }
+                    return;
+                } catch (_) {}
+            }
+            // Fallback: Android JS bridge (requires keepScreenOn method in MainActivity).
+            if (window.Android && typeof window.Android.keepScreenOn === 'function') {
+                window.Android.keepScreenOn(true);
+            }
+        }
+        function releaseWakeLock() {
+            if (_wakeLock && !_wakeLock.released) { try { _wakeLock.release(); } catch (_) {} }
+            _wakeLock = null;
+            if (window.Android && typeof window.Android.keepScreenOn === 'function') {
+                window.Android.keepScreenOn(false);
+            }
+        }
+        // Re-acquire after the tab becomes visible again (e.g. returning from another app).
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') applyWakeLock();
+        });
+        applyWakeLock();
 
         const urlParams = new URLSearchParams(window.location.search);
         const bookId = urlParams.get('id');
@@ -800,8 +878,13 @@
                     }
                 }
 
-                // Extract HTML files in order
+                // Extract HTML files in order. Each spine item gets parsed
+                // and its <body> contents wrapped in a marker div carrying
+                // data-spine-href, so the TOC resolver can scope per-file
+                // fragment lookups against the merged DOM (see
+                // resolveNavTocAnchors below).
                 let htmlContent = '';
+                let firstSpineItem = true;
                 for (let itemref of itemrefs) {
                     const idref = itemref.getAttribute('idref');
                     const href = manifest[idref];
@@ -829,7 +912,22 @@
                                 return match;
                             });
 
-                            htmlContent += html;
+                            // Pull just the <body> innerHTML for this spine
+                            // item, then wrap it in a per-file marker. Fall
+                            // back to the raw html if parsing fails.
+                            let bodyInner = html;
+                            try {
+                                const spineDoc = new DOMParser().parseFromString(html, 'text/html');
+                                if (spineDoc && spineDoc.body) bodyInner = spineDoc.body.innerHTML;
+                            } catch (_) { /* keep raw */ }
+                            const safeHref = href
+                                .replace(/&/g, '&amp;')
+                                .replace(/"/g, '&quot;');
+                            const wrapperCls = firstSpineItem
+                                ? 'epub-spine-item epub-spine-item-first'
+                                : 'epub-spine-item';
+                            htmlContent += `<div class="${wrapperCls}" data-spine-href="${safeHref}">${bodyInner}</div>`;
+                            firstSpineItem = false;
                         }
                     }
                 }
@@ -874,7 +972,18 @@
             const bodies = tempDiv.querySelectorAll('body');
             let allContent = '';
             if (bodies.length > 0) {
-                bodies.forEach(body => allContent += body.innerHTML);
+                // Insert an explicit column-break sentinel between each spine item
+                // (EPUB chapter file) so that content from different files never
+                // runs together on the same page. The sentinel is an empty div
+                // with break-before:column; the first body gets no prefix.
+                let firstBody = true;
+                bodies.forEach(body => {
+                    if (!firstBody) {
+                        allContent += '<div class="epub-chapter-sep"></div>';
+                    }
+                    allContent += body.innerHTML;
+                    firstBody = false;
+                });
             } else {
                 allContent = tempDiv.innerHTML;
             }
@@ -889,6 +998,30 @@
             const epubContent = document.getElementById('epub-content');
             epubContent.innerHTML = contentDiv.innerHTML;
             epubContent.style.fontSize = fontSize + 'px';
+
+            // Suppress double column-break: each .epub-spine-item wrapper
+            // already forces break-before:column, so the first heading
+            // INSIDE the wrapper must NOT also force one (that would create
+            // a blank page). Use querySelector so we catch headings that are
+            // nested inside publisher wrapper divs, not just direct children.
+            epubContent.querySelectorAll('.epub-spine-item').forEach(wrapper => {
+                const firstHeading = wrapper.querySelector('h1, h2, h3, h4, h5, h6');
+                if (firstHeading) firstHeading.classList.add('epub-spine-first-heading');
+            });
+
+            // Convert EPUB inline page-break styles to column breaks so they
+            // work correctly inside our CSS multi-column layout. Publishers
+            // often annotate elements with style="page-break-before:always"
+            // which browsers may not map to a column break automatically.
+            epubContent.querySelectorAll('[style]').forEach(el => {
+                const pb = el.style.pageBreakBefore;
+                const bb = el.style.breakBefore;
+                if (pb === 'always' || pb === 'page' || pb === 'left' || pb === 'right' ||
+                    bb === 'page' || bb === 'left' || bb === 'right') {
+                    el.style.breakBefore = 'column';
+                    el.style.pageBreakBefore = '';
+                }
+            });
 
             // Tag every leaf block element with a stable data-anchor="N".
             // Done on the live DOM (not the parsed tree) so the queries below
@@ -2219,24 +2352,84 @@
         }
 
         // Walk the nav tree and fill in `anchor` (data-anchor number) for
-        // each item by matching the href fragment to an id in the live DOM.
+        // each item. Resolution strategy, in order of preference:
+        //   1. Match the href's file basename to a per-spine wrapper
+        //      ([data-spine-href]) added at load time.
+        //   2. If the href has a #fragment, look up that id INSIDE the
+        //      matched wrapper (scoped — so duplicate ids across files
+        //      never cross-match), then walk to the nearest enclosing
+        //      data-anchor element.
+        //   3. If no fragment, use the wrapper's own data-anchor (the
+        //      wrapper is in ANCHOR_SELECTOR so it always has one).
+        //   4. Last-ditch fallback: match the TOC label text against a
+        //      heading. Only used when the href is missing or unmatched.
         function resolveNavTocAnchors(tree, epubContent) {
-            const idMap = {};
-            epubContent.querySelectorAll('[id][data-anchor]').forEach(el => {
-                idMap[el.id] = parseInt(el.dataset.anchor, 10);
+            // basename (lowercase, URI-decoded) -> wrapper element
+            const spineMap = {};
+            epubContent.querySelectorAll('[data-spine-href]').forEach(el => {
+                const raw = el.getAttribute('data-spine-href') || '';
+                let base = raw.split('/').pop() || '';
+                try { base = decodeURIComponent(base); } catch (_) {}
+                base = base.toLowerCase();
+                if (base && !spineMap[base]) spineMap[base] = el;
             });
-            function resolve(items) {
-                for (const item of items) {
-                    const frag = item.href.includes('#') ? item.href.split('#').pop() : null;
-                    if (frag && idMap[frag] != null) {
-                        item.anchor = idMap[frag];
-                    } else {
-                        item.anchor = findAnchorByText(item.title, epubContent);
+
+            // Find the data-anchor for an element: itself, nearest
+            // descendant, or nearest ancestor — in that order.
+            function anchorFor(el) {
+                if (!el) return null;
+                if (el.dataset && el.dataset.anchor != null) {
+                    return parseInt(el.dataset.anchor, 10);
+                }
+                const child = el.querySelector && el.querySelector('[data-anchor]');
+                if (child) return parseInt(child.dataset.anchor, 10);
+                let cur = el.parentElement;
+                while (cur) {
+                    if (cur.dataset && cur.dataset.anchor != null) {
+                        return parseInt(cur.dataset.anchor, 10);
                     }
-                    if (item.children.length) resolve(item.children);
+                    cur = cur.parentElement;
+                }
+                return null;
+            }
+
+            function resolveHref(href, title) {
+                if (!href) return findAnchorByText(title, epubContent);
+                const hashIdx = href.indexOf('#');
+                const filePart = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+                const fragPart = hashIdx >= 0 ? href.slice(hashIdx + 1) : '';
+                let base = (filePart.split('/').pop() || '').toLowerCase();
+                try { base = decodeURIComponent(base); } catch (_) {}
+                const wrapper = base ? spineMap[base] : null;
+
+                if (wrapper && fragPart) {
+                    let frag = fragPart;
+                    try { frag = decodeURIComponent(frag); } catch (_) {}
+                    let target = null;
+                    try { target = wrapper.querySelector('#' + CSS.escape(frag)); }
+                    catch (_) { /* fall through */ }
+                    if (!target) {
+                        const safe = frag.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                        target = wrapper.querySelector('[id="' + safe + '"]')
+                              || wrapper.querySelector('[name="' + safe + '"]');
+                    }
+                    const a = anchorFor(target);
+                    if (a != null) return a;
+                }
+                if (wrapper) {
+                    const a = anchorFor(wrapper);
+                    if (a != null) return a;
+                }
+                return findAnchorByText(title, epubContent);
+            }
+
+            function walk(items) {
+                for (const item of items) {
+                    item.anchor = resolveHref(item.href, item.title);
+                    if (item.children && item.children.length) walk(item.children);
                 }
             }
-            resolve(tree);
+            walk(tree);
         }
 
         function findAnchorByText(text, epubContent) {

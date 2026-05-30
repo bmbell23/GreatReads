@@ -48,7 +48,7 @@
             display: flex;
             align-items: center;
             justify-content: center;   /* brand is centred in the row */
-            padding: 0 28px;           /* inset from curved-screen edges */
+            padding: 0 36px;           /* inset from curved-screen edges */
             font-size: 12px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             color: rgba(255, 255, 255, 0.55);
@@ -57,13 +57,13 @@
         /* Clock — pinned to the left with the same inset as the padding. */
         #status-clock {
             position: absolute;
-            left: 28px;
+            left: 36px;
             pointer-events: none;
         }
         /* Build stamp — pinned to the right; tappable to download update. */
         #build-stamp {
             position: absolute;
-            right: 28px;
+            right: 36px;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
             text-decoration: none;
@@ -142,6 +142,42 @@
             cursor: pointer;
         }
         .menu-popup button:active { background: #3a3a3a; }
+        /* Per-book context menu — shown on right-click (desktop) or long-press
+           (touch). Position is set inline in JS based on cursor / touch point. */
+        .book-context-menu {
+            position: fixed;
+            background: #2a2a2a;
+            border-radius: 8px;
+            box-shadow: 0 6px 24px rgba(0,0,0,0.6);
+            z-index: 100002;
+            min-width: 200px;
+            display: none;
+            overflow: hidden;
+        }
+        .book-context-menu.open { display: block; }
+        .book-context-menu .ctx-header {
+            padding: 10px 14px;
+            font-size: 12px;
+            color: #888;
+            border-bottom: 1px solid #1a1a1a;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            max-width: 280px;
+        }
+        .book-context-menu button {
+            display: block;
+            width: 100%;
+            background: transparent;
+            border: none;
+            color: #fff;
+            text-align: left;
+            padding: 12px 16px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        .book-context-menu button:active { background: #3a3a3a; }
+        .book-context-menu button.danger { color: #ff7676; }
         /* Full-screen overlay for the highlights/bookmarks browser. */
         .overlay {
             position: fixed;
@@ -297,6 +333,51 @@
             margin: 20px;
             border-radius: 8px;
         }
+        /* Settings overlay — single-row header, so less top padding than hl overlay */
+        .overlay.settings-overlay { padding-top: 60px; }
+        .setting-section {
+            font-size: 11px; font-weight: 700; letter-spacing: 1px;
+            text-transform: uppercase; color: #888;
+            padding: 20px 4px 8px 4px;
+        }
+        .setting-row {
+            display: flex; align-items: center; justify-content: space-between;
+            padding: 14px 4px; border-bottom: 1px solid #222;
+            gap: 12px;
+        }
+        .setting-row-label { color: #ddd; font-size: 15px; flex: 1; }
+        .setting-url-row {
+            padding: 12px 4px; border-bottom: 1px solid #222;
+        }
+        .setting-url-label { display: block; color: #888; font-size: 12px; margin-bottom: 6px; }
+        .setting-url-row input {
+            width: 100%; padding: 10px 12px;
+            background: #2a2a2a; border: none; border-radius: 8px;
+            color: #fff; font-size: 13px; box-sizing: border-box;
+        }
+        .setting-hint { color: #555; font-size: 11px; margin-top: 4px; line-height: 1.4; }
+        .setting-save-btn {
+            display: block; width: 100%; margin-top: 20px;
+            padding: 14px; background: #4067EF; border: none; border-radius: 10px;
+            color: #fff; font-size: 16px; font-weight: 600; cursor: pointer;
+        }
+        /* Toggle switch */
+        .toggle-switch {
+            position: relative; display: inline-block;
+            width: 50px; height: 28px; flex-shrink: 0;
+        }
+        .toggle-switch input { opacity: 0; width: 0; height: 0; }
+        .toggle-track {
+            position: absolute; inset: 0;
+            background: #444; border-radius: 14px; transition: background 0.2s;
+        }
+        .toggle-switch input:checked + .toggle-track { background: #4067EF; }
+        .toggle-thumb {
+            position: absolute; top: 4px; left: 4px;
+            width: 20px; height: 20px; background: #fff;
+            border-radius: 50%; transition: transform 0.2s;
+        }
+        .toggle-switch input:checked + .toggle-track .toggle-thumb { transform: translateX(22px); }
     </style>
 </head>
 <body>
@@ -320,6 +401,51 @@
     <div class="menu-popup" id="menu-popup">
         <button id="menu-highlights">✏️ Highlights</button>
         <button id="menu-bookmarks">🔖 Bookmarks</button>
+        <button id="menu-settings">⚙️ Settings</button>
+    </div>
+
+    <!-- Per-book context menu (right-click on desktop, long-press on touch). -->
+    <div class="book-context-menu" id="book-ctx-menu">
+        <div class="ctx-header" id="book-ctx-title"></div>
+        <button id="ctx-clear-progress" class="danger">🗑️ Clear Reading Progress</button>
+    </div>
+
+    <!-- Settings overlay -->
+    <div class="overlay settings-overlay" id="settings-overlay">
+        <div class="overlay-header">
+            <div class="overlay-header-row">
+                <button class="icon-btn" onclick="closeSettings()" title="Back">←</button>
+                <div class="overlay-title">Settings</div>
+            </div>
+        </div>
+        <div class="overlay-list">
+            <!-- Display section -->
+            <div class="setting-section">Display</div>
+            <div class="setting-row">
+                <span class="setting-row-label">Keep screen awake while reading</span>
+                <label class="toggle-switch" title="Keep screen on">
+                    <input type="checkbox" id="setting-keep-awake">
+                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
+                </label>
+            </div>
+
+            <!-- Lookup URLs section -->
+            <div class="setting-section">Lookup URLs</div>
+            <div class="setting-url-row">
+                <label class="setting-url-label" for="setting-dict-url">Dictionary URL pattern</label>
+                <input type="text" id="setting-dict-url"
+                       placeholder="https://www.merriam-webster.com/dictionary/{word}">
+                <div class="setting-hint">Use <code>{word}</code> where the highlighted text goes.</div>
+            </div>
+            <div class="setting-url-row">
+                <label class="setting-url-label" for="setting-wiki-url">Wiki / fandom URL pattern</label>
+                <input type="text" id="setting-wiki-url"
+                       placeholder="https://en.wikipedia.org/wiki/Special:Search?search={word}">
+                <div class="setting-hint">Use <code>{word}</code> as the placeholder. Per-fandom wikis work — e.g. <code>https://redrising.fandom.com/wiki/Special:Search?query={word}</code></div>
+            </div>
+
+            <button class="setting-save-btn" onclick="saveSettings()">Save Settings</button>
+        </div>
     </div>
 
     <!-- Highlights/Bookmarks overlay. The header title and search
@@ -359,7 +485,16 @@
         const BUILD = fmtStamp();   // reused as cache-bust token in openBook()
         buildStamp.textContent = BUILD;
         buildStamp.title = 'Tap to download latest APK';
-        buildStamp.addEventListener('click', () => { window.location.href = APK_URL; });
+        buildStamp.addEventListener('click', () => {
+            // Use a hidden <a download> so Android's DownloadListener fires
+            // instead of navigating the WebView away from the page.
+            const a = document.createElement('a');
+            a.href = APK_URL;
+            a.download = 'ereader.apk';
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        });
 
         // Status-bar clock (HH:MM, 24h)
         function tickClock() {
@@ -410,8 +545,12 @@
                 const data = await response.json();
                 const newBooks = data.books || [];
 
-                homeBooks = homeBooks.concat(newBooks);
-                homeOffset += newBooks.length;
+                // Deduplicate against books already in homeBooks (e.g. ones
+                // prepended by ensureProgressBooksLoaded() on startup).
+                const existingIds = new Set(homeBooks.map(b => String(b.id)));
+                const uniqueNew = newBooks.filter(b => !existingIds.has(String(b.id)));
+                homeBooks = homeBooks.concat(uniqueNew);
+                homeOffset += newBooks.length; // advance by server batch size, not deduped count
                 homeIsComplete = newBooks.length < BATCH_SIZE;
                 allBooks = homeBooks;
                 currentOffset = homeOffset;
@@ -465,19 +604,98 @@
             }[c]));
         }
 
+        // bookId -> backend progress record (most importantly: `updated` ms).
+        // Populated by ensureProgressBooksLoaded(); enriches the "recent" sort
+        // so it works for ALL in-progress books — including ones the user
+        // hasn't yet paged into view via infinite scroll, and ones whose
+        // progress was set on another device (no localStorage entry here).
+        const progressMap = new Map();
+        // Track ids we've already inserted so reRenders don't refetch.
+        const mergedProgressIds = new Set();
+        let progressLoadedAt = 0;
+
+        // Best-available "last read" timestamp for a book — backend mtime wins
+        // (cross-device + survives WebView storage wipes); localStorage `ts`
+        // as a fallback for books we've read here but the server hasn't seen.
+        function recentTsFor(id) {
+            const p = progressMap.get(String(id));
+            if (p && typeof p.updated === 'number') return p.updated;
+            const s = readingStateFor(id);
+            return s && typeof s.ts === 'number' ? s.ts : 0;
+        }
+
         function applySort(list) {
             const arr = list.slice();
             if (sortMode === 'title') {
                 arr.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
             } else if (sortMode === 'recent') {
-                arr.sort((a, b) => {
-                    const sa = readingStateFor(a.id);
-                    const sb = readingStateFor(b.id);
-                    return (sb ? sb.ts : 0) - (sa ? sa.ts : 0);
-                });
+                arr.sort((a, b) => recentTsFor(b.id) - recentTsFor(a.id));
             }
             // 'author' is the backend's natural order; leave as-is.
             return arr;
+        }
+
+        // Pull the full per-book progress list, then make sure every
+        // in-progress book is actually present in `homeBooks` — fetching
+        // metadata for any that haven't been paged in yet. This is what
+        // makes "Recently read" land an actively-read book at the top
+        // WITHOUT scrolling the entire library. Backend already returns
+        // records sorted newest-first; we just need their ids + mtimes.
+        async function ensureProgressBooksLoaded() {
+            try {
+                const res = await fetch(`${API_URL}/progress`);
+                if (!res.ok) return;
+                const data = await res.json();
+                const items = Array.isArray(data.items) ? data.items : [];
+                progressMap.clear();
+                for (const it of items) {
+                    if (it && it.bookId) progressMap.set(String(it.bookId), it);
+                }
+                progressLoadedAt = Date.now();
+
+                // Which in-progress books aren't in homeBooks yet?
+                const have = new Set(homeBooks.map(b => String(b.id)));
+                const missing = items
+                    .map(it => String(it.bookId))
+                    .filter(id => id && !have.has(id) && !mergedProgressIds.has(id));
+
+                if (missing.length === 0) {
+                    reRender();
+                    return;
+                }
+
+                // Fetch missing metadata in parallel (small N — only the
+                // books with progress, not the whole library). Tolerate
+                // individual failures (book may have been removed from
+                // Calibre since progress was last written).
+                const fetched = await Promise.all(missing.map(async id => {
+                    try {
+                        const r = await fetch(`${API_URL}/books/${encodeURIComponent(id)}`);
+                        if (!r.ok) return null;
+                        const b = await r.json();
+                        return (b && b.id != null) ? b : null;
+                    } catch (_) { return null; }
+                }));
+
+                // Prepend the new ones so they're visible at the top of the
+                // recent-sorted view immediately; applySort will then order
+                // them by their backend `updated` timestamp.
+                const merged = [];
+                for (const b of fetched) {
+                    if (b && !have.has(String(b.id))) {
+                        merged.push(b);
+                        have.add(String(b.id));
+                        mergedProgressIds.add(String(b.id));
+                    }
+                }
+                if (merged.length) {
+                    homeBooks = merged.concat(homeBooks);
+                    if (!searchQuery) allBooks = homeBooks;
+                }
+                reRender();
+            } catch (e) {
+                console.warn('progress fetch failed:', e);
+            }
         }
 
         function displayBooks(books, isComplete) {
@@ -505,7 +723,10 @@
                         <div class="book-progress-fill" style="width: ${progressPct}%"></div>
                     </div>` : '';
                 return `
-                <div class="book" onclick="openBook('${book.id}', '${format}', '${encodeURIComponent(book.title)}')">
+                <div class="book" data-book-id="${book.id}"
+                     data-book-title="${escapeHTML(book.title)}"
+                     data-book-format="${format}"
+                     onclick="openBook('${book.id}', '${format}', '${encodeURIComponent(book.title)}')">
                     <div class="book-cover-wrap">
                         <img src="${coverUrl}" class="book-cover" onerror="this.style.background='linear-gradient(135deg, #667eea 0%, #764ba2 100%)'">
                         ${cachedDot}
@@ -587,6 +808,10 @@
             sortMode = e.target.value;
             try { localStorage.setItem('ereader.sortMode', sortMode); } catch (_) {}
             reRender();
+            // "Recently read" needs the full set of in-progress books, not
+            // just whatever infinite-scroll has paged in so far. The backend
+            // /api/progress endpoint already knows them — pull from there.
+            if (sortMode === 'recent') ensureProgressBooksLoaded();
         });
         // Restore previously chosen sort
         try {
@@ -597,9 +822,13 @@
             }
         } catch (_) {}
         // When returning from the reader, the cached set and reading state may
-        // have changed \u2014 refresh on visibility-change.
+        // have changed \u2014 refresh on visibility-change. Also re-pull progress
+        // so an updated mtime from the reader bubbles into the recent sort.
         document.addEventListener('visibilitychange', () => {
-            if (!document.hidden) { refreshCachedIds(); reRender(); }
+            if (!document.hidden) {
+                refreshCachedIds();
+                ensureProgressBooksLoaded();
+            }
         });
 
         // Infinite scroll
@@ -609,6 +838,114 @@
                     loadBooks();
                 }
             }
+        });
+
+        // ---------- Per-book context menu ----------
+        // Triggered by right-click (desktop) or long-press (touch). Currently
+        // only "Clear Reading Progress" but designed to grow (metadata edit,
+        // cover edit, etc.). The menu is positioned at the pointer/touch
+        // point and clamped to the viewport.
+        const bookCtxMenu = document.getElementById('book-ctx-menu');
+        const bookCtxTitle = document.getElementById('book-ctx-title');
+        let _ctxBookId = null;
+        let _ctxBookTitle = null;
+        let _longPressTimer = null;
+        let _longPressFired = false;
+        let _longPressStart = null;
+
+        function showBookCtxMenu(x, y, bookEl) {
+            _ctxBookId = bookEl.dataset.bookId;
+            _ctxBookTitle = bookEl.dataset.bookTitle || '';
+            bookCtxTitle.textContent = _ctxBookTitle;
+            // Position then clamp to viewport (right/bottom edges).
+            bookCtxMenu.style.left = x + 'px';
+            bookCtxMenu.style.top = y + 'px';
+            bookCtxMenu.classList.add('open');
+            const r = bookCtxMenu.getBoundingClientRect();
+            const vw = window.innerWidth, vh = window.innerHeight;
+            if (r.right > vw - 8) bookCtxMenu.style.left = (vw - r.width - 8) + 'px';
+            if (r.bottom > vh - 8) bookCtxMenu.style.top  = (vh - r.height - 8) + 'px';
+        }
+        function hideBookCtxMenu() {
+            bookCtxMenu.classList.remove('open');
+            _ctxBookId = null;
+        }
+        // Dismiss on outside tap / scroll / Escape.
+        document.addEventListener('click', (e) => {
+            if (bookCtxMenu.classList.contains('open') && !bookCtxMenu.contains(e.target)) {
+                hideBookCtxMenu();
+            }
+        }, true);
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') hideBookCtxMenu();
+        });
+        window.addEventListener('scroll', hideBookCtxMenu, true);
+
+        // Right-click (desktop / mouse).
+        document.getElementById('content').addEventListener('contextmenu', (e) => {
+            const bookEl = e.target.closest('.book');
+            if (!bookEl) return;
+            e.preventDefault();
+            showBookCtxMenu(e.clientX, e.clientY, bookEl);
+        });
+
+        // Long-press (touch). Cancel the upcoming `click` so we don't also
+        // open the book under the user's finger.
+        const contentEl = document.getElementById('content');
+        contentEl.addEventListener('touchstart', (e) => {
+            const bookEl = e.target.closest('.book');
+            if (!bookEl) return;
+            _longPressFired = false;
+            const t = e.touches[0];
+            _longPressStart = { x: t.clientX, y: t.clientY };
+            clearTimeout(_longPressTimer);
+            _longPressTimer = setTimeout(() => {
+                _longPressFired = true;
+                showBookCtxMenu(_longPressStart.x, _longPressStart.y, bookEl);
+            }, 500);
+        }, { passive: true });
+        contentEl.addEventListener('touchmove', (e) => {
+            // If the finger drifts more than ~10px, cancel the long-press
+            // (it's a scroll, not a press).
+            if (!_longPressStart) return;
+            const t = e.touches[0];
+            const dx = t.clientX - _longPressStart.x;
+            const dy = t.clientY - _longPressStart.y;
+            if (dx*dx + dy*dy > 100) {
+                clearTimeout(_longPressTimer);
+                _longPressTimer = null;
+            }
+        }, { passive: true });
+        contentEl.addEventListener('touchend', () => {
+            clearTimeout(_longPressTimer);
+            _longPressTimer = null;
+            _longPressStart = null;
+        }, { passive: true });
+        // Swallow the `click` that follows a long-press so the book doesn't
+        // open underneath the menu we just popped up.
+        contentEl.addEventListener('click', (e) => {
+            if (_longPressFired) {
+                _longPressFired = false;
+                e.stopPropagation();
+                e.preventDefault();
+            }
+        }, true);
+
+        // Menu actions
+        document.getElementById('ctx-clear-progress').addEventListener('click', async () => {
+            if (!_ctxBookId) { hideBookCtxMenu(); return; }
+            const id = _ctxBookId;
+            const title = _ctxBookTitle;
+            hideBookCtxMenu();
+            if (!confirm(`Clear reading progress for "${title}"?\n\nThis removes your saved page and any per-book state. Highlights and bookmarks are NOT affected.`)) return;
+            try { localStorage.removeItem('ereader.state.' + id); } catch (_) {}
+            try {
+                await fetch(`${API_URL}/progress/${encodeURIComponent(id)}`, { method: 'DELETE' });
+            } catch (_) { /* offline / server down — local clear still happened */ }
+            // Drop it from the recent-sort map so it stops floating to the top.
+            progressMap.delete(String(id));
+            mergedProgressIds.delete(String(id));
+            reRender();
         });
 
         // ---------- Hamburger menu ----------
@@ -625,10 +962,6 @@
         });
 
         // ---------- Highlights & Bookmarks overlay ----------
-        // Two entry points (Highlights / Bookmarks) drive the same overlay,
-        // which renders items grouped by book in the SAME order the main
-        // library uses (sortMode). Search box filters across all visible
-        // fields client-side (text, bookTitle, bookAuthor, note).
         document.getElementById('menu-highlights').addEventListener('click', () => {
             menuPopup.classList.remove('open');
             openOverlay('highlight');
@@ -637,6 +970,49 @@
             menuPopup.classList.remove('open');
             openOverlay('bookmark');
         });
+        document.getElementById('menu-settings').addEventListener('click', () => {
+            menuPopup.classList.remove('open');
+            openSettings();
+        });
+
+        // ---------- Settings overlay ----------
+        const DICT_KEY = 'ereader.lookup.dict';
+        const WIKI_KEY = 'ereader.lookup.wiki';
+        const DICT_DEFAULT = 'https://www.merriam-webster.com/dictionary/{word}';
+        const WIKI_DEFAULT = 'https://en.wikipedia.org/wiki/Special:Search?search={word}';
+        const KEEP_AWAKE_KEY = 'ereader.settings.keepAwake';
+
+        function openSettings() {
+            // Populate fields from localStorage
+            document.getElementById('setting-keep-awake').checked =
+                localStorage.getItem(KEEP_AWAKE_KEY) === '1';
+            document.getElementById('setting-dict-url').value =
+                localStorage.getItem(DICT_KEY) || '';
+            document.getElementById('setting-wiki-url').value =
+                localStorage.getItem(WIKI_KEY) || '';
+            document.getElementById('settings-overlay').classList.add('open');
+        }
+        function closeSettings() {
+            document.getElementById('settings-overlay').classList.remove('open');
+        }
+        function saveSettings() {
+            // Keep awake toggle — save immediately
+            const keepAwake = document.getElementById('setting-keep-awake').checked;
+            localStorage.setItem(KEEP_AWAKE_KEY, keepAwake ? '1' : '0');
+            // Lookup URLs — save (or reset to default if blank)
+            const dict = document.getElementById('setting-dict-url').value.trim() || DICT_DEFAULT;
+            const wiki = document.getElementById('setting-wiki-url').value.trim() || WIKI_DEFAULT;
+            localStorage.setItem(DICT_KEY, dict);
+            localStorage.setItem(WIKI_KEY, wiki);
+            closeSettings();
+        }
+        // Auto-save the toggle the instant it's flipped (no need to hit Save for that)
+        document.getElementById('setting-keep-awake').addEventListener('change', (e) => {
+            localStorage.setItem(KEEP_AWAKE_KEY, e.target.checked ? '1' : '0');
+        });
+
+        // ---------- Highlights & Bookmarks open/close ----------
+        // Two entry points drive the same overlay, grouped by book, searchable.
         function openOverlay(type) {
             const ov = document.getElementById('hl-overlay');
             ov.dataset.type = type;
@@ -757,6 +1133,11 @@
 
         initDB();
         loadBooks();
+        // Pull /api/progress in parallel with the first page of books so the
+        // "Recently read" sort is correct from the very first paint — and so
+        // any in-progress book that wouldn't have been in the first page
+        // gets merged into the grid right away.
+        ensureProgressBooksLoaded();
     </script>
 </body>
 </html>

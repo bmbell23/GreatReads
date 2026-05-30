@@ -28,23 +28,23 @@
     "bookTitle": "The Blade Itself",
     "bookAuthor": "",
     "format": "epub",
-    "anchor": 109,
-    "page": 28,
-    "total": 972,
-    "progress": 0.02880658436213992,
+    "anchor": 477,
+    "page": 69,
+    "total": 645,
+    "progress": 0.10697674418604651,
     "fontSize": 20,
-    "updated": 1780108722268
+    "updated": 1780108937191
   },
   "573": {
     "bookId": "573",
     "bookTitle": "Iron Gold",
     "bookAuthor": "",
     "format": "epub",
-    "anchor": 176,
-    "page": 25,
-    "total": 792,
-    "progress": 0.03156565656565657,
+    "anchor": 556,
+    "page": 93,
+    "total": 1048,
+    "progress": 0.08874045801526717,
     "fontSize": 20,
-    "updated": 1780108502503
+    "updated": 1780114646018
   }
 }
