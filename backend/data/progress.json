@@ -11,40 +11,16 @@
     "fontSize": 18,
     "updated": 1780105601207
   },
-  "397": {
-    "bookId": "397",
-    "bookTitle": "Mostly Harmless",
-    "bookAuthor": "",
-    "format": "epub",
-    "anchor": 4,
-    "page": 1,
-    "total": 207,
-    "progress": 0.004830917874396135,
-    "fontSize": 18,
-    "updated": 1780105702839
-  },
-  "432": {
-    "bookId": "432",
-    "bookTitle": "The Blade Itself",
-    "bookAuthor": "",
-    "format": "epub",
-    "anchor": 477,
-    "page": 69,
-    "total": 645,
-    "progress": 0.10697674418604651,
-    "fontSize": 20,
-    "updated": 1780108937191
-  },
   "573": {
     "bookId": "573",
     "bookTitle": "Iron Gold",
     "bookAuthor": "",
     "format": "epub",
-    "anchor": 556,
-    "page": 93,
-    "total": 1048,
-    "progress": 0.08874045801526717,
+    "anchor": 2342,
+    "page": 236,
+    "total": 606,
+    "progress": 0.38943894389438943,
     "fontSize": 20,
-    "updated": 1780114646018
+    "updated": 1780115939823
   }
 }

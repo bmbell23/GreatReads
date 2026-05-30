@@ -25,10 +25,10 @@
             overflow-x: hidden;
             /* Reserve room for the fixed .status-bar so the first row of book
                covers isn't clipped under it. Must equal the bar's height. */
-            padding-top: 84px;
+            padding-top: 80px;
         }
         /* Top transparent status/toolbar.
-           Row 1: clock (left) + version (right) — 28px tall
+           Row 1: clock (left) + version (right) — 24px tall
            Row 2: search input + sort dropdown — 56px tall */
         .status-bar {
             position: fixed;
@@ -44,11 +44,11 @@
         }
         .status-bar-row1 {
             position: relative;
-            height: 28px;
+            height: 24px;
             display: flex;
             align-items: center;
             justify-content: center;   /* brand is centred in the row */
-            padding: 0 36px;           /* inset from curved-screen edges */
+            padding: 0 44px;           /* inset from curved-screen edges */
             font-size: 12px;
             font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
             color: rgba(255, 255, 255, 0.55);
@@ -57,13 +57,13 @@
         /* Clock — pinned to the left with the same inset as the padding. */
         #status-clock {
             position: absolute;
-            left: 36px;
+            left: 44px;
             pointer-events: none;
         }
         /* Build stamp — pinned to the right; tappable to download update. */
         #build-stamp {
             position: absolute;
-            right: 36px;
+            right: 44px;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
             text-decoration: none;
@@ -143,7 +143,19 @@
         }
         .menu-popup button:active { background: #3a3a3a; }
         /* Per-book context menu — shown on right-click (desktop) or long-press
-           (touch). Position is set inline in JS based on cursor / touch point. */
+           (touch). Position is set inline in JS based on cursor / touch point.
+           A full-screen transparent backdrop sits behind it to catch outside
+           taps reliably (more robust than document-level click listeners,
+           which can be missed when other capture-phase handlers stopPropagation
+           or when touch sequences get interrupted by native dialogs). */
+        .book-context-menu-backdrop {
+            position: fixed;
+            inset: 0;
+            background: transparent;
+            z-index: 100001;
+            display: none;
+        }
+        .book-context-menu-backdrop.open { display: block; }
         .book-context-menu {
             position: fixed;
             background: #2a2a2a;
@@ -404,7 +416,9 @@
         <button id="menu-settings">⚙️ Settings</button>
     </div>
 
-    <!-- Per-book context menu (right-click on desktop, long-press on touch). -->
+    <!-- Per-book context menu (right-click on desktop, long-press on touch).
+         The backdrop catches outside taps to dismiss the menu. -->
+    <div class="book-context-menu-backdrop" id="book-ctx-backdrop"></div>
     <div class="book-context-menu" id="book-ctx-menu">
         <div class="ctx-header" id="book-ctx-title"></div>
         <button id="ctx-clear-progress" class="danger">🗑️ Clear Reading Progress</button>
@@ -783,7 +797,10 @@
         function reRender() {
             // allBooks already holds either the homeBooks set or the server's
             // search results, so we just re-paint it. Sorting + cached-dot
-            // overlay is applied in displayBooks().
+            // overlay is applied in displayBooks(). Defensive: close any open
+            // context menu so its position (pinned to the OLD book's location)
+            // doesn't end up pointing at the wrong book after re-sort.
+            if (typeof hideBookCtxMenu === 'function') hideBookCtxMenu();
             displayBooks(allBooks, !searchQuery ? homeIsComplete : true);
         }
 
@@ -846,6 +863,7 @@
         // cover edit, etc.). The menu is positioned at the pointer/touch
         // point and clamped to the viewport.
         const bookCtxMenu = document.getElementById('book-ctx-menu');
+        const bookCtxBackdrop = document.getElementById('book-ctx-backdrop');
         const bookCtxTitle = document.getElementById('book-ctx-title');
         let _ctxBookId = null;
         let _ctxBookTitle = null;
@@ -860,6 +878,7 @@
             // Position then clamp to viewport (right/bottom edges).
             bookCtxMenu.style.left = x + 'px';
             bookCtxMenu.style.top = y + 'px';
+            bookCtxBackdrop.classList.add('open');
             bookCtxMenu.classList.add('open');
             const r = bookCtxMenu.getBoundingClientRect();
             const vw = window.innerWidth, vh = window.innerHeight;
@@ -868,14 +887,25 @@
         }
         function hideBookCtxMenu() {
             bookCtxMenu.classList.remove('open');
+            bookCtxBackdrop.classList.remove('open');
             _ctxBookId = null;
+            _ctxBookTitle = null;
+            // Cancel any pending long-press timer so it can't reopen the menu
+            // on a stale touch sequence after the user has dismissed it.
+            clearTimeout(_longPressTimer);
+            _longPressTimer = null;
+            _longPressFired = false;
+            _longPressStart = null;
         }
-        // Dismiss on outside tap / scroll / Escape.
-        document.addEventListener('click', (e) => {
-            if (bookCtxMenu.classList.contains('open') && !bookCtxMenu.contains(e.target)) {
-                hideBookCtxMenu();
-            }
-        }, true);
+        // Backdrop click = dismiss (more reliable than document-level capture,
+        // which can be missed when other handlers stopPropagation).
+        bookCtxBackdrop.addEventListener('click', hideBookCtxMenu);
+        bookCtxBackdrop.addEventListener('touchstart', (e) => {
+            // Prevent the touch from also reaching elements behind the
+            // backdrop (e.g. starting a new long-press on a book).
+            e.preventDefault();
+            hideBookCtxMenu();
+        }, { passive: false });
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') hideBookCtxMenu();
         });
@@ -931,21 +961,31 @@
             }
         }, true);
 
-        // Menu actions
-        document.getElementById('ctx-clear-progress').addEventListener('click', async () => {
+        // Menu actions. We capture the id/title BEFORE hiding the menu, then
+        // defer the work (including the native confirm dialog) to the next
+        // tick via setTimeout(0). This is critical on Android WebView: calling
+        // confirm() synchronously inside a click handler interrupts the
+        // WebView's touch sequence with a native dialog, which can leave the
+        // WebView in a stuck state where subsequent taps are ignored. By
+        // letting the click event fully unwind first, the touch sequence
+        // completes cleanly before the dialog appears.
+        document.getElementById('ctx-clear-progress').addEventListener('click', (e) => {
+            e.stopPropagation();
             if (!_ctxBookId) { hideBookCtxMenu(); return; }
             const id = _ctxBookId;
             const title = _ctxBookTitle;
             hideBookCtxMenu();
-            if (!confirm(`Clear reading progress for "${title}"?\n\nThis removes your saved page and any per-book state. Highlights and bookmarks are NOT affected.`)) return;
-            try { localStorage.removeItem('ereader.state.' + id); } catch (_) {}
-            try {
-                await fetch(`${API_URL}/progress/${encodeURIComponent(id)}`, { method: 'DELETE' });
-            } catch (_) { /* offline / server down — local clear still happened */ }
-            // Drop it from the recent-sort map so it stops floating to the top.
-            progressMap.delete(String(id));
-            mergedProgressIds.delete(String(id));
-            reRender();
+            setTimeout(async () => {
+                if (!confirm(`Clear reading progress for "${title}"?\n\nThis removes your saved page and any per-book state. Highlights and bookmarks are NOT affected.`)) return;
+                try { localStorage.removeItem('ereader.state.' + id); } catch (_) {}
+                try {
+                    await fetch(`${API_URL}/progress/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                } catch (_) { /* offline / server down — local clear still happened */ }
+                // Drop it from the recent-sort map so it stops floating to the top.
+                progressMap.delete(String(id));
+                mergedProgressIds.delete(String(id));
+                reRender();
+            }, 0);
         });
 
         // ---------- Hamburger menu ----------
