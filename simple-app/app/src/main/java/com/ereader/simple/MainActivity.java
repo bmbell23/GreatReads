@@ -181,6 +181,21 @@ public class MainActivity extends Activity {
             systemBarsRequested = false;
             runOnUiThread(MainActivity.this::applyImmersive);
         }
+        // Keep the screen on while reading. Honours the "Keep screen awake"
+        // toggle in Settings. Sets/clears FLAG_KEEP_SCREEN_ON on the
+        // activity window, which is the canonical way to inhibit the OS
+        // display timeout (the Web Wake Lock API silently no-ops in many
+        // Android WebView configurations, so this is the reliable path).
+        @JavascriptInterface
+        public void keepScreenOn(final boolean on) {
+            runOnUiThread(() -> {
+                if (on) {
+                    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                } else {
+                    getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                }
+            });
+        }
     }
 
     @Override

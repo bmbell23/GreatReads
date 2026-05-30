@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- Sampled from greatreads.png corner pixels (#FEFEFE). Acts as the
+    <!-- Sampled from web/assets/greatreads.png corner pixels (#FEFEFE). Acts as the
          backdrop the launcher composites the adaptive foreground over,
          visible in the cropped margin on round / squircle masks. -->
     <color name="ic_launcher_background">#FFFFFF</color>

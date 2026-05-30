@@ -277,6 +277,143 @@
             flex: 1;
             min-width: 120px;
         }
+        /* Icon-only square button (TOC, dual-page). PNG assets are black on
+           transparent, so invert() flips them to white for the dark menu. */
+        .icon-btn {
+            background: #2196F3;
+            border: none;
+            padding: 0;
+            border-radius: 8px;
+            cursor: pointer;
+            flex: 0 0 auto;
+            width: 56px;
+            height: 56px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .icon-btn img {
+            width: 28px;
+            height: 28px;
+            object-fit: contain;
+            filter: invert(1);
+            opacity: 0.95;
+            pointer-events: none;
+        }
+        .icon-btn:active { background: #1976D2; }
+        .icon-btn.active { background: #0d47a1; }
+        /* Dual-page toggle is only meaningful on an unfolded foldable. When
+           the phone is folded (or any narrow viewport) the button is greyed
+           out and ignores taps. */
+        .icon-btn.disabled { opacity: 0.35; pointer-events: none; }
+        /* Setting block: label on the left, control on the right. */
+        .setting-group {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            width: 100%;
+        }
+        .setting-label {
+            color: #ccc;
+            font-size: 13px;
+            letter-spacing: 0.3px;
+            text-transform: uppercase;
+            flex: 0 0 auto;
+            min-width: 80px;
+        }
+        .setting-controls {
+            flex: 1;
+            display: flex;
+            gap: 6px;
+            align-items: center;
+            justify-content: flex-end;
+            flex-wrap: wrap;
+        }
+        /* Text-align segmented buttons. SVG strokes inherit currentColor so
+           the active state's contrast comes "for free" from the bg flip. */
+        .align-btn {
+            background: #2a2a2a;
+            border: none;
+            color: #ccc;
+            width: 44px;
+            height: 40px;
+            border-radius: 6px;
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .align-btn svg { width: 20px; height: 20px; display: block; }
+        .align-btn:active { background: #3a3a3a; }
+        .align-btn.active { background: #2196F3; color: #fff; }
+        /* Native <select> styled to fit the dark menu. */
+        .font-select {
+            background: #2a2a2a;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 14px;
+            flex: 1;
+            min-width: 0;
+        }
+        .add-font-btn {
+            background: #2a2a2a;
+            color: #ccc;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 8px 12px;
+            font-size: 13px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .add-font-btn:active { background: #3a3a3a; }
+        /* Inline Google-Font add row. Hidden until the user taps "+ Add". */
+        .add-font-row {
+            display: none;
+            width: 100%;
+            gap: 6px;
+            margin-top: 6px;
+        }
+        .add-font-row.open { display: flex; }
+        .add-font-row input {
+            flex: 1;
+            background: #1f1f1f;
+            color: #fff;
+            border: 1px solid #444;
+            border-radius: 6px;
+            padding: 8px 10px;
+            font-size: 14px;
+            min-width: 0;
+        }
+        .add-font-row .load-btn {
+            background: #2196F3;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            padding: 8px 14px;
+            font-size: 14px;
+            cursor: pointer;
+        }
+        /* Hyphenation pill toggle (On / Off). */
+        .pill-toggle {
+            display: inline-flex;
+            background: #2a2a2a;
+            border-radius: 6px;
+            overflow: hidden;
+        }
+        .pill-toggle button {
+            background: transparent;
+            border: none;
+            color: #ccc;
+            padding: 8px 16px;
+            font-size: 13px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .pill-toggle button.active { background: #2196F3; color: #fff; }
         .font-slider {
             flex: 1;
             min-width: 150px;
@@ -342,40 +479,52 @@
             pointer-events: auto; /* allow tapping to download APK */
             -webkit-tap-highlight-color: transparent;
         }
-        /* Top-right corner bookmark tap target. Invisible when the current
-           page isn't bookmarked (just a hot zone); shows a red ribbon when
-           it is. Tapping toggles. Lives outside #epub-viewport so its taps
-           don't bubble into the swipe / page-turn handler. */
+        /* Top-right corner bookmark area. Hangs from the very top of the
+           screen in the right margin (to the right of the version string
+           which is inset 44 px). Contains two narrow ribbon SVGs:
+             .bm-auto  — GreatReads-gradient ribbon for automatic bookmarks
+             .bm-manual — solid-red ribbon for manual bookmarks
+           Both are invisible (transparent) when not active; they appear
+           independently so both can show at once when appropriate. */
         #bookmark-corner {
             position: fixed;
-            top: 26px;       /* clears the 24px status-bar */
-            right: 18px;
-            width: 44px;
-            height: 56px;
+            top: 0;
+            right: 0;
+            width: 40px;
+            height: 88px;
             z-index: 99998;
             cursor: pointer;
             display: flex;
             justify-content: center;
             align-items: flex-start;
+            gap: 2px;
+            padding-top: 0;
             -webkit-tap-highlight-color: transparent;
             pointer-events: auto;
         }
-        #bookmark-corner svg {
-            width: 26px;
-            height: 38px;
+        #bookmark-corner .bm-svg {
+            width: 18px;
+            height: 88px;
             fill: transparent;
             stroke: transparent;
-            stroke-width: 1.5;
-            transition: fill 0.15s, stroke 0.15s, transform 0.12s;
+            stroke-width: 1;
+            transition: fill 0.18s, stroke 0.18s;
+            flex: 0 0 auto;
+            overflow: visible;
         }
-        #bookmark-corner.bookmarked svg {
+        /* Manual bookmark: solid red */
+        #bookmark-corner.bookmarked .bm-manual {
             fill: #d04040;
             stroke: #8a2424;
-            filter: drop-shadow(0 1px 1px rgba(0,0,0,0.25));
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.3));
         }
-        #bookmark-corner:active svg {
-            transform: scale(0.88);
+        /* Automatic bookmark: GreatReads brand gradient */
+        #bookmark-corner.auto-bookmarked .bm-auto {
+            fill: url(#bm-grad);
+            stroke: #4057bf;
+            filter: drop-shadow(0 1px 2px rgba(0,0,0,0.25));
         }
+        #bookmark-corner:active { opacity: 0.75; }
         .brand {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             font-weight: 700;
@@ -588,11 +737,27 @@
         <span id="build-stamp"></span>
     </div>
 
-    <!-- Top-right bookmark indicator / tap target. Hidden visually unless
-         the current page has a bookmark; tapping toggles. -->
+    <!-- Top-right bookmark indicator / tap target. Sits in the right margin
+         (right: 0) beyond the 44 px content inset, so it never overlaps text.
+         Two narrow ribbon SVGs: left = auto-bookmark (gradient), right = manual (red).
+         Each is independently visible via .auto-bookmarked / .bookmarked classes. -->
     <div id="bookmark-corner" title="Bookmark this page" onclick="toggleBookmarkCurrentPage()">
-        <svg viewBox="0 0 24 32" xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
-            <path d="M3 1 L21 1 L21 29 L12 23 L3 29 Z"/>
+        <!-- Manual bookmark ribbon (solid red) — left slot -->
+        <svg class="bm-svg bm-manual" viewBox="0 0 18 88"
+             xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <path d="M1 0 L17 0 L17 80 L9 71 L1 80 Z"/>
+        </svg>
+        <!-- Auto-bookmark ribbon (GreatReads gradient) — right slot -->
+        <svg class="bm-svg bm-auto" viewBox="0 0 18 88"
+             xmlns="http://www.w3.org/2000/svg" aria-hidden="true">
+            <defs>
+                <linearGradient id="bm-grad" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="0%"   stop-color="#4067EF"/>
+                    <stop offset="50%"  stop-color="#8640C0"/>
+                    <stop offset="100%" stop-color="#C940B0"/>
+                </linearGradient>
+            </defs>
+            <path d="M1 0 L17 0 L17 80 L9 71 L1 80 Z"/>
         </svg>
     </div>
 
@@ -622,13 +787,64 @@
             </div>
         </div>
 
-        <div class="control-row">
-            <button class="control-btn" onclick="toggleDualPage()">📖 Dual Page Mode</button>
-            <button class="control-btn" onclick="toggleTOC()">📑 Table of Contents</button>
+        <div class="setting-group">
+            <span class="setting-label">Font</span>
+            <div class="setting-controls">
+                <select class="font-select" id="font-select" onchange="setReaderFont(this.value)"></select>
+                <button class="add-font-btn" onclick="toggleAddFontRow()">+</button>
+            </div>
+        </div>
+        <div class="add-font-row" id="add-font-row">
+            <input type="text" id="add-font-input"
+                   placeholder="Font name or fonts.google.com URL"
+                   autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
+            <button class="load-btn" onclick="submitAddGoogleFont()">Load</button>
+        </div>
+        <div id="add-font-hint" style="display:none;font-size:11px;color:#888;padding:0 4px 6px;line-height:1.4;">
+            Paste a Google Fonts URL (e.g. <em>fonts.google.com/specimen/Lora</em>) or type the exact font name (e.g. <em>Lora</em>, <em>Merriweather</em>, <em>Source Serif 4</em>).
+        </div>
+
+        <div class="setting-group">
+            <span class="setting-label">Align</span>
+            <div class="setting-controls">
+                <button class="align-btn" id="align-left"    title="Align left"    onclick="setTextAlign('left')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6"  x2="21" y2="6"/><line x1="3" y1="10" x2="15" y2="10"/><line x1="3" y1="14" x2="19" y2="14"/><line x1="3" y1="18" x2="13" y2="18"/></svg>
+                </button>
+                <button class="align-btn" id="align-center"  title="Align center"  onclick="setTextAlign('center')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6"  x2="21" y2="6"/><line x1="6" y1="10" x2="18" y2="10"/><line x1="4" y1="14" x2="20" y2="14"/><line x1="7" y1="18" x2="17" y2="18"/></svg>
+                </button>
+                <button class="align-btn" id="align-justify" title="Justify"       onclick="setTextAlign('justify')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6"  x2="21" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="3" y1="14" x2="21" y2="14"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+                </button>
+                <button class="align-btn" id="align-right"   title="Align right"   onclick="setTextAlign('right')">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><line x1="3" y1="6"  x2="21" y2="6"/><line x1="9" y1="10" x2="21" y2="10"/><line x1="5" y1="14" x2="21" y2="14"/><line x1="11" y1="18" x2="21" y2="18"/></svg>
+                </button>
+            </div>
+        </div>
+
+        <div class="setting-group">
+            <span class="setting-label">Hyphens</span>
+            <div class="setting-controls">
+                <div class="pill-toggle">
+                    <button id="hyphen-on"  onclick="setHyphenation(true)">On</button>
+                    <button id="hyphen-off" onclick="setHyphenation(false)">Off</button>
+                </div>
+            </div>
         </div>
 
         <div class="control-row">
-            <span class="progress-text" id="progress-text">0%</span>
+            <button class="icon-btn" id="btn-dual-page" title="Dual page" onclick="toggleDualPage()">
+                <img src="assets/dual-page.png" alt="">
+            </button>
+            <button class="icon-btn" title="Table of contents" onclick="toggleTOC()">
+                <img src="assets/toc.png" alt="">
+            </button>
+            <button class="icon-btn" title="Highlights" onclick="openHighlightsList()">
+                <img src="assets/highlighter.png" alt="">
+            </button>
+            <button class="icon-btn" title="Bookmarks" onclick="openBookmarksList()">
+                <img src="assets/bookmark.png" alt="">
+            </button>
         </div>
 
     </div>
@@ -638,9 +854,17 @@
         <button id="next-btn" onclick="nextPage()">Next ►</button>
     </div>
 
-    <!-- Transparent page progress indicator at bottom -->
-    <div id="page-progress" style="position: fixed; bottom: 0; left: 0; right: 0; background: transparent; color: rgba(0,0,0,0.55); padding: 6px 12px; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; text-align: center; z-index: 9000; display: none; pointer-events: none;">
-        <span id="progress-display"></span>
+    <!-- Transparent page progress bar at bottom — three cells -->
+    <div id="page-progress" style="position:fixed;bottom:-3px;left:0;right:0;pointer-events:none;z-index:9000;
+         align-items:baseline;padding:4px 44px;display:none;
+         font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+         color:rgba(0,0,0,0.55);background:transparent;">
+        <!-- chapter progress (left) -->
+        <span id="progress-chapter" style="flex:0 0 auto;white-space:nowrap;"></span>
+        <!-- chapter title (center) -->
+        <span id="progress-title" style="flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;"></span>
+        <!-- book progress (right) -->
+        <span id="progress-book" style="flex:0 0 auto;white-space:nowrap;text-align:right;"></span>
     </div>
 
     <!-- Full-screen TOC overlay -->
@@ -651,6 +875,18 @@
                 <button onclick="toggleTOC()" style="background: #333; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; font-size: 18px; cursor: pointer;">✕ Close</button>
             </div>
             <div id="toc-list" style="background: #222; border-radius: 12px; padding: 20px;"></div>
+        </div>
+    </div>
+
+    <!-- Bookmarks / highlights navigation overlay. Same shell for both;
+         the title and list contents are swapped in by JS. -->
+    <div id="navlist-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.95);z-index:10000;overflow-y:auto;padding:20px;">
+        <div style="max-width:800px;margin:0 auto;">
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+                <h2 id="navlist-title" style="color:#fff;margin:0;">Bookmarks</h2>
+                <button onclick="closeNavList()" style="background:#333;color:#fff;border:none;padding:10px 20px;border-radius:8px;font-size:18px;cursor:pointer;">✕ Close</button>
+            </div>
+            <div id="navlist-body" style="background:#222;border-radius:12px;padding:8px;"></div>
         </div>
     </div>
 
@@ -720,38 +956,53 @@
         setInterval(tickClock, 30000);
 
         // ---------- Screen wake lock ----------
-        // Honours the "Keep screen awake while reading" preference from Settings.
-        // Tries the Web Wake Lock API first; falls back to window.Android.keepScreenOn
-        // if the APK bridge is available (requires a future APK build to add the method).
+        // Honours the "Keep screen awake while reading" preference from
+        // Settings. We try two things in priority order:
+        //   1. Android JS bridge (window.Android.keepScreenOn) — sets
+        //      WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON on the
+        //      activity window. This is the canonical Android API for
+        //      inhibiting display sleep and is the ONLY mechanism that
+        //      works reliably across Android WebView versions. Requires
+        //      the APK to expose keepScreenOn() (added in MainActivity).
+        //   2. Web Wake Lock API (navigator.wakeLock) — works in modern
+        //      Chromium WebViews in secure contexts but is often silently
+        //      no-op'd and requires user activation. We re-acquire it on
+        //      every touchstart to ride out lock drops across long
+        //      reading sessions.
         let _wakeLock = null;
         async function applyWakeLock() {
             const want = localStorage.getItem('ereader.settings.keepAwake') === '1';
             if (!want) { releaseWakeLock(); return; }
-            // Try Web Wake Lock API (works in secure contexts; may work in WebView too).
+            // 1. Android bridge — most reliable when present.
+            if (window.Android && typeof window.Android.keepScreenOn === 'function') {
+                try { window.Android.keepScreenOn(true); return; } catch (_) {}
+            }
+            // 2. Web Wake Lock API.
             if ('wakeLock' in navigator) {
                 try {
                     if (!_wakeLock || _wakeLock.released) {
                         _wakeLock = await navigator.wakeLock.request('screen');
                     }
-                    return;
                 } catch (_) {}
-            }
-            // Fallback: Android JS bridge (requires keepScreenOn method in MainActivity).
-            if (window.Android && typeof window.Android.keepScreenOn === 'function') {
-                window.Android.keepScreenOn(true);
             }
         }
         function releaseWakeLock() {
             if (_wakeLock && !_wakeLock.released) { try { _wakeLock.release(); } catch (_) {} }
             _wakeLock = null;
             if (window.Android && typeof window.Android.keepScreenOn === 'function') {
-                window.Android.keepScreenOn(false);
+                try { window.Android.keepScreenOn(false); } catch (_) {}
             }
         }
         // Re-acquire after the tab becomes visible again (e.g. returning from another app).
         document.addEventListener('visibilitychange', () => {
             if (document.visibilityState === 'visible') applyWakeLock();
         });
+        // The Web Wake Lock API requires user activation to acquire — and
+        // some Android WebView builds drop the lock the moment the call
+        // resolves if it wasn't gesture-initiated. Re-acquiring inside any
+        // touch handler reliably keeps it alive across long reading
+        // sessions without needing a perpetual re-acquisition timer.
+        document.addEventListener('touchstart', () => { applyWakeLock(); }, { passive: true });
         applyWakeLock();
 
         const urlParams = new URLSearchParams(window.location.search);
@@ -773,7 +1024,41 @@
         // fontSize is initialised from localStorage further down (after
         // loadFontSizePref is declared); 18 is the fallback default.
         let fontSize = 18;
-        let isDualPage = false;
+        const DUAL_PAGE_KEY = 'ereader.dualPage';
+        // Dual-page is a two-axis state:
+        //   dualPagePref — the user's *desire* for dual-page when the fold is
+        //                  open. Persisted across sessions. Default: true.
+        //   isFoldOpen() — viewport-based detection in CSS pixels (NOT physical
+        //                  pixels — DPR is 2.625-3.0× on modern foldables).
+        //                  Pixel 10 Pro Fold reports ~412 CSS px wide folded
+        //                  (cover screen) and ~692 CSS px wide unfolded (main
+        //                  screen). 600 px is the canonical breakpoint — also
+        //                  recommended by Google's foldable guidance — and
+        //                  separates every shipping foldable's cover from main.
+        //   isDualPage   — effective state = dualPagePref && isFoldOpen().
+        //                  This is what calculatePages() and the body class
+        //                  actually consume; folded posture forces single-page
+        //                  regardless of the stored preference.
+        // Native FoldingFeature detection via Jetpack WindowManager would be
+        // strictly more correct (HALF_OPENED / FLAT states), but requires an
+        // APK round-trip through the JsBridge; the CSS-pixel width is a
+        // reliable proxy because Android's WindowMetrics already resize the
+        // WebView when the posture changes.
+        let dualPagePref = (() => {
+            try {
+                const v = localStorage.getItem(DUAL_PAGE_KEY);
+                if (v === '1' || v === '0') return v === '1';
+            } catch (e) {}
+            return true; // foldable users probably want dual-page when open
+        })();
+        const FOLD_OPEN_MIN_CSS_PX = 600;
+        function isFoldOpen() {
+            const w = (window.visualViewport && window.visualViewport.width) || window.innerWidth;
+            return w >= FOLD_OPEN_MIN_CSS_PX;
+        }
+        let isDualPage = dualPagePref && isFoldOpen();
+        // Apply body class immediately so calculatePages() sees it on first call.
+        if (isDualPage) document.body.classList.add('dual-page');
 
         function goBack() {
             window.location.href = 'index.html';
@@ -992,6 +1277,10 @@
 
         // NEW COLUMN-BASED PAGINATION
         let tocItems = [];
+        // Sorted [{title, page}, …] mapping TOC items → pages. Rebuilt after
+        // every calculatePages() call so the chapter-progress display is always
+        // in sync with the current font / dual-page / viewport state.
+        let chapterStarts = [];
         // tocTree is the canonical tree used by the TOC overlay. It is either
         // parsed from the EPUB's nav.xhtml / toc.ncx (preferred — gives the
         // proper author-defined section→chapter hierarchy) or synthesised from
@@ -1036,6 +1325,9 @@
             const epubContent = document.getElementById('epub-content');
             epubContent.innerHTML = contentDiv.innerHTML;
             epubContent.style.fontSize = fontSize + 'px';
+            // Re-apply persisted display prefs (alignment / font-family /
+            // hyphenation) now that the element actually has content.
+            applyReaderPrefs();
 
             // Suppress double column-break: each .epub-spine-item wrapper
             // already forces break-before:column, so the first heading
@@ -1047,17 +1339,60 @@
                 if (firstHeading) firstHeading.classList.add('epub-spine-first-heading');
             });
 
-            // Convert EPUB inline page-break styles to column breaks so they
-            // work correctly inside our CSS multi-column layout. Publishers
-            // often annotate elements with style="page-break-before:always"
-            // which browsers may not map to a column break automatically.
+            // EPUB inline page-break style handling.
+            //
+            // Publishers commonly carry over `page-break-before/after: always`
+            // from their print-edition stylesheets. In a print/paged context
+            // those mark real chapter boundaries OR purely decorative scene
+            // breaks (ornament divs, tiny spacer paragraphs) that "looked
+            // right on paper" but have no business creating a blank page in
+            // a continuous-flow reader. Modern Chromium auto-maps page-break
+            // properties to column-break in a multi-column context, so just
+            // leaving them alone forces every one of those decorative breaks
+            // through. We instead apply a heuristic:
+            //
+            //   * Substantial content (heading OR text length >= 30 chars):
+            //     honor the publisher's break — convert to break-before/after
+            //     column so it works inside our multi-column layout.
+            //
+            //   * Everything else (empty divs, single-glyph ornaments, short
+            //     scene-break markers): NEUTRALISE the break. These are
+            //     print-only artefacts and forcing a column break on them
+            //     produces visible mid-chapter "page break + blank space"
+            //     symptoms the user has reported repeatedly.
+            const PB_BEFORE_VALUES = new Set(['always','page','left','right','recto','verso']);
+            const BB_VALUES        = new Set(['page','left','right','recto','verso','column']);
             epubContent.querySelectorAll('[style]').forEach(el => {
-                const pb = el.style.pageBreakBefore;
-                const bb = el.style.breakBefore;
-                if (pb === 'always' || pb === 'page' || pb === 'left' || pb === 'right' ||
-                    bb === 'page' || bb === 'left' || bb === 'right') {
-                    el.style.breakBefore = 'column';
-                    el.style.pageBreakBefore = '';
+                const pbBefore = el.style.pageBreakBefore;
+                const bbBefore = el.style.breakBefore;
+                const pbAfter  = el.style.pageBreakAfter;
+                const bbAfter  = el.style.breakAfter;
+                const wantsBefore = PB_BEFORE_VALUES.has(pbBefore) || BB_VALUES.has(bbBefore);
+                const wantsAfter  = PB_BEFORE_VALUES.has(pbAfter)  || BB_VALUES.has(bbAfter);
+                if (!wantsBefore && !wantsAfter) return;
+
+                const tag = el.tagName.toLowerCase();
+                const isHeading = /^h[1-6]$/.test(tag);
+                const textLen = (el.textContent || '').trim().length;
+                const substantial = isHeading || textLen >= 30;
+
+                if (wantsBefore) {
+                    if (substantial) {
+                        el.style.breakBefore = 'column';
+                        el.style.pageBreakBefore = '';
+                    } else {
+                        el.style.breakBefore = 'auto';
+                        el.style.pageBreakBefore = 'auto';
+                    }
+                }
+                if (wantsAfter) {
+                    if (substantial) {
+                        el.style.breakAfter = 'column';
+                        el.style.pageBreakAfter = '';
+                    } else {
+                        el.style.breakAfter = 'auto';
+                        el.style.pageBreakAfter = 'auto';
+                    }
                 }
             });
 
@@ -1335,8 +1670,9 @@
                 // bookmark page map before renderEpubPage paints the
                 // corner indicator.
                 refreshBookmarkPageMap();
+                buildChapterStarts();
                 renderEpubPage();
-                document.getElementById('page-progress').style.display = 'block';
+                document.getElementById('page-progress').style.display = 'flex';
             }, 50);
         }
 
@@ -1521,12 +1857,88 @@
                         '| offset:', offset, '| stride:', columnStride);
             updateProgress();
             updateBookmarkIndicator();
+            resetAutoBookmarkTimer();
+        }
+
+        // Flatten tocTree (hierarchical TOC parsed from nav.xhtml / toc.ncx)
+        // in reading order, recording each item's depth so updateProgress()
+        // can prefer the DEEPEST entry that begins on or before the current
+        // page. Using the flat `tocItems` list (h1/h2/h3 scan) gave us the
+        // first matching heading regardless of depth — so a Part-level h1
+        // (e.g. "THE REAPER") would beat the actual chapter-level h2
+        // (e.g. "Chapter 29: Lyria") because their pages tied or the part
+        // started first. We want the most specific heading.
+        //
+        // Tie-break rule when two entries land on the same page: keep the
+        // DEEPEST one (so chapter wins over part). That matches what a
+        // reader expects to see at the bottom of the screen.
+        function buildChapterStarts() {
+            const flat = [];
+            const walk = (nodes, depth) => {
+                for (const n of nodes || []) {
+                    if (typeof n.anchor === 'number') {
+                        const p = findPageForAnchor(n.anchor);
+                        if (p != null) flat.push({ title: n.title, page: p, depth });
+                    }
+                    if (n.children && n.children.length) walk(n.children, depth + 1);
+                }
+            };
+            if (tocTree && tocTree.length) {
+                walk(tocTree, 0);
+            } else {
+                // Fallback: heading scan. Use TOC level as depth so chapter
+                // (h2) still beats part (h1) on tie.
+                for (const item of tocItems) {
+                    if (typeof item.anchor !== 'number') continue;
+                    const p = findPageForAnchor(item.anchor);
+                    if (p == null) continue;
+                    flat.push({ title: item.title, page: p, depth: (item.level || 1) - 1 });
+                }
+            }
+            // Sort by page asc, depth desc (deeper wins on same page).
+            flat.sort((a, b) => a.page - b.page || b.depth - a.depth);
+            // Deduplicate by page — the first entry per page already wins
+            // because of the depth sort above.
+            chapterStarts = [];
+            let last = -1;
+            for (const s of flat) {
+                if (s.page !== last) { chapterStarts.push(s); last = s.page; }
+            }
         }
 
         function updateProgress() {
-            const progress = ((currentEpubPage + 1) / totalPages * 100).toFixed(1);
-            const display = `Page ${currentEpubPage + 1} of ${totalPages} (${progress}%)`;
-            document.getElementById('progress-display').textContent = display;
+            const pageNum  = currentEpubPage + 1;
+            const bookPct  = (pageNum / totalPages * 100).toFixed(1);
+
+            // ---- Book progress (right) ----
+            const bookEl = document.getElementById('progress-book');
+            if (bookEl) bookEl.textContent = `${pageNum}/${totalPages} ${bookPct}%`;
+
+            // ---- Chapter info (left + center) ----
+            let chText  = '';
+            let chTitle = '';
+            if (chapterStarts.length > 0) {
+                // Last chapter that starts on or before the current page.
+                let idx = 0;
+                for (let i = 0; i < chapterStarts.length; i++) {
+                    if (chapterStarts[i].page <= currentEpubPage) idx = i;
+                    else break;
+                }
+                const cur   = chapterStarts[idx];
+                const next  = chapterStarts[idx + 1];
+                chTitle     = cur.title;
+                const chStart = cur.page;
+                const chEnd   = next ? next.page : totalPages;
+                const chTotal = Math.max(1, chEnd - chStart);
+                const chPage  = currentEpubPage - chStart + 1;
+                const chPct   = (chPage / chTotal * 100).toFixed(1);
+                chText = `${chPage}/${chTotal} ${chPct}%`;
+            }
+            const chEl = document.getElementById('progress-chapter');
+            if (chEl) chEl.textContent = chText;
+            const titleEl = document.getElementById('progress-title');
+            if (titleEl) titleEl.textContent = chTitle;
+
             saveReadingState();
         }
 
@@ -1731,27 +2143,36 @@
         }
 
         // ---------- Bookmarks (corner-tap toggle) ----------
-        // Bookmarks are stored alongside highlights on the backend, keyed by
-        // (bookId, anchor). We load them once at book-open time, then map
-        // each anchor to its current visual page after every re-pagination.
-        // The top-right corner indicator shows a red ribbon when the visible
-        // page contains a bookmark; tapping toggles the bookmark on/off for
-        // the first-visible anchor on the current page.
-        let bookmarks = [];                  // [{id, anchor, ...}]
-        let bookmarkPageIds = new Map();     // pageNum -> [bookmark id, ...]
+        // Two types live alongside highlights on the backend:
+        //   'bookmark'      — manual, toggled by tapping the corner ribbon.
+        //   'auto-bookmark' — created automatically after 15 s on a page.
+        // The corner shows two ribbon SVGs independently: left = auto (gradient),
+        // right = manual (red). Both can be visible simultaneously.
+        let bookmarks     = [];              // [{id, anchor, type:'bookmark', ...}]
+        let autoBookmarks = [];              // [{id, anchor, type:'auto-bookmark', ...}]
+        let bookmarkPageIds     = new Map(); // pageNum -> [manual bookmark id, ...]
+        let autoBookmarkPageIds = new Map(); // pageNum -> [auto-bookmark id, ...]
 
         async function loadBookmarksForBook() {
             if (!bookId) return;
             try {
-                const r = await fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(bookId)}&type=bookmark`);
-                if (!r.ok) return;
-                const data = await r.json();
-                bookmarks = (data.items || []).filter(b => typeof b.anchor === 'number');
+                const [rM, rA] = await Promise.all([
+                    fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(bookId)}&type=bookmark`),
+                    fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(bookId)}&type=auto-bookmark`),
+                ]);
+                if (rM.ok) {
+                    const data = await rM.json();
+                    bookmarks = (data.items || []).filter(b => typeof b.anchor === 'number');
+                }
+                if (rA.ok) {
+                    const data = await rA.json();
+                    autoBookmarks = (data.items || []).filter(b => typeof b.anchor === 'number');
+                }
             } catch (e) { console.warn('loadBookmarksForBook', e); }
         }
 
-        // Rebuild the page -> bookmark-id map from the current `bookmarks`
-        // array against the live pagination. Safe to call repeatedly; cheap.
+        // Rebuild both page->id maps from the current bookmark arrays.
+        // Safe to call repeatedly; cheap.
         function refreshBookmarkPageMap() {
             bookmarkPageIds = new Map();
             for (const bm of bookmarks) {
@@ -1760,14 +2181,72 @@
                 if (!bookmarkPageIds.has(page)) bookmarkPageIds.set(page, []);
                 bookmarkPageIds.get(page).push(bm.id);
             }
+            autoBookmarkPageIds = new Map();
+            for (const bm of autoBookmarks) {
+                const page = findPageForAnchor(bm.anchor);
+                if (page == null) continue;
+                if (!autoBookmarkPageIds.has(page)) autoBookmarkPageIds.set(page, []);
+                autoBookmarkPageIds.get(page).push(bm.id);
+            }
         }
 
         function updateBookmarkIndicator() {
             const ind = document.getElementById('bookmark-corner');
             if (!ind) return;
-            const ids = bookmarkPageIds.get(currentEpubPage);
-            if (ids && ids.length > 0) ind.classList.add('bookmarked');
-            else                       ind.classList.remove('bookmarked');
+            const manualIds = bookmarkPageIds.get(currentEpubPage);
+            const autoIds   = autoBookmarkPageIds.get(currentEpubPage);
+            if (manualIds && manualIds.length > 0) ind.classList.add('bookmarked');
+            else                                   ind.classList.remove('bookmarked');
+            if (autoIds && autoIds.length > 0) ind.classList.add('auto-bookmarked');
+            else                               ind.classList.remove('auto-bookmarked');
+        }
+
+        // ---------- Automatic bookmarks (15-second dwell timer) ----------
+        // After the user stays on a page for 15 seconds without navigating,
+        // we silently record an auto-bookmark. At most one per page (checked
+        // against autoBookmarkPageIds before firing). The gradient ribbon in
+        // the corner lights up to confirm.
+        let _autoBookmarkTimer = null;
+
+        function resetAutoBookmarkTimer() {
+            if (_autoBookmarkTimer) { clearTimeout(_autoBookmarkTimer); _autoBookmarkTimer = null; }
+            if (!bookId) return;
+            const pageAtSchedule = currentEpubPage;
+            _autoBookmarkTimer = setTimeout(() => {
+                _autoBookmarkTimer = null;
+                if (currentEpubPage !== pageAtSchedule) return; // navigated away
+                createAutoBookmark();
+            }, 15000);
+        }
+
+        async function createAutoBookmark() {
+            // Skip if an auto-bookmark already exists for this page.
+            if (autoBookmarkPageIds.has(currentEpubPage)) return;
+            const anchor = captureFirstVisibleAnchor();
+            if (anchor == null) return;
+            const body = {
+                type: 'auto-bookmark',
+                bookId: bookId,
+                bookTitle: title,
+                anchor: anchor,
+                page: currentEpubPage,
+                total: totalPages,
+                text: '',
+                note: ''
+            };
+            try {
+                const r = await fetch(`${API_URL}/highlights`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(body)
+                });
+                if (!r.ok) return;
+                const item = await r.json();
+                autoBookmarks.push(item);
+                if (!autoBookmarkPageIds.has(currentEpubPage)) autoBookmarkPageIds.set(currentEpubPage, []);
+                autoBookmarkPageIds.get(currentEpubPage).push(item.id);
+                updateBookmarkIndicator();
+            } catch (e) { console.warn('createAutoBookmark', e); }
         }
 
         async function toggleBookmarkCurrentPage() {
@@ -1961,6 +2440,251 @@
                 if (v >= 12 && v <= 32) return v;
             } catch (e) {}
             return null;
+        }
+
+        // ---------- Reader display prefs (text-align, font-family, hyphens) ----
+        // All three live in localStorage and are re-applied to #epub-content
+        // every time we render a book or change a value. The font and
+        // hyphenation changes alter line breaking, so they route through the
+        // same scheduleFontReflow() debouncer the font-size slider uses to
+        // pin the user's visual position via anchor preservation.
+
+        const ALIGN_KEY  = 'ereader.textAlign';     // 'left' | 'center' | 'justify' | 'right'
+        const FFAMILY_KEY = 'ereader.fontFamily';   // CSS font-family string (the VALUE we set)
+        const HYPHEN_KEY = 'ereader.hyphenation';   // '1' | '0'
+        const GFONTS_KEY = 'ereader.fonts.google';  // JSON array of Google font names
+
+        // Stack used when the user has not picked anything (matches body).
+        const DEFAULT_FFAMILY = "-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif";
+
+        // Curated built-in font choices. `value` is the literal font-family
+        // CSS we apply; `label` is what shows up in the dropdown.
+        const BUILTIN_FONTS = [
+            { label: 'System Default', value: DEFAULT_FFAMILY },
+            { label: 'Serif',          value: "Georgia, 'Times New Roman', 'Noto Serif', serif" },
+            { label: 'Sans-serif',     value: "Roboto, 'Helvetica Neue', Arial, sans-serif" },
+            { label: 'Monospace',      value: "ui-monospace, 'Roboto Mono', Menlo, monospace" },
+        ];
+
+        let textAlignPref = 'left';
+        let fontFamilyPref = DEFAULT_FFAMILY;
+        let hyphenationPref = false;
+
+        function loadAlignPref() {
+            try {
+                const v = localStorage.getItem(ALIGN_KEY);
+                if (v === 'left' || v === 'center' || v === 'justify' || v === 'right') return v;
+            } catch (e) {}
+            return 'left';
+        }
+        function loadFontFamilyPref() {
+            try {
+                const v = localStorage.getItem(FFAMILY_KEY);
+                if (v) return v;
+            } catch (e) {}
+            return DEFAULT_FFAMILY;
+        }
+        function loadHyphenationPref() {
+            try { return localStorage.getItem(HYPHEN_KEY) === '1'; } catch (e) {}
+            return false;
+        }
+        function loadGoogleFonts() {
+            try {
+                const raw = localStorage.getItem(GFONTS_KEY);
+                if (!raw) return [];
+                const arr = JSON.parse(raw);
+                return Array.isArray(arr) ? arr.filter(s => typeof s === 'string') : [];
+            } catch (e) { return []; }
+        }
+        function saveGoogleFonts(arr) {
+            try { localStorage.setItem(GFONTS_KEY, JSON.stringify(arr)); } catch (e) {}
+        }
+
+        // Inject a <link rel=stylesheet> for a Google Font (idempotent). Family
+        // names with spaces get + on the URL but appear as-is in CSS, so we
+        // can reference the name directly in font-family later.
+        function ensureGoogleFontLink(name) {
+            const id = 'gfont-' + name.replace(/[^a-zA-Z0-9]+/g, '-').toLowerCase();
+            if (document.getElementById(id)) return;
+            const href = 'https://fonts.googleapis.com/css2?family=' +
+                         encodeURIComponent(name).replace(/%20/g, '+') +
+                         ':wght@400;700&display=swap';
+            const link = document.createElement('link');
+            link.id = id;
+            link.rel = 'stylesheet';
+            link.href = href;
+            document.head.appendChild(link);
+        }
+
+        // Apply all three display prefs to the live #epub-content element.
+        // Caller decides whether to also re-paginate (only needed when
+        // glyph metrics change — font swap, hyphenation toggle).
+        function applyReaderPrefs() {
+            const c = document.getElementById('epub-content');
+            if (!c) return;
+            c.style.textAlign  = textAlignPref;
+            c.style.fontFamily = fontFamilyPref;
+            // Sync the dual-page button highlight with the restored pref.
+            updateDualPageButton();
+            if (hyphenationPref) {
+                c.style.hyphens = 'auto';
+                c.style.webkitHyphens = 'auto';
+                c.lang = c.lang || 'en';
+            } else {
+                c.style.hyphens = 'manual';
+                c.style.webkitHyphens = 'manual';
+            }
+        }
+
+        function updateAlignButtons() {
+            ['left','center','justify','right'].forEach(a => {
+                const b = document.getElementById('align-' + a);
+                if (b) b.classList.toggle('active', a === textAlignPref);
+            });
+        }
+        function updateHyphenButtons() {
+            const on  = document.getElementById('hyphen-on');
+            const off = document.getElementById('hyphen-off');
+            if (on)  on.classList.toggle('active',  hyphenationPref);
+            if (off) off.classList.toggle('active', !hyphenationPref);
+        }
+        function updateFontSelectValue() {
+            const sel = document.getElementById('font-select');
+            if (sel) sel.value = fontFamilyPref;
+        }
+
+        function setTextAlign(value) {
+            if (!['left','center','justify','right'].includes(value)) return;
+            textAlignPref = value;
+            try { localStorage.setItem(ALIGN_KEY, value); } catch (e) {}
+            updateAlignButtons();
+            applyReaderPrefs();
+        }
+        function setHyphenation(on) {
+            hyphenationPref = !!on;
+            try { localStorage.setItem(HYPHEN_KEY, on ? '1' : '0'); } catch (e) {}
+            updateHyphenButtons();
+            // Hyphenation changes line breaks → must re-paginate.
+            if (fontChangeAnchor == null) fontChangeAnchor = captureFirstVisibleAnchor();
+            applyReaderPrefs();
+            scheduleFontReflow();
+        }
+        function setReaderFont(value) {
+            if (!value) return;
+            fontFamilyPref = value;
+            try { localStorage.setItem(FFAMILY_KEY, value); } catch (e) {}
+            // Font change definitely re-flows.
+            if (fontChangeAnchor == null) fontChangeAnchor = captureFirstVisibleAnchor();
+            applyReaderPrefs();
+            scheduleFontReflow();
+        }
+
+        // Build the <select>: built-ins, then a separator group for any
+        // Google fonts the user has previously loaded.
+        function rebuildFontDropdown() {
+            const sel = document.getElementById('font-select');
+            if (!sel) return;
+            sel.innerHTML = '';
+            for (const f of BUILTIN_FONTS) {
+                const opt = document.createElement('option');
+                opt.value = f.value;
+                opt.textContent = f.label;
+                sel.appendChild(opt);
+            }
+            const gfonts = loadGoogleFonts();
+            if (gfonts.length) {
+                const grp = document.createElement('optgroup');
+                grp.label = 'Google Fonts';
+                for (const name of gfonts) {
+                    const opt = document.createElement('option');
+                    // Quote the family name so multi-word names (e.g. "Noto Serif") parse.
+                    opt.value = `"${name}", ${DEFAULT_FFAMILY}`;
+                    opt.textContent = name;
+                    grp.appendChild(opt);
+                }
+                sel.appendChild(grp);
+            }
+            // If the current pref isn't in the dropdown (font was removed?),
+            // add it as a one-off so the value still round-trips.
+            if (![...sel.options].some(o => o.value === fontFamilyPref)) {
+                const opt = document.createElement('option');
+                opt.value = fontFamilyPref;
+                opt.textContent = '(custom)';
+                sel.appendChild(opt);
+            }
+            sel.value = fontFamilyPref;
+        }
+
+        function toggleAddFontRow() {
+            const row  = document.getElementById('add-font-row');
+            const hint = document.getElementById('add-font-hint');
+            if (!row) return;
+            const open = row.classList.toggle('open');
+            if (hint) hint.style.display = open ? 'block' : 'none';
+            if (open) {
+                const input = document.getElementById('add-font-input');
+                if (input) { input.focus(); input.select(); }
+            }
+        }
+
+        // Extract a Google Fonts family name from whatever the user pasted.
+        // Accepts:
+        //   - bare name:              "Lora"  /  "source serif 4"
+        //   - specimen URL:           https://fonts.google.com/specimen/Source+Serif+4
+        //   - CSS API URL (family=):  https://fonts.googleapis.com/css2?family=Lora:wght@400
+        function parseGoogleFontName(raw) {
+            try {
+                const url = new URL(raw);
+                // googleapis.com embed URL: ?family=Name
+                const fam = url.searchParams.get('family');
+                if (fam) return decodeURIComponent(fam).split(':')[0].replace(/\+/g, ' ').trim();
+                // fonts.google.com specimen page: /specimen/Font+Name
+                const m = url.pathname.match(/\/specimen\/([^/?#]+)/i);
+                if (m) return decodeURIComponent(m[1]).replace(/\+/g, ' ').trim();
+            } catch (_) { /* not a URL — fall through */ }
+            return raw.trim();
+        }
+
+        // Persist a new Google Font, inject its stylesheet, add it to the
+        // dropdown, and select it. We don't actively verify the font exists
+        // upstream — if the name is wrong the stylesheet just 404s and the
+        // user falls back to the next family in the stack.
+        function submitAddGoogleFont() {
+            const input = document.getElementById('add-font-input');
+            if (!input) return;
+            const raw = (input.value || '').trim();
+            if (!raw) return;
+
+            // Parse name from URL or bare string, then title-case it.
+            const parsed = parseGoogleFontName(raw);
+            const normalized = parsed.split(/\s+/).map(w =>
+                w.length ? w[0].toUpperCase() + w.slice(1) : w).join(' ');
+
+            const gfonts = loadGoogleFonts();
+            if (!gfonts.includes(normalized)) {
+                gfonts.push(normalized);
+                saveGoogleFonts(gfonts);
+            }
+            ensureGoogleFontLink(normalized);
+            rebuildFontDropdown();
+            input.value = '';
+            const row  = document.getElementById('add-font-row');
+            const hint = document.getElementById('add-font-hint');
+            if (row)  row.classList.remove('open');
+            if (hint) hint.style.display = 'none';
+            // Wait for the actual font file to load before re-paginating so
+            // calculatePages measures glyph widths against the new metrics
+            // (otherwise the page count drifts when the font swaps in late).
+            const fam = `"${normalized}", ${DEFAULT_FFAMILY}`;
+            const finalize = () => {
+                setReaderFont(fam);
+                flashToast('Loaded ' + normalized);
+            };
+            if (document.fonts && document.fonts.load) {
+                document.fonts.load(`400 16px "${normalized}"`).then(finalize, finalize);
+            } else {
+                finalize();
+            }
         }
 
         // Pull the current selection if it lies entirely inside #epub-content.
@@ -2165,12 +2889,17 @@
         }
 
         // ---------- Apply server-side highlights on load ----------
+        // Stored in `highlights` so the Highlights overlay can list them
+        // without re-fetching. Each item carries an `anchor` we can resolve
+        // to a current page via findPageForAnchor().
+        let highlights = [];
         async function loadHighlightsForBook() {
             if (!bookId) return;
             try {
                 const r = await fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(bookId)}&type=highlight`);
                 if (!r.ok) return;
                 const data = await r.json();
+                highlights = (data.items || []).filter(b => typeof b.anchor === 'number');
                 const content = document.getElementById('epub-content');
                 if (!content) return;
                 for (const it of (data.items || [])) {
@@ -2300,24 +3029,41 @@
             });
         }
 
+        function updateDualPageButton() {
+            const b = document.getElementById('btn-dual-page');
+            if (!b) return;
+            b.classList.toggle('active', isDualPage);
+            // Greyed out + non-interactive when fold is closed: dual-page is
+            // physically impractical on the narrow cover screen.
+            b.classList.toggle('disabled', !isFoldOpen());
+        }
+
         function toggleDualPage() {
-            isDualPage = !isDualPage;
+            // Toggle is a no-op when fold is closed — the button is also
+            // visually disabled, but be defensive in case it's tapped via a11y.
+            if (!isFoldOpen()) return;
+            dualPagePref = !dualPagePref;
+            isDualPage = dualPagePref; // fold is open, so effective == pref
             document.body.classList.toggle('dual-page', isDualPage);
+            updateDualPageButton();
+            try { localStorage.setItem(DUAL_PAGE_KEY, dualPagePref ? '1' : '0'); } catch (e) {}
             // Re-paginate: column geometry actually changed.
             calculatePages(true);
         }
 
-        // Auto dual page detection for foldables (Pixel Fold opens to ~2076px wide).
+        // Recompute the effective dual-page state from (dualPagePref, isFoldOpen).
+        // Called on every viewport change so unfolding/folding the device
+        // updates the layout without losing the user's stored preference.
+        // Returns true when the effective state actually flipped.
         function checkDualPageMode() {
-            const w = (window.visualViewport && window.visualViewport.width) || window.innerWidth;
-            const h = (window.visualViewport && window.visualViewport.height) || window.innerHeight;
-            const shouldBeDual = w >= 900 && w > h;
-            if (shouldBeDual !== isDualPage) {
-                isDualPage = shouldBeDual;
+            const want = dualPagePref && isFoldOpen();
+            const changed = (want !== isDualPage);
+            if (changed) {
+                isDualPage = want;
                 document.body.classList.toggle('dual-page', isDualPage);
-                return true;
             }
-            return false;
+            updateDualPageButton(); // also refreshes the disabled state
+            return changed;
         }
 
         // Debounced re-pagination on viewport change. Foldables fire resize twice
@@ -2628,6 +3374,159 @@
             }
         }
 
+        // ---- Bookmarks / Highlights navigation overlay -----------------
+        // Both lists share the same overlay shell. We close any other
+        // overlay (settings menu, TOC) on open so they don't stack.
+        function openBookmarksList() {
+            closeAllMenus();
+            const body = document.getElementById('navlist-body');
+            document.getElementById('navlist-title').textContent = 'Bookmarks';
+            body.innerHTML = '';
+
+            // Helper: render a section header inside the list
+            function sectionHeader(label, color) {
+                const h = document.createElement('div');
+                h.style.cssText = `padding:10px 12px 4px;font-size:11px;font-weight:700;
+                    letter-spacing:0.6px;text-transform:uppercase;color:${color};
+                    border-bottom:1px solid #2a2a2a;`;
+                h.textContent = label;
+                return h;
+            }
+
+            // Helper: resolve page, build a row and append to body
+            function appendBmRow(bm, deleteFn) {
+                const page = findPageForAnchor(bm.anchor);
+                const snippet = (bm.text || '').trim().slice(0, 120) || '\u2014';
+                body.appendChild(buildNavRow({
+                    primary:  snippet,
+                    secondary: page != null ? `Page ${page + 1} / ${totalPages}` : '\u2014',
+                    onOpen:   () => { if (page != null) jumpToPage(page); },
+                    onDelete: () => deleteFn(bm.id),
+                }));
+            }
+
+            // Sort descending by page (furthest in book first)
+            const byPageDesc = (a, b) => (findPageForAnchor(b.anchor) || 0) - (findPageForAnchor(a.anchor) || 0);
+
+            const manualSorted = bookmarks.slice().sort(byPageDesc);
+            const autoSorted   = autoBookmarks.slice().sort(byPageDesc);
+
+            const hasManual = manualSorted.length > 0;
+            const hasAuto   = autoSorted.length > 0;
+
+            if (!hasManual && !hasAuto) {
+                body.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center;font-size:16px;">No bookmarks yet</div>';
+            } else {
+                body.appendChild(sectionHeader('📌  Manual Bookmarks', '#d04040'));
+                if (hasManual) {
+                    for (const bm of manualSorted) appendBmRow(bm, deleteBookmarkFromList);
+                } else {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'color:#666;padding:12px 14px;font-size:14px;font-style:italic;';
+                    empty.textContent = 'No manual bookmarks';
+                    body.appendChild(empty);
+                }
+
+                body.appendChild(sectionHeader('⏱  Automatic Bookmarks', '#8640C0'));
+                if (hasAuto) {
+                    for (const bm of autoSorted) appendBmRow(bm, deleteAutoBookmarkFromList);
+                } else {
+                    const empty = document.createElement('div');
+                    empty.style.cssText = 'color:#666;padding:12px 14px;font-size:14px;font-style:italic;';
+                    empty.textContent = 'No automatic bookmarks yet';
+                    body.appendChild(empty);
+                }
+            }
+            document.getElementById('navlist-overlay').style.display = 'block';
+        }
+        function openHighlightsList() {
+            closeAllMenus();
+            const body = document.getElementById('navlist-body');
+            document.getElementById('navlist-title').textContent = 'Highlights';
+            body.innerHTML = '';
+            if (!highlights || highlights.length === 0) {
+                body.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center;font-size:16px;">No highlights yet</div>';
+            } else {
+                const items = highlights.slice().sort((a, b) => (a.anchor || 0) - (b.anchor || 0));
+                for (const hl of items) {
+                    const page = findPageForAnchor(hl.anchor);
+                    const snippet = (hl.text || '').trim().slice(0, 200) || '\u2014';
+                    body.appendChild(buildNavRow({
+                        primary: snippet,
+                        secondary: page != null ? `Page ${page + 1} / ${totalPages}` : '\u2014',
+                        onOpen:   () => { if (page != null) jumpToPage(page); },
+                        onDelete: () => deleteHighlightFromList(hl.id),
+                    }));
+                }
+            }
+            document.getElementById('navlist-overlay').style.display = 'block';
+        }
+        function closeNavList() {
+            document.getElementById('navlist-overlay').style.display = 'none';
+        }
+        function buildNavRow({ primary, secondary, onOpen, onDelete }) {
+            const row = document.createElement('div');
+            row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:12px 10px;border-bottom:1px solid #2a2a2a;';
+            const main = document.createElement('div');
+            main.style.cssText = 'flex:1;min-width:0;color:#ddd;cursor:pointer;';
+            main.innerHTML = `<div style="font-size:14px;line-height:1.4;color:#fff;">${escapeHtml(primary)}</div>
+                              <div style="font-size:11px;color:#888;margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(secondary)}</div>`;
+            main.addEventListener('click', () => { closeNavList(); onOpen(); });
+            const del = document.createElement('button');
+            del.textContent = '\u2715';
+            del.title = 'Delete';
+            del.style.cssText = 'background:#333;color:#aaa;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:14px;flex:0 0 auto;';
+            del.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
+            row.appendChild(main);
+            row.appendChild(del);
+            return row;
+        }
+        function escapeHtml(s) {
+            return String(s).replace(/[&<>"']/g, c => ({ '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c]));
+        }
+        function jumpToPage(page) {
+            currentEpubPage = Math.min(totalPages - 1, Math.max(0, page));
+            renderEpubPage();
+        }
+        async function deleteBookmarkFromList(id) {
+            try {
+                const r = await fetch(`${API_URL}/highlights/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
+            } catch (e) { console.warn('delete bookmark', e); return; }
+            bookmarks = bookmarks.filter(b => b.id !== id);
+            refreshBookmarkPageMap();
+            updateBookmarkIndicator();
+            openBookmarksList(); // re-render
+        }
+        async function deleteAutoBookmarkFromList(id) {
+            try {
+                const r = await fetch(`${API_URL}/highlights/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
+            } catch (e) { console.warn('delete auto-bookmark', e); return; }
+            autoBookmarks = autoBookmarks.filter(b => b.id !== id);
+            refreshBookmarkPageMap();
+            updateBookmarkIndicator();
+            openBookmarksList(); // re-render
+        }
+        async function deleteHighlightFromList(id) {
+            try {
+                const r = await fetch(`${API_URL}/highlights/${encodeURIComponent(id)}`, { method: 'DELETE' });
+                if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
+            } catch (e) { console.warn('delete highlight', e); return; }
+            highlights = highlights.filter(h => h.id !== id);
+            // Unwrap any live highlight spans in the rendered DOM.
+            document.querySelectorAll(`[data-hl-id="${id}"]`).forEach(unwrapHL);
+            openHighlightsList(); // re-render
+        }
+        // Best-effort close-all so opening a navlist doesn't stack on top
+        // of the settings menu or TOC overlay.
+        function closeAllMenus() {
+            const m = document.getElementById('reader-menu');
+            if (m) m.classList.remove('open');
+            const toc = document.getElementById('toc-overlay');
+            if (toc) toc.style.display = 'none';
+        }
+
         function toggleTOC() {
             const tocOverlay = document.getElementById('toc-overlay');
             const tocList = document.getElementById('toc-list');
@@ -2782,6 +3681,21 @@
             if (slider) slider.value = fontSize;
             const lbl = document.getElementById('font-size-label');
             if (lbl) lbl.textContent = fontSize;
+        }
+
+        // Same for the display prefs (align / font / hyphenation). Loading
+        // these BEFORE renderEpubContent runs means the first paint matches
+        // the user's last session — no visible re-layout flash.
+        {
+            textAlignPref   = loadAlignPref();
+            fontFamilyPref  = loadFontFamilyPref();
+            hyphenationPref = loadHyphenationPref();
+            // Re-inject stylesheet links for any previously-loaded Google
+            // Fonts so the names resolve once the dropdown selects one.
+            for (const name of loadGoogleFonts()) ensureGoogleFontLink(name);
+            rebuildFontDropdown();
+            updateAlignButtons();
+            updateHyphenButtons();
         }
 
         // Load the book

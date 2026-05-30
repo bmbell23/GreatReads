@@ -16,11 +16,23 @@
     "bookTitle": "Iron Gold",
     "bookAuthor": "",
     "format": "epub",
-    "anchor": 2342,
-    "page": 236,
-    "total": 606,
-    "progress": 0.38943894389438943,
-    "fontSize": 20,
-    "updated": 1780115939823
+    "anchor": 2420,
+    "page": 287,
+    "total": 712,
+    "progress": 0.40308988764044945,
+    "fontSize": 22,
+    "updated": 1780148671698
+  },
+  "430": {
+    "bookId": "430",
+    "bookTitle": "Before They Are Hanged",
+    "bookAuthor": "",
+    "format": "epub",
+    "anchor": 0,
+    "page": 0,
+    "total": 1241,
+    "progress": 0,
+    "fontSize": 22,
+    "updated": 1780117288018
   }
 }

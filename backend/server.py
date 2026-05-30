@@ -334,7 +334,7 @@ def create_highlight():
     """Create a highlight or bookmark. Body is the partial item; we fill
     in id + created timestamp."""
     body = request.get_json(silent=True) or {}
-    if body.get('type') not in ('highlight', 'bookmark'):
+    if body.get('type') not in ('highlight', 'bookmark', 'auto-bookmark'):
         return jsonify({'error': 'type must be "highlight" or "bookmark"'}), 400
     if not body.get('bookId'):
         return jsonify({'error': 'bookId is required'}), 400
