@@ -114,8 +114,8 @@
             /* Padding and column-gap are set in JS (calculatePages) so the
                column stride matches transform shift exactly. Do not set
                padding-left/right or column-gap/column-width here. */
-            padding-top: 40px;
-            padding-bottom: 60px;
+            padding-top: 60px;
+            padding-bottom: 40px;
             margin: 0;
             line-height: 1.6;
             color: #000;
@@ -610,7 +610,7 @@
 
         /* Floating popup that appears when an existing highlight is
            tapped. Position is set inline by JS (top/left in viewport
-           coordinates). Three icon buttons: delete / dictionary / wiki. */
+           coordinates). Buttons: copy / delete / dictionary / wiki. */
         .hl-popup {
             position: fixed;
             z-index: 12000;
@@ -621,6 +621,8 @@
             display: flex;
             gap: 4px;
             box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+            opacity: 1;
+            transition: opacity 0.4s ease;
         }
         .hl-popup button {
             background: transparent;
@@ -890,11 +892,15 @@
         </div>
     </div>
 
-    <!-- Highlight-action popup. JS positions it next to the tapped highlight. -->
+    <!-- Highlight-action popup. JS positions it next to the tapped highlight.
+         No explicit "edit" button — tapping the highlight (or finishing a
+         new one) automatically activates the native selection handles so
+         the user can drag to adjust the bounds. -->
     <div id="hl-popup" class="hl-popup" style="display:none;">
-        <button title="Adjust highlight bounds" onclick="editHL()">✏️</button>
-        <button title="Look up in dictionary"   onclick="lookupHL('dict')">📖</button>
-        <button title="Look up in wiki"         onclick="lookupHL('wiki')">🌐</button>
+        <button title="Copy text"             onclick="copyHL()">📋</button>
+        <button title="Share as image"        onclick="shareHL()">📤</button>
+        <button title="Look up in dictionary" onclick="lookupHL('dict')">📖</button>
+        <button title="Look up in wiki"       onclick="lookupHL('wiki')">🌐</button>
         <button class="danger" title="Delete highlight" onclick="deleteHL()">🗑️</button>
     </div>
 
@@ -930,9 +936,17 @@
             const mi = String(n.getMinutes()).padStart(2, '0');
             return `${yy}${mm}${dd}-${hh}:${mi}`;
         }
+        // BUILD is used as a cache-bust token, so we generate it fresh per
+        // page load. The displayed pill, however, must reflect when the
+        // *code* was last edited — fetch it from the backend, which reads
+        // the mtime of the web assets.
         const BUILD = fmtStamp();
-        buildStamp.textContent = BUILD;
+        buildStamp.textContent = '…';
         buildStamp.title = 'Tap to download latest APK';
+        fetch('http://100.69.184.113:8091/api/build-stamp')
+            .then(r => r.json())
+            .then(d => { if (d && d.stamp) buildStamp.textContent = d.stamp; })
+            .catch(() => { buildStamp.textContent = BUILD; });
         buildStamp.addEventListener('click', () => {
             // Use a hidden <a download> so Android's DownloadListener fires
             // instead of navigating the WebView away from the page.
@@ -1010,6 +1024,11 @@
         const format = urlParams.get('format') || 'epub';
         const title = urlParams.get('title') || 'Book';
         const API_URL = 'http://100.69.184.113:8091/api';
+
+        // Populated from the EPUB's OPF metadata (dc:creator) once the book
+        // is parsed — used by the share-card renderer to credit the author
+        // at the bottom of the image. Empty string until parsing completes.
+        let bookAuthor = '';
 
         document.getElementById('book-title').textContent = title;
 
@@ -1177,6 +1196,19 @@
                 const opfDoc = parser.parseFromString(contentOpf, 'text/xml');
                 const itemrefs = opfDoc.querySelectorAll('spine itemref');
                 const manifest = {};
+
+                // Pull dc:creator for the share-card byline. Some OPFs list
+                // multiple creators (illustrator, translator, etc.) — join
+                // them with a comma so the byline reflects all contributors.
+                try {
+                    const creators = opfDoc.querySelectorAll('metadata creator, metadata dc\\:creator');
+                    const names = [];
+                    creators.forEach(c => {
+                        const n = (c.textContent || '').trim();
+                        if (n) names.push(n);
+                    });
+                    bookAuthor = names.join(', ');
+                } catch (e) { bookAuthor = ''; }
 
                 opfDoc.querySelectorAll('manifest item').forEach(item => {
                     manifest[item.getAttribute('id')] = item.getAttribute('href');
@@ -2335,6 +2367,12 @@
         let _activeHLId = null;
         let _activeHLText = '';
         let _hlInited = false;
+        // While set, the *next* settle-save will replace this highlight
+        // instead of creating a new one alongside it. Populated whenever
+        // we hand the user editable selection handles — either right
+        // after creating a new highlight or when they tap an existing
+        // one. Cleared by hideHLPopup() on explicit dismiss.
+        let _editingHLId = null;
 
         function getLookupURL(kind) {
             const key = kind === 'dict' ? HL_DICT_KEY : HL_WIKI_KEY;
@@ -2701,9 +2739,42 @@
         // Called on touchend/mouseup. If the user selected text → save as
         // highlight (optimistic wrap, then POST). Otherwise no-op; the
         // existing page-turn handler runs separately.
+        //
+        // If `_editingHLId` is set, this is an *adjustment* of an existing
+        // highlight (the user dragged the native selection handles): we
+        // delete-and-recreate. The old spans are unwrapped first (using
+        // the keepNodes variant) so the live selection range's endpoints
+        // survive into the new wrap.
         async function handleSelectionMaybe() {
-            const range = getEpubSelectionRange();
+            let range = getEpubSelectionRange();
             if (!range) return false;
+
+            // Capture and clear immediately so the re-wrap at the end
+            // (which sets the selection again and re-arms the settle
+            // timer) doesn't see itself as another edit.
+            const replacingId = _editingHLId;
+            _editingHLId = null;
+
+            if (replacingId) {
+                // If the selection still matches the existing highlight's
+                // text exactly, the user opened the menu but didn't drag.
+                // Skip the round-trip; just keep editing armed.
+                const existingSpans = document.querySelectorAll(
+                    `[data-hl-id="${replacingId}"]`);
+                const existingText = Array.from(existingSpans)
+                    .map(s => s.textContent).join('');
+                if (existingText === range.toString()) {
+                    _editingHLId = replacingId;
+                    return true;
+                }
+                // Unwrap old spans before measuring offsets — otherwise
+                // findAnchorAncestor/charOffsetWithin can land on a span
+                // boundary instead of the underlying paragraph anchor.
+                existingSpans.forEach(unwrapHLKeepNodes);
+                range = getEpubSelectionRange();
+                if (!range) return false;
+            }
+
             const text = range.toString().trim();
             if (!text) return false;
             const startA = findAnchorAncestor(range.startContainer);
@@ -2739,7 +2810,6 @@
 
             const tmpId = 'tmp-' + Date.now();
             try { wrapRangeAsHighlight(range, tmpId); } catch (e) { console.warn('wrap failed', e); }
-            window.getSelection().removeAllRanges();
 
             try {
                 const r = await fetch(`${API_URL}/highlights`, {
@@ -2751,15 +2821,47 @@
                 const saved = await r.json();
                 const spans = document.querySelectorAll(`[data-hl-id="${tmpId}"]`);
                 spans.forEach(s => { s.dataset.hlId = saved.id; });
-                // Pop our in-app action popup directly on the new highlight
-                // so the user gets a native (delete / dict / wiki) action
-                // bar instead of relying on Android's text-selection menu.
-                if (spans.length) showHLPopup(spans[0]);
+                // Re-establish the selection over the freshly-wrapped
+                // spans so the native selection handles stay visible —
+                // the user can immediately drag them to nudge the bounds,
+                // and the next settle-save will replace this highlight.
+                if (spans.length) {
+                    _reselectSpans(spans, saved.id);
+                    showHLPopup(spans[0]);
+                }
             } catch (e) {
                 document.querySelectorAll(`[data-hl-id="${tmpId}"]`).forEach(unwrapHL);
                 flashToast('⚠️ Save failed: ' + e.message);
             }
+
+            // Now that the new highlight is in place, clean up the old
+            // one server-side. Best-effort; orphans are harmless.
+            if (replacingId) {
+                try { await fetch(`${API_URL}/highlights/${replacingId}`,
+                                  { method: 'DELETE' }); } catch (_) {}
+            }
             return true;
+        }
+
+        // Set the native selection to span the given highlight <span>s and
+        // mark us as editing `hlId`. Cancels the settle timer that the
+        // selection change just armed so we don't immediately re-save a
+        // no-op duplicate.
+        function _reselectSpans(spans, hlId) {
+            const first = firstTextDescendant(spans[0]);
+            const last  = lastTextDescendant(spans[spans.length - 1]);
+            if (!first || !last) return;
+            const r = document.createRange();
+            r.setStart(first, 0);
+            r.setEnd(last, last.nodeValue.length);
+            const sel = window.getSelection();
+            sel.removeAllRanges();
+            sel.addRange(r);
+            _editingHLId = hlId;
+            // selectionchange fires async — cancel its arming on the next tick.
+            setTimeout(() => {
+                if (_selSettleTimer) { clearTimeout(_selSettleTimer); _selSettleTimer = null; }
+            }, 0);
         }
 
         // Debounced "selection settled" watcher. This is the ONLY thing that
@@ -2786,14 +2888,36 @@
         }
 
         // ---------- Highlight action popup ----------
+        let _hlPopupTimer = null;
+        function _scheduleHLFade() {
+            if (_hlPopupTimer) clearTimeout(_hlPopupTimer);
+            _hlPopupTimer = setTimeout(() => {
+                const popup = document.getElementById('hl-popup');
+                if (!popup) return;
+                popup.style.opacity = '0';
+                // Wait for the CSS transition to finish before hiding.
+                setTimeout(() => {
+                    if (popup.style.opacity === '0') hideHLPopup();
+                }, 420);
+            }, 2000);
+        }
         function showHLPopup(hl) {
             _activeHLId = hl.dataset.hlId;
-            _activeHLText = hl.textContent.trim();
+            // A single highlight can span multiple inline elements, so it's
+            // stored as several sibling <mark> spans that share the same
+            // data-hl-id. Collect every fragment so Copy / Share / Lookup
+            // get the full highlighted passage, not just the clicked span.
+            const allSpans = Array.from(document.querySelectorAll(
+                `[data-hl-id="${_activeHLId}"]`));
+            _activeHLText = (allSpans.length
+                ? allSpans.map(s => s.textContent).join('')
+                : hl.textContent).trim();
             const popup = document.getElementById('hl-popup');
+            popup.style.opacity = '1';
             popup.style.display = 'flex';
             // Measure after display.
             const rect = hl.getBoundingClientRect();
-            const popW = popup.offsetWidth  || 168;
+            const popW = popup.offsetWidth  || 280;
             const popH = popup.offsetHeight || 52;
             let left = rect.left + rect.width / 2 - popW / 2;
             let top  = rect.top - popH - 8;
@@ -2802,12 +2926,234 @@
             top  = Math.max(8, Math.min(top,  window.innerHeight - popH - 8));
             popup.style.left = left + 'px';
             popup.style.top  = top + 'px';
+            _scheduleHLFade();
+            // Restore native selection handles over the whole highlight so
+            // the user can immediately drag them to adjust bounds — both
+            // when the popup appears after a new highlight is created AND
+            // when the user taps an existing highlight.
+            if (allSpans.length) _reselectSpans(allSpans, _activeHLId);
         }
         function hideHLPopup() {
+            if (_hlPopupTimer) { clearTimeout(_hlPopupTimer); _hlPopupTimer = null; }
             const popup = document.getElementById('hl-popup');
-            if (popup) popup.style.display = 'none';
+            if (popup) { popup.style.opacity = '1'; popup.style.display = 'none'; }
             _activeHLId = null; _activeHLText = '';
+            // Collapse the selection so handles disappear on explicit dismiss.
+            _editingHLId = null;
+            try { window.getSelection().removeAllRanges(); } catch (_) {}
         }
+        async function copyHL() {
+            if (!_activeHLText) return;
+            try {
+                await navigator.clipboard.writeText(_activeHLText);
+                flashToast('📋 Copied');
+            } catch (e) {
+                // Fallback for older WebView builds that restrict clipboard API.
+                const ta = document.createElement('textarea');
+                ta.value = _activeHLText;
+                ta.style.position = 'fixed'; ta.style.opacity = '0';
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand('copy');
+                document.body.removeChild(ta);
+                flashToast('📋 Copied');
+            }
+            hideHLPopup();
+        }
+
+        // ---------- Share-as-image ----------
+        // Renders the active highlight as a square paper-card PNG and hands
+        // it to Android via the Web Share API (which surfaces the system
+        // chooser: Gmail / Messages / Save to Photos / etc.). Falls back to
+        // a plain download if navigator.share is unavailable or can't take
+        // file payloads on this WebView build.
+
+        // Word-wrap helper for canvas text. Returns an array of lines that
+        // each fit inside maxWidth at the ctx's current font.
+        function _wrapCanvasText(ctx, text, maxWidth) {
+            const paragraphs = String(text).split(/\r?\n/);
+            const lines = [];
+            for (const para of paragraphs) {
+                const words = para.split(/\s+/).filter(Boolean);
+                if (!words.length) { lines.push(''); continue; }
+                let cur = words[0];
+                for (let i = 1; i < words.length; i++) {
+                    const trial = cur + ' ' + words[i];
+                    if (ctx.measureText(trial).width <= maxWidth) {
+                        cur = trial;
+                    } else {
+                        lines.push(cur);
+                        cur = words[i];
+                    }
+                }
+                lines.push(cur);
+            }
+            return lines;
+        }
+
+        // Pick the largest font size from `sizes` (descending) whose wrapped
+        // text height fits within maxHeight. Returns {fontSize, lines}.
+        function _fitTextToBox(ctx, text, fontFamily, italic, bold, maxWidth, maxHeight, sizes, lineHeightRatio) {
+            for (const size of sizes) {
+                ctx.font = `${italic ? 'italic ' : ''}${bold ? '700 ' : '400 '}${size}px ${fontFamily}`;
+                const lines = _wrapCanvasText(ctx, text, maxWidth);
+                const lh = Math.round(size * lineHeightRatio);
+                if (lines.length * lh <= maxHeight) return { fontSize: size, lines, lineHeight: lh };
+            }
+            // Nothing fit — return the smallest size, lines will overflow but
+            // we'll just truncate at the box edge.
+            const size = sizes[sizes.length - 1];
+            ctx.font = `${italic ? 'italic ' : ''}${bold ? '700 ' : '400 '}${size}px ${fontFamily}`;
+            const lines = _wrapCanvasText(ctx, text, maxWidth);
+            return { fontSize: size, lines, lineHeight: Math.round(size * lineHeightRatio) };
+        }
+
+        // Resolve the chapter title containing the currently active highlight.
+        // Mirrors the lookup in updateProgress(): the last chapterStarts entry
+        // whose page is <= currentEpubPage.
+        function _activeChapterTitle() {
+            if (!chapterStarts || !chapterStarts.length) return '';
+            let idx = 0;
+            for (let i = 0; i < chapterStarts.length; i++) {
+                if (chapterStarts[i].page <= currentEpubPage) idx = i;
+                else break;
+            }
+            return chapterStarts[idx].title || '';
+        }
+
+        // Build the 1080x1080 PNG. Layout: large opening quote glyph, the
+        // highlight body (italic + bold serif) centered and auto-sized to
+        // fit, then a thin rule and the byline (title / chapter / author /
+        // brand) along the bottom.
+        function _renderShareCanvas(text) {
+            const W = 1080, H = 1080;
+            const canvas = document.createElement('canvas');
+            canvas.width = W; canvas.height = H;
+            const ctx = canvas.getContext('2d');
+
+            // Paper background with a subtle vertical gradient so the card
+            // doesn't read as flat-white when viewed on OLED.
+            const bg = ctx.createLinearGradient(0, 0, 0, H);
+            bg.addColorStop(0, '#fbf5e6');
+            bg.addColorStop(1, '#efe4c8');
+            ctx.fillStyle = bg;
+            ctx.fillRect(0, 0, W, H);
+
+            // Inner border frame.
+            ctx.strokeStyle = 'rgba(60, 40, 20, 0.18)';
+            ctx.lineWidth = 2;
+            ctx.strokeRect(36, 36, W - 72, H - 72);
+
+            const ink = '#2b1d10';
+            const muted = 'rgba(43, 29, 16, 0.62)';
+            const serif = 'Georgia, "Times New Roman", serif';
+
+            // Decorative opening quote mark.
+            ctx.fillStyle = 'rgba(60, 40, 20, 0.22)';
+            ctx.font = `700 220px ${serif}`;
+            ctx.textBaseline = 'top';
+            ctx.textAlign = 'left';
+            ctx.fillText('\u201C', 80, 60);
+
+            // Footer block — measure first so we know how much vertical room
+            // the body text has. We render it last but its height drives the
+            // layout above it.
+            const chapterTitle = _activeChapterTitle();
+            const author = bookAuthor || '';
+            const bookTitleStr = title || '';
+            const footerLines = [];
+            if (bookTitleStr) footerLines.push({ text: bookTitleStr, size: 30, bold: true,  italic: false });
+            if (chapterTitle) footerLines.push({ text: chapterTitle, size: 24, bold: false, italic: true  });
+            if (author)       footerLines.push({ text: '— ' + author, size: 24, bold: false, italic: false });
+            // Brand watermark always present.
+            footerLines.push({ text: 'GreatReads', size: 18, bold: false, italic: false, muted: true });
+
+            const footerLineGap = 8;
+            let footerHeight = 0;
+            footerLines.forEach(l => { footerHeight += l.size + footerLineGap; });
+            footerHeight += 20; // rule + breathing room
+
+            // Body text area: below the quote glyph, above the footer.
+            const bodyLeft   = 110;
+            const bodyRight  = W - 110;
+            const bodyTop    = 260;
+            const bodyBottom = H - 90 - footerHeight;
+            const bodyWidth  = bodyRight - bodyLeft;
+            const bodyHeight = bodyBottom - bodyTop;
+
+            const sizes = [64, 56, 50, 44, 40, 36, 32, 28, 24, 22];
+            const fit = _fitTextToBox(ctx, text, serif, true, true, bodyWidth, bodyHeight, sizes, 1.35);
+            ctx.fillStyle = ink;
+            ctx.textAlign = 'left';
+            ctx.textBaseline = 'top';
+            // Vertical center within the body box.
+            const totalTextHeight = fit.lines.length * fit.lineHeight;
+            let y = bodyTop + Math.max(0, (bodyHeight - totalTextHeight) / 2);
+            for (const line of fit.lines) {
+                ctx.fillText(line, bodyLeft, y);
+                y += fit.lineHeight;
+            }
+
+            // Thin horizontal rule above the footer.
+            const ruleY = H - 80 - footerHeight + 4;
+            ctx.strokeStyle = 'rgba(60, 40, 20, 0.35)';
+            ctx.lineWidth = 1;
+            ctx.beginPath();
+            ctx.moveTo(bodyLeft, ruleY);
+            ctx.lineTo(bodyRight, ruleY);
+            ctx.stroke();
+
+            // Footer block, right-aligned.
+            ctx.textAlign = 'right';
+            let fy = ruleY + 16;
+            for (const l of footerLines) {
+                ctx.fillStyle = l.muted ? muted : ink;
+                ctx.font = `${l.italic ? 'italic ' : ''}${l.bold ? '700 ' : '400 '}${l.size}px ${serif}`;
+                ctx.fillText(l.text, bodyRight, fy);
+                fy += l.size + footerLineGap;
+            }
+
+            return canvas;
+        }
+
+        async function shareHL() {
+            if (!_activeHLText) return;
+            const text = _activeHLText;
+            try {
+                const canvas = _renderShareCanvas(text);
+                // Primary path: native Android bridge. The Web Share API
+                // requires a secure context, but the WebView loads over
+                // plain HTTP, so navigator.share is the wrong tool here.
+                if (window.Android && typeof window.Android.shareImage === 'function') {
+                    const dataUrl = canvas.toDataURL('image/png');
+                    const base64 = dataUrl.substring(dataUrl.indexOf(',') + 1);
+                    window.Android.shareImage(base64, 'Share quote from ' + (title || 'GreatReads'));
+                    hideHLPopup();
+                    return;
+                }
+                // Secondary path: Web Share API with files (only fires on
+                // a secure context — used when running this page in a real
+                // browser for testing).
+                const blob = await new Promise(res => canvas.toBlob(res, 'image/png'));
+                if (!blob) { flashToast('⚠️ Could not render image'); return; }
+                const file = new File([blob], 'greatreads-quote.png', { type: 'image/png' });
+                if (navigator.canShare && navigator.canShare({ files: [file] })) {
+                    await navigator.share({
+                        files: [file],
+                        title: title || 'GreatReads quote',
+                        text: bookAuthor ? `${title} — ${bookAuthor}` : title
+                    });
+                } else {
+                    flashToast('⚠️ Update the app to share quotes');
+                }
+            } catch (e) {
+                if (e && e.name === 'AbortError') { hideHLPopup(); return; }
+                console.error('shareHL failed:', e);
+                flashToast('⚠️ Share failed');
+            }
+            hideHLPopup();
+        }
+
         async function deleteHL() {
             if (!_activeHLId) return;
             const id = _activeHLId;
@@ -2995,11 +3341,14 @@
         let bookDB = null;
         function openBookDB() {
             return new Promise((resolve) => {
-                const req = indexedDB.open('EreaderDB', 1);
+                const req = indexedDB.open('EreaderDB', 2);
                 req.onupgradeneeded = (e) => {
                     const db = e.target.result;
                     if (!db.objectStoreNames.contains('books')) {
                         db.createObjectStore('books', { keyPath: 'id' });
+                    }
+                    if (!db.objectStoreNames.contains('covers')) {
+                        db.createObjectStore('covers', { keyPath: 'id' });
                     }
                 };
                 req.onsuccess = (e) => { bookDB = e.target.result; resolve(bookDB); };

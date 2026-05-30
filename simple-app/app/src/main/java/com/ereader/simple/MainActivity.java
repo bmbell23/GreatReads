@@ -58,7 +58,22 @@ public class MainActivity extends Activity {
             getWindow().setAttributes(layoutParams);
         }
 
-        webView = new WebView(this);
+        // Anonymous WebView subclass so we can intercept startActionMode at
+        // the View level — that's where the text-selection floating toolbar
+        // (Copy / Share / Select All / Read Aloud) actually originates.
+        // Activity.startActionMode overrides do NOT catch it; the request
+        // bubbles up the View hierarchy and is handled by the DecorView's
+        // local ActionMode provider, bypassing the Activity entirely.
+        webView = new WebView(this) {
+            @Override
+            public ActionMode startActionMode(ActionMode.Callback callback) {
+                return super.startActionMode(suppressMenuCallback(callback));
+            }
+            @Override
+            public ActionMode startActionMode(ActionMode.Callback callback, int type) {
+                return super.startActionMode(suppressMenuCallback(callback), type);
+            }
+        };
         webView.setBackgroundColor(Color.BLACK);
         webView.setFitsSystemWindows(false);
         webView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
@@ -90,12 +105,17 @@ public class MainActivity extends Activity {
         webView.addJavascriptInterface(new JsBridge(), "Android");
 
         // Hand off any non-HTML download (e.g. the APK self-update URL) to the
-        // system DownloadManager instead of silently dropping it.
+        // system DownloadManager instead of silently dropping it. Guard
+        // against non-http(s) schemes (blob:, data:, file:) — DownloadManager
+        // throws IllegalArgumentException on those, which would crash the
+        // WebView process.
         webView.setDownloadListener(new DownloadListener() {
             @Override
             public void onDownloadStart(String url, String userAgent,
                                         String contentDisposition,
                                         String mimetype, long contentLength) {
+                if (url == null) return;
+                if (!url.startsWith("http://") && !url.startsWith("https://")) return;
                 DownloadManager.Request req = new DownloadManager.Request(Uri.parse(url));
                 String filename = URLUtil.guessFileName(url, contentDisposition, mimetype);
                 req.setMimeType(mimetype);
@@ -196,6 +216,40 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        // Share a PNG image generated client-side (canvas → base64). The
+        // Web Share API requires a secure context, but our WebView loads
+        // over plain HTTP from Tailscale, so we cannot rely on
+        // navigator.share({files}). Instead the JS encodes the canvas to
+        // base64 and hands it here; we drop it in cacheDir/share, wrap a
+        // FileProvider content:// URI around it, and fire ACTION_SEND. The
+        // system chooser includes "Save to Photos", every messaging app,
+        // Drive, etc.
+        @JavascriptInterface
+        public void shareImage(final String base64Png, final String chooserTitle) {
+            runOnUiThread(() -> {
+                try {
+                    byte[] bytes = android.util.Base64.decode(base64Png, android.util.Base64.DEFAULT);
+                    java.io.File dir = new java.io.File(getCacheDir(), "share");
+                    if (!dir.exists()) dir.mkdirs();
+                    java.io.File outFile = new java.io.File(dir,
+                        "greatreads-quote-" + System.currentTimeMillis() + ".png");
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(outFile);
+                    try { fos.write(bytes); } finally { fos.close(); }
+                    android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                        MainActivity.this, getPackageName() + ".fileprovider", outFile);
+                    Intent send = new Intent(Intent.ACTION_SEND);
+                    send.setType("image/png");
+                    send.putExtra(Intent.EXTRA_STREAM, uri);
+                    send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    Intent chooser = Intent.createChooser(send,
+                        chooserTitle != null && !chooserTitle.isEmpty() ? chooserTitle : "Share quote");
+                    chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    startActivity(chooser);
+                } catch (Exception e) {
+                    android.util.Log.e("Ereader", "shareImage failed", e);
+                }
+            });
+        }
     }
 
     @Override
@@ -209,41 +263,30 @@ public class MainActivity extends Activity {
 
     // Suppress Android's default text-selection action bar (Copy / Share /
     // Select All / Read Aloud) so the in-app highlight popup driven by
-    // reader.html is the only floating menu the user sees. We wrap the
-    // WebView's callback rather than returning null so the selection
-    // handles and the underlying selection itself still work — we just
-    // strip every item from the menu before the system can render it.
-    @Override
-    public ActionMode startActionMode(ActionMode.Callback callback, int type) {
-        return super.startActionMode(wrapToSuppressMenu(callback), type);
-    }
-
-    @Override
-    public ActionMode startActionMode(ActionMode.Callback callback) {
-        return super.startActionMode(wrapToSuppressMenu(callback));
-    }
-
-    private ActionMode.Callback wrapToSuppressMenu(final ActionMode.Callback original) {
+    // reader.html is the only floating menu the user sees. We return false
+    // from onCreateActionMode to prevent the floating toolbar entirely;
+    // the underlying selection (and its drag handles) is a separate
+    // WebView feature and keeps working. JS detects selectionchange and
+    // pops the in-app menu.
+    private ActionMode.Callback suppressMenuCallback(final ActionMode.Callback original) {
         return new ActionMode.Callback() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
-                boolean ok = original.onCreateActionMode(mode, menu);
                 menu.clear();
-                return ok;
+                return false;
             }
             @Override
             public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
-                original.onPrepareActionMode(mode, menu);
                 menu.clear();
-                return true;
+                return false;
             }
             @Override
             public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
-                return original.onActionItemClicked(mode, item);
+                return false;
             }
             @Override
             public void onDestroyActionMode(ActionMode mode) {
-                original.onDestroyActionMode(mode);
+                if (original != null) original.onDestroyActionMode(mode);
             }
         };
     }

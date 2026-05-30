@@ -370,24 +370,6 @@
     "created": 1780155152677
   },
   {
-    "id": "35d4408d-b574-40a4-ad1f-dd0d1868b282",
-    "type": "highlight",
-    "bookId": "573",
-    "bookTitle": "Iron Gold",
-    "bookAuthor": "",
-    "anchor": 2513,
-    "offset": 0,
-    "length": null,
-    "endAnchor": 2517,
-    "endOffset": 39,
-    "page": 518,
-    "total": 1241,
-    "text": "Clown shifts uncomfortably between Milia and Thraxa. \u201cIf Winkle\u2019s wrong and they spot us\u2026\u201d\n\u201cShut up,\u201d Sevro mutters.\n\u201cI\u2019m just saying dying here at the bottom of the sea, caged by lung-crushing pressure, is not how I expected to go.\u201d\n\u201cHow did you expect to go?\u201d\n\u201cWell, smothered under tits, actually.\u201d",
-    "note": "",
-    "color": "yellow",
-    "created": 1780155187840
-  },
-  {
     "id": "afe021bd-fd64-4338-87b4-0839f33b04c0",
     "type": "bookmark",
     "bookId": "573",
@@ -422,5 +404,23 @@
     "note": "",
     "color": "yellow",
     "created": 1780155213747
+  },
+  {
+    "id": "58d73c22-5d70-4ed5-9d62-6f813ffaddf2",
+    "type": "highlight",
+    "bookId": "573",
+    "bookTitle": "Iron Gold",
+    "bookAuthor": "",
+    "anchor": 2515,
+    "offset": 0,
+    "length": null,
+    "endAnchor": 2517,
+    "endOffset": 39,
+    "page": 300,
+    "total": 716,
+    "text": "\u201cI\u2019m just saying dying here at the bottom of the sea, caged by lung-crushing pressure, is not how I expected to go.\u201d\n\u201cHow did you expect to go?\u201d\n\u201cWell, smothered under tits, actually.\u201d",
+    "note": "",
+    "color": "yellow",
+    "created": 1780157890968
   }
 ]

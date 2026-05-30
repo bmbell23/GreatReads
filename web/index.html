@@ -496,9 +496,19 @@
             const mi = String(n.getMinutes()).padStart(2, '0');
             return `${yy}${mm}${dd}-${hh}:${mi}`;
         }
+        // BUILD is used only as a per-load cache-bust token (passed to
+        // reader.html via ?v=…). The pill itself shows the *build* time —
+        // the mtime of the web assets, fetched from the backend — so the
+        // user can tell at a glance whether the code is fresh after an
+        // edit on the server, instead of just seeing when they opened
+        // the app.
         const BUILD = fmtStamp();   // reused as cache-bust token in openBook()
-        buildStamp.textContent = BUILD;
+        buildStamp.textContent = '…';
         buildStamp.title = 'Tap to download latest APK';
+        fetch('http://100.69.184.113:8091/api/build-stamp')
+            .then(r => r.json())
+            .then(d => { if (d && d.stamp) buildStamp.textContent = d.stamp; })
+            .catch(() => { buildStamp.textContent = BUILD; });
         buildStamp.addEventListener('click', () => {
             // Use a hidden <a download> so Android's DownloadListener fires
             // instead of navigating the WebView away from the page.
@@ -712,6 +722,41 @@
             }
         }
 
+        async function loadCover(img) {
+            if (img.dataset.loading) return;
+            img.dataset.loading = "true";
+            const bookId = img.closest('.book').dataset.bookId;
+            const originalUrl = img.dataset.src;
+            if (!db) { img.src = originalUrl; return; }
+
+            try {
+                const tx = db.transaction(['covers'], 'readonly');
+                const store = tx.objectStore('covers');
+                const cached = await new Promise((resolve) => {
+                    const req = store.get(bookId);
+                    req.onsuccess = () => resolve(req.result);
+                    req.onerror = () => resolve(null);
+                });
+
+                if (cached && cached.blob) {
+                    img.src = URL.createObjectURL(cached.blob);
+                    return;
+                }
+
+                // Not in cache, fetch and save
+                const res = await fetch(originalUrl);
+                if (!res.ok) throw new Error('Fetch failed');
+                const blob = await res.blob();
+
+                const saveTx = db.transaction(['covers'], 'readwrite');
+                saveTx.objectStore('covers').put({ id: bookId, blob });
+
+                img.src = URL.createObjectURL(blob);
+            } catch (e) {
+                img.src = originalUrl;
+            }
+        }
+
         function displayBooks(books, isComplete) {
             const content = document.getElementById('content');
 
@@ -742,7 +787,9 @@
                      data-book-format="${format}"
                      onclick="openBook('${book.id}', '${format}', '${encodeURIComponent(book.title)}')">
                     <div class="book-cover-wrap">
-                        <img src="${coverUrl}" class="book-cover" onerror="this.style.background='linear-gradient(135deg, #667eea 0%, #764ba2 100%)'">
+                        <img data-src="${coverUrl}" class="book-cover"
+                             src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                             onerror="this.style.background='linear-gradient(135deg, #667eea 0%, #764ba2 100%)'">
                         ${cachedDot}
                         ${progressBar}
                     </div>
@@ -753,6 +800,9 @@
 
             content.innerHTML = '<div class="books">' + booksHTML + '</div>' +
                 (!isComplete ? '<div class="loading-more">Loading more...</div>' : '');
+
+            // Trigger cover loading from cache/network
+            document.querySelectorAll('.book-cover[data-src]').forEach(loadCover);
         }
 
         async function openBook(id, format, title) {
@@ -767,16 +817,22 @@
         let db;
         const cachedBookIds = new Set();
         function initDB() {
-            const request = indexedDB.open('EreaderDB', 1);
+            const request = indexedDB.open('EreaderDB', 2);
             request.onupgradeneeded = (e) => {
                 db = e.target.result;
                 if (!db.objectStoreNames.contains('books')) {
                     db.createObjectStore('books', { keyPath: 'id' });
                 }
+                if (!db.objectStoreNames.contains('covers')) {
+                    db.createObjectStore('covers', { keyPath: 'id' });
+                }
             };
             request.onsuccess = (e) => {
                 db = e.target.result;
                 refreshCachedIds();
+                // If books were already rendered before DB was ready,
+                // trigger cover loading now.
+                document.querySelectorAll('.book-cover[data-src]').forEach(loadCover);
             };
         }
 

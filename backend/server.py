@@ -224,7 +224,10 @@ def get_book_cover(book_id):
             return Response(placeholder, mimetype='image/svg+xml')
 
         response.raise_for_status()
-        return Response(response.content, mimetype=response.headers.get('Content-Type', 'image/jpeg'))
+        res = Response(response.content, mimetype=response.headers.get('Content-Type', 'image/jpeg'))
+        # Cache covers for 30 days
+        res.headers['Cache-Control'] = 'public, max-age=2592000'
+        return res
     except Exception as e:
         print(f"Error fetching cover: {e}")
         # Return placeholder on error
@@ -486,6 +489,30 @@ def get_version():
     """Return the current app version (read live from version.txt so a
     `gvc` bump is reflected without a server restart)."""
     return jsonify({'version': _read_version()})
+
+@app.route('/api/build-stamp', methods=['GET'])
+def get_build_stamp():
+    """Return a YYMMDD-HH:MM stamp derived from the most recently edited
+    web asset (index.html / reader.html). Used by the status-bar build
+    pill so users can see at a glance whether the running web code is
+    fresh after a server-side edit. Distinct from `/api/version`, which
+    tracks the semver of the APK itself."""
+    import time as _time
+    web_dir = os.path.join(os.path.dirname(os.path.dirname(__file__)), 'web')
+    candidates = ['index.html', 'reader.html']
+    latest = 0.0
+    for name in candidates:
+        p = os.path.join(web_dir, name)
+        try:
+            mt = os.path.getmtime(p)
+            if mt > latest:
+                latest = mt
+        except OSError:
+            pass
+    if latest == 0.0:
+        latest = _time.time()
+    stamp = _time.strftime('%y%m%d-%H:%M', _time.localtime(latest))
+    return jsonify({'stamp': stamp})
 
 if __name__ == '__main__':
     print(f"Ereader Backend Server")

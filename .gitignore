@@ -11,15 +11,15 @@ app/.expo/
 app/.expo-shared/
 
 # Android
-app/android/app/build/
-app/android/build/
-app/android/.gradle/
-app/android/local.properties
+.gradle/
+build/
+local.properties
 *.apk
 *.ap_
 *.dex
 *.class
 *.log
+*.flat
 
 # iOS (for future)
 app/ios/Pods/

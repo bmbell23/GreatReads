@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- FileProvider path config. Authorised by AndroidManifest.xml under
+     ${applicationId}.fileprovider. Only the cacheDir/share subdir is
+     exposed — JsBridge.shareImage() writes generated PNGs there. -->
+<paths>
+    <cache-path name="shared" path="share/" />
+</paths>
