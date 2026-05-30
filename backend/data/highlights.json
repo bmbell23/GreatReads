@@ -12,5 +12,37 @@
     "note": "",
     "color": "yellow",
     "created": 1780091472344
+  },
+  {
+    "id": "c1b76ae6-5604-4499-9e27-37aa3780878a",
+    "type": "highlight",
+    "bookId": "397",
+    "bookTitle": "Mostly Harmless",
+    "bookAuthor": "",
+    "anchor": 3,
+    "offset": 0,
+    "length": 3,
+    "page": 3,
+    "total": 207,
+    "text": "for",
+    "note": "",
+    "color": "yellow",
+    "created": 1780105628349
+  },
+  {
+    "id": "fb10885b-da13-4fd4-8a59-edef59220fd9",
+    "type": "highlight",
+    "bookId": "397",
+    "bookTitle": "Mostly Harmless",
+    "bookAuthor": "",
+    "anchor": 28,
+    "offset": 17,
+    "length": 266,
+    "page": 3,
+    "total": 207,
+    "text": "All it got was an error message. It tried to look up the error message in its error message look-up table and couldn\u2019t find that either. It allowed a couple of nanoseconds to go by while it went through all this again. Then it woke up its sector function supervisor.",
+    "note": "",
+    "color": "yellow",
+    "created": 1780105658268
   }
 ]

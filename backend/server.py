@@ -29,6 +29,11 @@ os.makedirs(DATA_DIR, exist_ok=True)
 HIGHLIGHTS_FILE = os.path.join(DATA_DIR, 'highlights.json')
 _highlights_lock = threading.Lock()
 
+# Per-book reading progress (last anchor / page / fraction). Same file-on-disk
+# pattern as highlights. Shape on disk: { "<bookId>": {progress dict}, ... }
+PROGRESS_FILE = os.path.join(DATA_DIR, 'progress.json')
+_progress_lock = threading.Lock()
+
 # Single source of truth for the app version, bumped by `gvc` (see
 # ../dotfiles/bashrc/conf.d/20-functions.sh — gvc auto-increments the
 # patch number in version.txt, commits, tags, pushes). The frontend
@@ -60,6 +65,23 @@ def _save_highlights(items):
     with open(tmp, 'w') as f:
         json.dump(items, f, indent=2)
     os.replace(tmp, HIGHLIGHTS_FILE)
+
+def _load_progress():
+    if not os.path.exists(PROGRESS_FILE):
+        return {}
+    try:
+        with open(PROGRESS_FILE, 'r') as f:
+            data = json.load(f)
+            return data if isinstance(data, dict) else {}
+    except Exception as e:
+        print(f"⚠️  Could not load progress: {e}")
+        return {}
+
+def _save_progress(data):
+    tmp = PROGRESS_FILE + '.tmp'
+    with open(tmp, 'w') as f:
+        json.dump(data, f, indent=2)
+    os.replace(tmp, PROGRESS_FILE)
 
 def get_calibre_books(limit=None, offset=0, query=None):
     """Fetch books from Calibre Content Server"""
@@ -368,6 +390,70 @@ def update_highlight(item_id):
                 _save_highlights(items)
                 return jsonify(it)
     return jsonify({'error': 'not found'}), 404
+
+# ---------- Reading progress ----------
+# Per-book "where am I" record so the same position follows the user across
+# devices, app reinstalls (which wipe WebView localStorage), and browsers.
+# Item shape:
+#   { bookId, bookTitle, bookAuthor, format,
+#     anchor: int|null,  page: int|null, total: int|null,
+#     progress: 0..1,    fontSize: int|null,
+#     updated: epoch_ms }
+# Anchor is the data-anchor index from reader.html — pins the exact source-DOM
+# block so the position survives font-size / unfold re-pagination.
+
+@app.route('/api/progress', methods=['GET'])
+def list_progress():
+    """List all per-book progress records (used by the library 'continue
+    reading' view)."""
+    with _progress_lock:
+        data = _load_progress()
+    items = list(data.values())
+    items.sort(key=lambda x: x.get('updated', 0), reverse=True)
+    return jsonify({'items': items, 'total': len(items)})
+
+@app.route('/api/progress/<book_id>', methods=['GET'])
+def get_progress(book_id):
+    with _progress_lock:
+        data = _load_progress()
+    item = data.get(str(book_id))
+    if not item:
+        return jsonify({'error': 'not found'}), 404
+    return jsonify(item)
+
+@app.route('/api/progress/<book_id>', methods=['PUT'])
+def put_progress(book_id):
+    """Upsert progress for one book. Body is the partial record; we fill in
+    bookId + updated timestamp. Last-writer-wins (the client compares
+    `updated` against its local copy before pushing)."""
+    body = request.get_json(silent=True) or {}
+    item = {
+        'bookId':     str(book_id),
+        'bookTitle':  body.get('bookTitle') or '',
+        'bookAuthor': body.get('bookAuthor') or '',
+        'format':     body.get('format') or '',
+        'anchor':     body.get('anchor'),
+        'page':       body.get('page'),
+        'total':      body.get('total'),
+        'progress':   body.get('progress'),
+        'fontSize':   body.get('fontSize'),
+        'updated':    int(time.time() * 1000),
+    }
+    with _progress_lock:
+        data = _load_progress()
+        data[str(book_id)] = item
+        _save_progress(data)
+    return jsonify(item)
+
+@app.route('/api/progress/<book_id>', methods=['DELETE'])
+def delete_progress(book_id):
+    with _progress_lock:
+        data = _load_progress()
+        if str(book_id) not in data:
+            return jsonify({'error': 'not found'}), 404
+        del data[str(book_id)]
+        _save_progress(data)
+    return jsonify({'deleted': str(book_id)})
 
 @app.route('/api/health', methods=['GET'])
 def health_check():

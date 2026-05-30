@@ -546,7 +546,7 @@
         // The semantic app version comes from /api/version (read live from
         // version.txt by the Flask backend); that's the one `gvc` bumps.
         // The pill shows both: "v<semver> · b<BUILD>".
-        const BUILD = '2026-05-29.13-BRAND';
+        const BUILD = '2026-05-29.14-PROGRESSSYNC';
         const buildStamp = document.getElementById('build-stamp');
         buildStamp.textContent = 'b' + BUILD;
         fetch('http://100.69.184.113:8091/api/version').then(r => r.json()).then(d => {
@@ -822,12 +822,16 @@
                 });
             });
 
-            // Load + visually apply server-side highlights BEFORE pagination
-            // so the wrapping spans (which split text nodes but don't change
-            // metrics) are present when calculatePages measures geometry.
-            // Fire and forget — calculatePages runs after either path.
+            // Load + visually apply server-side highlights AND pull the
+            // latest reading position from the backend BEFORE pagination.
+            // Highlights have to wrap text nodes before calculatePages
+            // measures geometry; the progress sync has to land in
+            // localStorage before calculatePages reads it on first paint.
             initHighlights();
-            loadHighlightsForBook().finally(() => {
+            Promise.all([
+                loadHighlightsForBook(),
+                syncReadingStateFromServer()
+            ]).finally(() => {
                 setTimeout(calculatePages, 100);
             });
         }
@@ -1333,16 +1337,103 @@
                 // font/viewport changes) AND the bare progress fraction
                 // (fallback for legacy state or content with no anchors).
                 const anchor = captureFirstVisibleAnchor();
-                localStorage.setItem(STATE_KEY, JSON.stringify({
+                const state = {
                     page: currentEpubPage,
                     total: totalPages,
                     progress: currentEpubPage / totalPages,
                     anchor: anchor,
                     fontSize: fontSize,
                     ts: Date.now()
-                }));
+                };
+                localStorage.setItem(STATE_KEY, JSON.stringify(state));
+                // Mirror to the backend (debounced) so the position survives
+                // APK reinstalls and follows the reader to other devices.
+                schedulePushReadingState(state);
             } catch (e) { /* quota / private mode */ }
         }
+
+        // ---------- Server-side progress sync ----------
+        // saveReadingState() runs on every page turn; we don't want to PUT
+        // that often. Coalesce with a short timer and flush immediately on
+        // page hide / visibility change (which is what happens when the user
+        // backs out of the WebView or force-stops the app).
+        let _pushTimer = null;
+        let _pendingState = null;
+        const PUSH_DEBOUNCE_MS = 1200;
+
+        function schedulePushReadingState(state) {
+            _pendingState = state;
+            if (_pushTimer) clearTimeout(_pushTimer);
+            _pushTimer = setTimeout(flushReadingState, PUSH_DEBOUNCE_MS);
+        }
+
+        function flushReadingState(useKeepalive) {
+            if (!_pendingState || !bookId) return;
+            const body = JSON.stringify({
+                bookTitle:  title,
+                format:     format,
+                anchor:     _pendingState.anchor,
+                page:       _pendingState.page,
+                total:      _pendingState.total,
+                progress:   _pendingState.progress,
+                fontSize:   _pendingState.fontSize
+            });
+            _pendingState = null;
+            if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
+            try {
+                fetch(API_URL + '/progress/' + encodeURIComponent(bookId), {
+                    method: 'PUT',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: body,
+                    keepalive: !!useKeepalive
+                }).catch(() => {});
+            } catch (_) {}
+        }
+
+        // Pull server-side progress and reconcile with localStorage BEFORE
+        // calculatePages runs its first paint. Last-writer-wins by ts vs
+        // updated. The reader then reads localStorage as usual.
+        async function syncReadingStateFromServer() {
+            if (!bookId) return;
+            try {
+                const r = await fetch(API_URL + '/progress/' + encodeURIComponent(bookId));
+                if (!r.ok) return;
+                const remote = await r.json();
+                const remoteTs = remote && remote.updated;
+                if (!remoteTs) return;
+                let localTs = 0;
+                try {
+                    const raw = localStorage.getItem(STATE_KEY);
+                    if (raw) localTs = (JSON.parse(raw) || {}).ts || 0;
+                } catch (_) {}
+                if (remoteTs > localTs) {
+                    // Server wins — adopt remote position. Shape matches
+                    // loadReadingState()'s expectations.
+                    localStorage.setItem(STATE_KEY, JSON.stringify({
+                        page:     remote.page,
+                        total:    remote.total,
+                        progress: remote.progress,
+                        anchor:   remote.anchor,
+                        fontSize: remote.fontSize,
+                        ts:       remote.updated
+                    }));
+                    console.log('☁️  Restored reading position from server:', remote);
+                }
+            } catch (_) {}
+        }
+
+        // Force a flush whenever the WebView is about to drop us (user backs
+        // out, app force-stops, screen off). keepalive: true lets the request
+        // outlive the page.
+        function _flushOnExit() {
+            if (_pendingState) flushReadingState(true);
+        }
+        window.addEventListener('pagehide', _flushOnExit);
+        window.addEventListener('beforeunload', _flushOnExit);
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') _flushOnExit();
+        });
+
         function loadReadingState() {
             // A "jump" entry overrides the normal saved state for one open —
             // e.g. when the user taps a highlight from the library overlay we
