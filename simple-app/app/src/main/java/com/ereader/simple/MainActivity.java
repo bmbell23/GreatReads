@@ -263,22 +263,35 @@ public class MainActivity extends Activity {
 
     // Suppress Android's default text-selection action bar (Copy / Share /
     // Select All / Read Aloud) so the in-app highlight popup driven by
-    // reader.html is the only floating menu the user sees. We return false
-    // from onCreateActionMode to prevent the floating toolbar entirely;
-    // the underlying selection (and its drag handles) is a separate
-    // WebView feature and keeps working. JS detects selectionchange and
-    // pops the in-app menu.
+    // reader.html is the only floating menu the user sees.
+    //
+    // Returning false from onCreateActionMode *should* cancel the mode
+    // entirely, but on Chromium-backed WebView (modern Android) the
+    // selection toolbar is created on a different path and shows up
+    // anyway. The reliable trick is to let the action mode be created
+    // (so the selection drag handles, which depend on it, still work)
+    // and immediately call ActionMode.hide(Long.MAX_VALUE) to keep the
+    // floating toolbar hidden indefinitely. Menu is cleared too so even
+    // if the toolbar peeks through it has zero items.
     private ActionMode.Callback suppressMenuCallback(final ActionMode.Callback original) {
         return new ActionMode.Callback() {
             @Override
             public boolean onCreateActionMode(ActionMode mode, Menu menu) {
-                menu.clear();
-                return false;
+                if (menu != null) menu.clear();
+                if (mode != null
+                        && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    mode.hide(Long.MAX_VALUE); // hide indefinitely
+                }
+                return true;
             }
             @Override
             public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
-                menu.clear();
-                return false;
+                if (menu != null) menu.clear();
+                if (mode != null
+                        && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
+                    mode.hide(Long.MAX_VALUE);
+                }
+                return true;
             }
             @Override
             public boolean onActionItemClicked(ActionMode mode, MenuItem item) {

@@ -582,17 +582,16 @@
         .slider-ticks span { width: 1px; }
 
         /* ---------- Highlights ---------- */
-        /* Visually wrap selected text. Translucent so the underlying
-           prose stays legible; rounded so adjacent highlights touching
-           don't look like one big bar. cursor:pointer because tapping
-           reveals the action popup. */
-        .ereader-hl {
-            background: rgba(255, 213, 79, 0.45);
-            border-radius: 2px;
-            cursor: pointer;
-            transition: background 0.15s;
+        /* Render highlights via the CSS Custom Highlight API (CSS.highlights).
+           This paints over Ranges without inserting any wrapping element,
+           so text shaping (kerning, ligatures) is preserved exactly — a
+           plain <span> wrap would otherwise cause sub-pixel reflow at
+           every highlight boundary. ::highlight() honors only a small set
+           of properties (color, background-color, text-decoration,
+           text-shadow); border-radius and cursor are not supported. */
+        ::highlight(ereader-hl) {
+            background-color: rgba(255, 213, 79, 0.45);
         }
-        .ereader-hl:hover { background: rgba(255, 213, 79, 0.7); }
 
         /* App-native selection color. Matches the saved-highlight yellow so
            the moment the user starts dragging they see the same band that
@@ -1457,9 +1456,10 @@
 
             // Load + visually apply server-side highlights AND pull the
             // latest reading position from the backend BEFORE pagination.
-            // Highlights have to wrap text nodes before calculatePages
-            // measures geometry; the progress sync has to land in
-            // localStorage before calculatePages reads it on first paint.
+            // Highlights are rendered via the CSS Custom Highlight API
+            // (no DOM mutation), so ordering vs. calculatePages no longer
+            // matters for geometry; the progress sync still has to land
+            // in localStorage before calculatePages reads it on first paint.
             initHighlights();
             Promise.all([
                 loadHighlightsForBook(),
@@ -1876,9 +1876,23 @@
             }
         }
 
-        function renderEpubPage() {
+        // animated=true is for single-step swipe page turns (left/right), where
+        // the 0.3s ease on transform is the expected page-flip feel. EVERY
+        // other caller (first paint, calculatePages recalc, font-size change,
+        // resize / unfold, TOC jump, jumpToPage / bookmark restore) is a big
+        // jump of many strides at once — animating those interpolates the
+        // translateX across all the intermediate pages, which the user sees
+        // as a fast scroll through the book. Defaulting to no-animate fixes
+        // that without changing the swipe feel.
+        function renderEpubPage(animated = false) {
             const content = document.getElementById('epub-content');
             if (!content || !columnStride) return;
+
+            if (animated) {
+                content.style.transition = '';        // fall back to CSS default
+            } else {
+                content.style.transition = 'none';    // snap, no in-between frames
+            }
 
             // Shift by exactly one viewport-width per page so the column we land
             // on sits in the same centered band as page 1.
@@ -1886,7 +1900,8 @@
             content.style.transform = `translateX(${offset}px)`;
 
             console.log('📄 Page', currentEpubPage + 1, '/', totalPages,
-                        '| offset:', offset, '| stride:', columnStride);
+                        '| offset:', offset, '| stride:', columnStride,
+                        animated ? '(animated)' : '(snap)');
             updateProgress();
             updateBookmarkIndicator();
             resetAutoBookmarkTimer();
@@ -2416,58 +2431,88 @@
             return null;
         }
 
-        // Wrap every text-node fragment intersected by `range` in
-        // <span class="ereader-hl" data-hl-id="…">. Splits text nodes at
-        // the range boundaries. Handles selections that cross inline tags
-        // (e.g. through an <em>) — each crossed text node becomes its own
-        // wrap, all sharing the same hlId so delete removes them together.
+        // ---------- Highlight registry (CSS Custom Highlight API) ----------
+        // Each saved highlight is held as a Range in `_hlRanges`. A single
+        // CSS Highlight (`_cssHL`) contains all live ranges and is registered
+        // as `ereader-hl` so the ::highlight(ereader-hl) rule paints them.
+        // No DOM wrapping is involved, which is the whole point: wrapping
+        // text in <span>s breaks text shaping at element boundaries and
+        // causes sub-pixel reflow visible as "text jumping around" when a
+        // highlight is created or removed.
+        const _hlRanges = new Map(); // hlId -> Range
+        let   _cssHL    = null;
+        function _ensureCSSHL() {
+            if (_cssHL) return _cssHL;
+            if (typeof Highlight === 'undefined' || !window.CSS || !CSS.highlights) return null;
+            _cssHL = new Highlight();
+            CSS.highlights.set('ereader-hl', _cssHL);
+            return _cssHL;
+        }
+        // Re-render the CSS Highlight registry. `skipId` (optional) drops a
+        // single highlight from the paint pass — used while that highlight
+        // is the live selection so the ::selection overlay isn't stacked on
+        // top of the CSS Highlight band (both are yellow, so painting both
+        // visibly doubles the alpha and the user sees a darker rectangle
+        // where the highlight "is" plus a lighter one over the selection).
+        function _rebuildCSSHL(skipId) {
+            const hl = _ensureCSSHL();
+            if (!hl) return;
+            hl.clear();
+            for (const [id, r] of _hlRanges) {
+                if (id === skipId) continue;
+                try { hl.add(r); } catch (_) {}
+            }
+        }
+        // Register a Range under hlId (cloned so subsequent selection
+        // mutations don't reshape the stored highlight).
         function wrapRangeAsHighlight(range, hlId) {
-            const rootEl = range.commonAncestorContainer.nodeType === 1
-                ? range.commonAncestorContainer
-                : range.commonAncestorContainer.parentNode;
-            const walker = document.createTreeWalker(rootEl, NodeFilter.SHOW_TEXT, {
-                acceptNode(node) {
-                    const r = document.createRange();
-                    r.selectNodeContents(node);
-                    // intersects(range) without using the unsupported helper.
-                    const after  = range.compareBoundaryPoints(Range.END_TO_START, r) > 0;
-                    const before = range.compareBoundaryPoints(Range.START_TO_END, r) < 0;
-                    return (after || before) ? NodeFilter.FILTER_REJECT : NodeFilter.FILTER_ACCEPT;
-                }
-            });
-            const nodes = []; let n;
-            while ((n = walker.nextNode())) nodes.push(n);
-            nodes.forEach(node => {
-                let start = 0, end = node.nodeValue.length;
-                if (node === range.startContainer) start = range.startOffset;
-                if (node === range.endContainer)   end   = range.endOffset;
-                if (start >= end) return;
-                let target = node;
-                if (start > 0) target = target.splitText(start);
-                if (end - start < target.nodeValue.length) target.splitText(end - start);
-                const span = document.createElement('span');
-                span.className = 'ereader-hl';
-                span.dataset.hlId = hlId;
-                target.parentNode.insertBefore(span, target);
-                span.appendChild(target);
-            });
+            _hlRanges.set(hlId, range.cloneRange());
+            _rebuildCSSHL();
         }
+        // Remove a highlight by id. (Old name kept for callsite churn.)
+        function unwrapHL(hlId) {
+            if (!_hlRanges.has(hlId)) return;
+            _hlRanges.delete(hlId);
+            _rebuildCSSHL();
+        }
+        // No-op alias kept for callers that used to need the
+        // non-normalizing variant when DOM unwrapping mutated text nodes.
+        // With CSS Highlights nothing in the DOM changes, so the two
+        // variants collapse into one.
+        function unwrapHLKeepNodes(hlId) { unwrapHL(hlId); }
 
-        function unwrapHL(span) {
-            const parent = span.parentNode;
-            if (!parent) return;
-            while (span.firstChild) parent.insertBefore(span.firstChild, span);
-            parent.removeChild(span);
-            parent.normalize();
+        // Hit-test: which highlight (if any) sits under viewport point (x,y)?
+        // Resolves the point to a text-node caret, then checks each stored
+        // range for containment via Range.comparePoint.
+        function findHighlightAtPoint(x, y) {
+            let node, offset;
+            if (document.caretRangeFromPoint) {
+                const r = document.caretRangeFromPoint(x, y);
+                if (!r) return null;
+                node = r.startContainer; offset = r.startOffset;
+            } else if (document.caretPositionFromPoint) {
+                const p = document.caretPositionFromPoint(x, y);
+                if (!p) return null;
+                node = p.offsetNode; offset = p.offset;
+            } else { return null; }
+            for (const [id, range] of _hlRanges) {
+                try {
+                    if (range.comparePoint(node, offset) === 0) return id;
+                } catch (_) {}
+            }
+            return null;
         }
-        // Same as unwrapHL but skips normalize(), so callers that still
-        // hold references to the unwrapped text nodes (e.g. editHL's
-        // captured range endpoints) don't end up with detached nodes.
-        function unwrapHLKeepNodes(span) {
-            const parent = span.parentNode;
-            if (!parent) return;
-            while (span.firstChild) parent.insertBefore(span.firstChild, span);
-            parent.removeChild(span);
+        function getHighlightRect(hlId) {
+            const r = _hlRanges.get(hlId);
+            return r ? r.getBoundingClientRect() : null;
+        }
+        function getHighlightText(hlId) {
+            const r = _hlRanges.get(hlId);
+            return r ? r.toString().trim() : '';
+        }
+        function clearAllHighlights() {
+            _hlRanges.clear();
+            _rebuildCSSHL();
         }
         function saveFontSizePref() {
             try { localStorage.setItem(FONT_KEY, String(fontSize)); } catch (e) {}
@@ -2759,20 +2804,15 @@
                 // If the selection still matches the existing highlight's
                 // text exactly, the user opened the menu but didn't drag.
                 // Skip the round-trip; just keep editing armed.
-                const existingSpans = document.querySelectorAll(
-                    `[data-hl-id="${replacingId}"]`);
-                const existingText = Array.from(existingSpans)
-                    .map(s => s.textContent).join('');
-                if (existingText === range.toString()) {
+                const existingText = getHighlightText(replacingId);
+                if (existingText === range.toString().trim()) {
                     _editingHLId = replacingId;
                     return true;
                 }
-                // Unwrap old spans before measuring offsets — otherwise
-                // findAnchorAncestor/charOffsetWithin can land on a span
-                // boundary instead of the underlying paragraph anchor.
-                existingSpans.forEach(unwrapHLKeepNodes);
-                range = getEpubSelectionRange();
-                if (!range) return false;
+                // Drop the old highlight from the registry so the yellow
+                // band disappears while the user adjusts. The server-side
+                // delete is fired below once the replacement is in flight.
+                unwrapHL(replacingId);
             }
 
             const text = range.toString().trim();
@@ -2809,7 +2849,13 @@
             };
 
             const tmpId = 'tmp-' + Date.now();
-            try { wrapRangeAsHighlight(range, tmpId); } catch (e) { console.warn('wrap failed', e); }
+            try {
+                wrapRangeAsHighlight(range, tmpId);
+                // User's selection is still over the same range while the
+                // POST is in flight; hide the tmp highlight from CSS paint
+                // so the yellow doesn't stack with ::selection.
+                _rebuildCSSHL(tmpId);
+            } catch (e) { console.warn('wrap failed', e); }
 
             try {
                 const r = await fetch(`${API_URL}/highlights`, {
@@ -2819,18 +2865,23 @@
                 });
                 if (!r.ok) throw new Error('HTTP ' + r.status);
                 const saved = await r.json();
-                const spans = document.querySelectorAll(`[data-hl-id="${tmpId}"]`);
-                spans.forEach(s => { s.dataset.hlId = saved.id; });
-                // Re-establish the selection over the freshly-wrapped
-                // spans so the native selection handles stay visible —
-                // the user can immediately drag them to nudge the bounds,
-                // and the next settle-save will replace this highlight.
-                if (spans.length) {
-                    _reselectSpans(spans, saved.id);
-                    showHLPopup(spans[0]);
+                // Rename the registry key from the temporary id to the
+                // server-assigned one (the visual paint is unaffected).
+                const tmpRange = _hlRanges.get(tmpId);
+                if (tmpRange) {
+                    _hlRanges.delete(tmpId);
+                    _hlRanges.set(saved.id, tmpRange);
+                    _rebuildCSSHL();
+                }
+                // Re-establish the selection over the saved highlight so
+                // the native handles stay visible — the user can drag them
+                // to nudge bounds, and the next settle-save replaces it.
+                if (_hlRanges.has(saved.id)) {
+                    _reselectHighlight(saved.id);
+                    showHLPopup(saved.id);
                 }
             } catch (e) {
-                document.querySelectorAll(`[data-hl-id="${tmpId}"]`).forEach(unwrapHL);
+                unwrapHL(tmpId);
                 flashToast('⚠️ Save failed: ' + e.message);
             }
 
@@ -2843,21 +2894,21 @@
             return true;
         }
 
-        // Set the native selection to span the given highlight <span>s and
-        // mark us as editing `hlId`. Cancels the settle timer that the
-        // selection change just armed so we don't immediately re-save a
-        // no-op duplicate.
-        function _reselectSpans(spans, hlId) {
-            const first = firstTextDescendant(spans[0]);
-            const last  = lastTextDescendant(spans[spans.length - 1]);
-            if (!first || !last) return;
-            const r = document.createRange();
-            r.setStart(first, 0);
-            r.setEnd(last, last.nodeValue.length);
+        // Set the native selection to span the highlight's Range and mark
+        // us as editing `hlId`. Also drops that highlight from the CSS
+        // Highlight paint pass so the ::selection overlay is the only
+        // yellow band visible (otherwise CSS Highlight + selection stack
+        // and the user sees a doubled / darker rectangle). Cancels the
+        // settle timer that the selection change just armed so we don't
+        // immediately re-save a no-op duplicate.
+        function _reselectHighlight(hlId) {
+            const stored = _hlRanges.get(hlId);
+            if (!stored) return;
+            _editingHLId = hlId;
+            _rebuildCSSHL(hlId); // hide this range from CSS paint
             const sel = window.getSelection();
             sel.removeAllRanges();
-            sel.addRange(r);
-            _editingHLId = hlId;
+            sel.addRange(stored.cloneRange());
             // selectionchange fires async — cancel its arming on the next tick.
             setTimeout(() => {
                 if (_selSettleTimer) { clearTimeout(_selSettleTimer); _selSettleTimer = null; }
@@ -2901,22 +2952,16 @@
                 }, 420);
             }, 2000);
         }
-        function showHLPopup(hl) {
-            _activeHLId = hl.dataset.hlId;
-            // A single highlight can span multiple inline elements, so it's
-            // stored as several sibling <mark> spans that share the same
-            // data-hl-id. Collect every fragment so Copy / Share / Lookup
-            // get the full highlighted passage, not just the clicked span.
-            const allSpans = Array.from(document.querySelectorAll(
-                `[data-hl-id="${_activeHLId}"]`));
-            _activeHLText = (allSpans.length
-                ? allSpans.map(s => s.textContent).join('')
-                : hl.textContent).trim();
+        function showHLPopup(hlId) {
+            if (!_hlRanges.has(hlId)) return;
+            _activeHLId   = hlId;
+            _activeHLText = getHighlightText(hlId);
             const popup = document.getElementById('hl-popup');
             popup.style.opacity = '1';
             popup.style.display = 'flex';
             // Measure after display.
-            const rect = hl.getBoundingClientRect();
+            const rect = getHighlightRect(hlId);
+            if (!rect) return;
             const popW = popup.offsetWidth  || 280;
             const popH = popup.offsetHeight || 52;
             let left = rect.left + rect.width / 2 - popW / 2;
@@ -2931,7 +2976,7 @@
             // the user can immediately drag them to adjust bounds — both
             // when the popup appears after a new highlight is created AND
             // when the user taps an existing highlight.
-            if (allSpans.length) _reselectSpans(allSpans, _activeHLId);
+            _reselectHighlight(hlId);
         }
         function hideHLPopup() {
             if (_hlPopupTimer) { clearTimeout(_hlPopupTimer); _hlPopupTimer = null; }
@@ -2941,6 +2986,9 @@
             // Collapse the selection so handles disappear on explicit dismiss.
             _editingHLId = null;
             try { window.getSelection().removeAllRanges(); } catch (_) {}
+            // Restore the active highlight to the CSS paint pass — it was
+            // temporarily hidden while the selection overlay covered it.
+            _rebuildCSSHL();
         }
         async function copyHL() {
             if (!_activeHLText) return;
@@ -3161,7 +3209,7 @@
             try {
                 const r = await fetch(`${API_URL}/highlights/${id}`, { method: 'DELETE' });
                 if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
-                document.querySelectorAll(`[data-hl-id="${id}"]`).forEach(unwrapHL);
+                unwrapHL(id);
                 flashToast('🗑️ Deleted');
             } catch (e) {
                 flashToast('⚠️ Delete failed');
@@ -3178,9 +3226,8 @@
         // Hand the existing highlight back to the user as a live selection
         // so they can drag Android's native handles to extend/shrink the
         // bounds. Flow:
-        //   1. Reconstruct a DOM Range that spans all of the highlight's
-        //      ereader-hl spans (first .firstChild → last .lastChild).
-        //   2. Delete the highlight server-side and unwrap the spans —
+        //   1. Pull the stored Range from the highlight registry.
+        //   2. Delete the highlight server-side and unregister it —
         //      this clears the yellow band so the user sees only the
         //      blue selection while adjusting.
         //   3. Programmatically set window.getSelection() to that range.
@@ -3191,25 +3238,17 @@
         async function editHL() {
             if (!_activeHLId) return;
             const id = _activeHLId;
-            const spans = Array.from(document.querySelectorAll(`[data-hl-id="${id}"]`));
-            if (!spans.length) { hideHLPopup(); return; }
-            // Build the range BEFORE unwrapping (offsets shift after unwrap).
-            const range = document.createRange();
-            const firstText = firstTextDescendant(spans[0]);
-            const lastText  = lastTextDescendant(spans[spans.length - 1]);
-            if (!firstText || !lastText) { hideHLPopup(); return; }
-            range.setStart(firstText, 0);
-            range.setEnd(lastText, lastText.nodeValue.length);
+            const stored = _hlRanges.get(id);
+            if (!stored) { hideHLPopup(); return; }
+            // Clone so unwrapHL's registry mutation can't invalidate it.
+            const range = stored.cloneRange();
             hideHLPopup();
             // Best-effort server delete; if it fails we still let the user
             // adjust — they'll get a duplicate at worst.
             try {
                 await fetch(`${API_URL}/highlights/${id}`, { method: 'DELETE' });
             } catch (_) {}
-            // Use the non-normalizing unwrap — Node.normalize() would
-            // merge our captured text nodes into their siblings and
-            // detach them, breaking the range we just built.
-            spans.forEach(unwrapHLKeepNodes);
+            unwrapHL(id);
             const sel = window.getSelection();
             sel.removeAllRanges();
             sel.addRange(range);
@@ -3322,15 +3361,23 @@
 
         // Wire selection + popup once per page load. The popup closes on
         // any click that isn't inside the popup itself or on a highlight.
+        // Highlights live in the CSS Highlight registry (not the DOM), so
+        // we hit-test by point against the registry's Ranges instead of
+        // walking up the click target's ancestors.
         function initHighlights() {
             if (_hlInited) return;
             _hlInited = true;
+            _ensureCSSHL();
             document.addEventListener('selectionchange', onSelectionChangeForSave);
             document.addEventListener('click', (e) => {
-                const hl = e.target.closest && e.target.closest('.ereader-hl');
                 const inPopup = e.target.closest && e.target.closest('#hl-popup');
-                if (hl) { showHLPopup(hl); return; }
-                if (!inPopup) hideHLPopup();
+                if (inPopup) return;
+                const content = document.getElementById('epub-content');
+                if (content && content.contains(e.target)) {
+                    const hlId = findHighlightAtPoint(e.clientX, e.clientY);
+                    if (hlId) { showHLPopup(hlId); return; }
+                }
+                hideHLPopup();
             }, true);
         }
 
@@ -3443,7 +3490,7 @@
                 if (currentEpubPage > 0) {
                     currentEpubPage--;
                     console.log('📄 Going to page:', currentEpubPage + 1);
-                    renderEpubPage();
+                    renderEpubPage(true);
                 } else {
                     console.log('📗 Already at first page');
                 }
@@ -3459,7 +3506,7 @@
                 if (currentEpubPage < totalPages - 1) {
                     currentEpubPage++;
                     console.log('📄 Going to page:', currentEpubPage + 1);
-                    renderEpubPage();
+                    renderEpubPage(true);
                 } else {
                     console.log('📕 Already at last page');
                 }
@@ -3863,8 +3910,7 @@
                 if (!r.ok && r.status !== 404) throw new Error('HTTP ' + r.status);
             } catch (e) { console.warn('delete highlight', e); return; }
             highlights = highlights.filter(h => h.id !== id);
-            // Unwrap any live highlight spans in the rendered DOM.
-            document.querySelectorAll(`[data-hl-id="${id}"]`).forEach(unwrapHL);
+            unwrapHL(id);
             openHighlightsList(); // re-render
         }
         // Best-effort close-all so opening a navlist doesn't stack on top
@@ -3923,7 +3969,11 @@
                 const sel = window.getSelection();
                 if (sel && !sel.isCollapsed && sel.toString().trim()) return;
                 const tgt = e.target;
-                if (tgt && tgt.closest && (tgt.closest('.ereader-hl') || tgt.closest('#hl-popup'))) return;
+                if (tgt && tgt.closest && tgt.closest('#hl-popup')) return;
+                // CSS Highlight registry is hit-tested by viewport point —
+                // there's no <span> ancestor to walk up to.
+                const t = e.changedTouches[0];
+                if (t && findHighlightAtPoint(t.clientX, t.clientY)) return;
                 const popup = document.getElementById('hl-popup');
                 if (popup && popup.style.display !== 'none') { hideHLPopup(); return; }
                 handleSwipe();
