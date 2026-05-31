@@ -58,20 +58,36 @@ public class MainActivity extends Activity {
             getWindow().setAttributes(layoutParams);
         }
 
-        // Anonymous WebView subclass so we can intercept startActionMode at
-        // the View level — that's where the text-selection floating toolbar
-        // (Copy / Share / Select All / Read Aloud) actually originates.
-        // Activity.startActionMode overrides do NOT catch it; the request
-        // bubbles up the View hierarchy and is handled by the DecorView's
-        // local ActionMode provider, bypassing the Activity entirely.
+        // Anonymous WebView subclass that suppresses the text-selection
+        // floating toolbar (Copy / Share / Select All / Read Aloud / Web
+        // Search) WITHOUT breaking selection itself.
+        //
+        // History of attempts:
+        //   1. Returning null from startActionMode: kills the toolbar but
+        //      ALSO breaks long-press selection on Chromium WebView — the
+        //      selection engine depends on the ActionMode lifecycle to
+        //      hand off touch state, so selecting becomes glitchy /
+        //      impossible.
+        //   2. mode.hide(Long.MAX_VALUE) alone: toolbar flickers back in
+        //      because Chromium re-invalidates the action mode on every
+        //      selectionchange.
+        //
+        // Working approach: wrap the caller's callback so:
+        //   - onCreateActionMode / onPrepareActionMode return true but
+        //     strip every menu item, so even if the toolbar surfaces it
+        //     has nothing to show.
+        //   - We also call mode.hide(Long.MAX_VALUE) on create/prepare to
+        //     keep it invisible.
+        //   - We forward onDestroyActionMode so Chromium's bookkeeping
+        //     stays consistent and selection remains live.
         webView = new WebView(this) {
             @Override
             public ActionMode startActionMode(ActionMode.Callback callback) {
-                return super.startActionMode(suppressMenuCallback(callback));
+                return super.startActionMode(wrapEmptyMenu(callback));
             }
             @Override
             public ActionMode startActionMode(ActionMode.Callback callback, int type) {
-                return super.startActionMode(suppressMenuCallback(callback), type);
+                return super.startActionMode(wrapEmptyMenu(callback), type);
             }
         };
         webView.setBackgroundColor(Color.BLACK);
@@ -189,6 +205,38 @@ public class MainActivity extends Activity {
         );
     }
 
+    // Wrap a WebView-supplied ActionMode.Callback so that the floating
+    // text-selection toolbar never actually appears, while the underlying
+    // ActionMode is still created and destroyed normally so Chromium's
+    // selection state machine stays healthy.
+    private static ActionMode.Callback wrapEmptyMenu(final ActionMode.Callback inner) {
+        return new ActionMode.Callback() {
+            @Override
+            public boolean onCreateActionMode(ActionMode mode, Menu menu) {
+                // Let Chromium populate, then clear and hide immediately.
+                boolean r = inner != null && inner.onCreateActionMode(mode, menu);
+                if (menu != null) menu.clear();
+                try { mode.hide(Long.MAX_VALUE); } catch (Throwable ignored) {}
+                return r;
+            }
+            @Override
+            public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
+                if (inner != null) inner.onPrepareActionMode(mode, menu);
+                if (menu != null) menu.clear();
+                try { mode.hide(Long.MAX_VALUE); } catch (Throwable ignored) {}
+                return true;
+            }
+            @Override
+            public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
+                return false;
+            }
+            @Override
+            public void onDestroyActionMode(ActionMode mode) {
+                if (inner != null) inner.onDestroyActionMode(mode);
+            }
+        };
+    }
+
     /** JS bridge surface exposed to the WebView as `window.Android`. */
     private class JsBridge {
         @JavascriptInterface
@@ -259,49 +307,6 @@ public class MainActivity extends Activity {
         } else {
             super.onBackPressed();
         }
-    }
-
-    // Suppress Android's default text-selection action bar (Copy / Share /
-    // Select All / Read Aloud) so the in-app highlight popup driven by
-    // reader.html is the only floating menu the user sees.
-    //
-    // Returning false from onCreateActionMode *should* cancel the mode
-    // entirely, but on Chromium-backed WebView (modern Android) the
-    // selection toolbar is created on a different path and shows up
-    // anyway. The reliable trick is to let the action mode be created
-    // (so the selection drag handles, which depend on it, still work)
-    // and immediately call ActionMode.hide(Long.MAX_VALUE) to keep the
-    // floating toolbar hidden indefinitely. Menu is cleared too so even
-    // if the toolbar peeks through it has zero items.
-    private ActionMode.Callback suppressMenuCallback(final ActionMode.Callback original) {
-        return new ActionMode.Callback() {
-            @Override
-            public boolean onCreateActionMode(ActionMode mode, Menu menu) {
-                if (menu != null) menu.clear();
-                if (mode != null
-                        && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    mode.hide(Long.MAX_VALUE); // hide indefinitely
-                }
-                return true;
-            }
-            @Override
-            public boolean onPrepareActionMode(ActionMode mode, Menu menu) {
-                if (menu != null) menu.clear();
-                if (mode != null
-                        && android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.M) {
-                    mode.hide(Long.MAX_VALUE);
-                }
-                return true;
-            }
-            @Override
-            public boolean onActionItemClicked(ActionMode mode, MenuItem item) {
-                return false;
-            }
-            @Override
-            public void onDestroyActionMode(ActionMode mode) {
-                if (original != null) original.onDestroyActionMode(mode);
-            }
-        };
     }
 
     // Foldable posture changes (fold <-> unfold) fire onConfigurationChanged

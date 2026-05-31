@@ -636,6 +636,76 @@
         .hl-popup button:hover { background: #333; }
         .hl-popup button.danger:hover { background: #5a1e1e; }
 
+        /* Custom drag handles for adjusting highlight bounds.
+           Positioned by JS at the visual start / end of the active
+           highlight. Each handle is a filled circle the user can grab
+           and drag to extend or shrink the highlight.
+           touch-action:none is required so the browser doesn't try to
+           scroll while the user is dragging the handle. */
+        .hl-handle {
+            position: fixed;
+            z-index: 12001;
+            width: 22px;
+            height: 22px;
+            border-radius: 50%;
+            background: #1976D2;
+            border: 3px solid #fff;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+            display: none;
+            touch-action: none;
+            /* Center the circle on its anchor point */
+            transform: translate(-50%, -50%);
+            transition: transform 0.08s;
+        }
+        .hl-handle:active { transform: translate(-50%, -50%) scale(1.3); }
+
+        /* Magnifier shown while dragging a highlight handle. Mimics the
+           native Android text-selection magnifier: a circular lens that
+           shows a 2x zoomed view of the area under the user's finger so
+           they can see exactly which character the handle will land on.
+           Implemented as a clone of #epub-content with scale(2) — see
+           the JS helpers _showMagnifier / _moveMagnifier / _hideMagnifier.
+           pointer-events:none so it never intercepts the drag. */
+        #hl-magnifier {
+            position: fixed;
+            width: 160px;
+            height: 110px;
+            border-radius: 80px / 55px;
+            border: 3px solid #fff;
+            box-shadow: 0 6px 20px rgba(0,0,0,0.6);
+            overflow: hidden;
+            background: var(--page-bg, #1a1a1a);
+            z-index: 12002;
+            display: none;
+            pointer-events: none;
+        }
+        #hl-magnifier-clone {
+            position: absolute;
+            left: 0; top: 0;
+            transform-origin: 0 0;
+            pointer-events: none;
+            will-change: transform;
+        }
+        /* Yellow band overlay drawn on top of the cloned content to show
+           where the active highlight currently lies in the magnified view. */
+        #hl-magnifier-overlay {
+            position: absolute;
+            left: 0; top: 0;
+            width: 100%; height: 100%;
+            pointer-events: none;
+        }
+        /* Thin vertical center line so the user sees exactly where the
+           handle's caret will be placed. */
+        #hl-magnifier-crosshair {
+            position: absolute;
+            left: 50%;
+            top: 10%;
+            bottom: 10%;
+            width: 1px;
+            background: rgba(25, 118, 210, 0.6);
+            pointer-events: none;
+        }
+
         /* Lookup-URL settings modal (reached from reader-controls). */
         .hl-settings-modal {
             position: fixed;
@@ -891,16 +961,30 @@
         </div>
     </div>
 
-    <!-- Highlight-action popup. JS positions it next to the tapped highlight.
-         No explicit "edit" button — tapping the highlight (or finishing a
-         new one) automatically activates the native selection handles so
-         the user can drag to adjust the bounds. -->
+    <!-- Highlight-action popup. JS positions it next to the tapped highlight. -->
     <div id="hl-popup" class="hl-popup" style="display:none;">
         <button title="Copy text"             onclick="copyHL()">📋</button>
         <button title="Share as image"        onclick="shareHL()">📤</button>
         <button title="Look up in dictionary" onclick="lookupHL('dict')">📖</button>
         <button title="Look up in wiki"       onclick="lookupHL('wiki')">🌐</button>
         <button class="danger" title="Delete highlight" onclick="deleteHL()">🗑️</button>
+    </div>
+
+    <!-- Custom drag handles for adjusting highlight start/end.
+         Positioned by JS at the first-rect top-left (start handle)
+         and last-rect bottom-right (end handle) of the active highlight.
+         Pointer events are attached in initHighlights(). -->
+    <div id="hl-handle-start" class="hl-handle"></div>
+    <div id="hl-handle-end"   class="hl-handle"></div>
+
+    <!-- Magnifier lens shown while dragging a handle. The clone div is
+         filled with a deep copy of #epub-content at drag-start and
+         scaled 2x; the overlay div shows the active highlight band on
+         top of the cloned text. See _showMagnifier / _moveMagnifier. -->
+    <div id="hl-magnifier">
+        <div id="hl-magnifier-clone"></div>
+        <div id="hl-magnifier-overlay"></div>
+        <div id="hl-magnifier-crosshair"></div>
     </div>
 
     <!-- Lookup-URL settings modal -->
@@ -1288,7 +1372,9 @@
 
                 // Display content using column-based pagination
                 document.querySelector('.loading').style.display = 'none';
-                document.getElementById('epub-reader').style.display = 'block';
+                const reader = document.getElementById('epub-reader');
+                reader.style.display = 'block';
+                reader.style.visibility = 'hidden';
 
                 // NEW: Column-based rendering
                 setTimeout(() => {
@@ -1887,6 +1973,13 @@
         function renderEpubPage(animated = false) {
             const content = document.getElementById('epub-content');
             if (!content || !columnStride) return;
+
+            // Flip visibility on first paint to avoid "page 0 flash" before
+            // the initial bookmark transform is applied.
+            const reader = document.getElementById('epub-reader');
+            if (reader && reader.style.visibility === 'hidden') {
+                reader.style.visibility = 'visible';
+            }
 
             if (animated) {
                 content.style.transition = '';        // fall back to CSS default
@@ -2873,11 +2966,9 @@
                     _hlRanges.set(saved.id, tmpRange);
                     _rebuildCSSHL();
                 }
-                // Re-establish the selection over the saved highlight so
-                // the native handles stay visible — the user can drag them
-                // to nudge bounds, and the next settle-save replaces it.
+                // Show the popup and custom drag handles over the saved
+                // highlight so the user can immediately drag endpoints.
                 if (_hlRanges.has(saved.id)) {
-                    _reselectHighlight(saved.id);
                     showHLPopup(saved.id);
                 }
             } catch (e) {
@@ -2894,25 +2985,270 @@
             return true;
         }
 
-        // Set the native selection to span the highlight's Range and mark
-        // us as editing `hlId`. Also drops that highlight from the CSS
-        // Highlight paint pass so the ::selection overlay is the only
-        // yellow band visible (otherwise CSS Highlight + selection stack
-        // and the user sees a doubled / darker rectangle). Cancels the
-        // settle timer that the selection change just armed so we don't
-        // immediately re-save a no-op duplicate.
+        // ---- Custom drag handles for highlight editing ----
+        // Instead of fighting Android WebView's refusal to show native
+        // selection drag-bars when selection is set programmatically, we
+        // render two small HTML circles at the visual start/end of the
+        // active highlight. Dragging either circle updates the stored Range
+        // in-place, repaints the CSS Highlight, and saves to the server on
+        // pointerup.
+
+        let _draggingHandle = null; // 'start' | 'end' while a drag is live
+        let _draggingHLId   = null; // hlId being dragged
+
+        function _positionHLHandles(hlId) {
+            const stored = _hlRanges.get(hlId);
+            if (!stored) return;
+            const rects = stored.getClientRects();
+            if (!rects || !rects.length) return;
+            const first = rects[0];
+            const last  = rects[rects.length - 1];
+            const hs = document.getElementById('hl-handle-start');
+            const he = document.getElementById('hl-handle-end');
+            // Start handle: anchored at the top-left corner of the first line.
+            if (hs) { hs.style.left = first.left + 'px'; hs.style.top = first.top + 'px'; }
+            // End handle: anchored at the bottom-right corner of the last line.
+            if (he) { he.style.left = last.right + 'px'; he.style.top = last.bottom + 'px'; }
+        }
+
+        function _showHLHandles(hlId) {
+            _positionHLHandles(hlId);
+            const hs = document.getElementById('hl-handle-start');
+            const he = document.getElementById('hl-handle-end');
+            if (hs) hs.style.display = 'block';
+            if (he) he.style.display = 'block';
+        }
+
+        function _hideHLHandles() {
+            const hs = document.getElementById('hl-handle-start');
+            const he = document.getElementById('hl-handle-end');
+            if (hs) hs.style.display = 'none';
+            if (he) he.style.display = 'none';
+        }
+
+        // Called by showHLPopup() and after a new highlight is saved.
+        // Shows the custom drag handles at the highlight's endpoints.
+        // Marks _editingHLId so that a user-initiated long-press selection
+        // on the same text will trigger the replace flow.
         function _reselectHighlight(hlId) {
             const stored = _hlRanges.get(hlId);
             if (!stored) return;
             _editingHLId = hlId;
-            _rebuildCSSHL(hlId); // hide this range from CSS paint
-            const sel = window.getSelection();
-            sel.removeAllRanges();
-            sel.addRange(stored.cloneRange());
-            // selectionchange fires async — cancel its arming on the next tick.
-            setTimeout(() => {
-                if (_selSettleTimer) { clearTimeout(_selSettleTimer); _selSettleTimer = null; }
-            }, 0);
+            // The CSS Highlight should remain fully visible while handles
+            // are shown — no skipId needed (we're not using ::selection).
+            _rebuildCSSHL();
+            // Collapse any native selection so the ::selection overlay
+            // (which could double-paint with the CSS Highlight) disappears.
+            try { window.getSelection().removeAllRanges(); } catch (_) {}
+            _showHLHandles(hlId);
+        }
+
+        // Save the range currently in _hlRanges[hlId] to the server,
+        // replacing the server record. Called after a handle drag completes.
+        async function _saveHandleDragResult(hlId) {
+            const stored = _hlRanges.get(hlId);
+            if (!stored) return;
+            const text = stored.toString().trim();
+            if (!text) return;
+            const startA = findAnchorAncestor(stored.startContainer);
+            const endA   = findAnchorAncestor(stored.endContainer);
+            if (!startA || !endA) { flashToast('⚠️ Could not save edit'); return; }
+            const startOffset = charOffsetWithin(startA, stored.startContainer, stored.startOffset);
+            const endOffset   = charOffsetWithin(endA,   stored.endContainer,   stored.endOffset);
+            if (startOffset < 0 || endOffset < 0) { flashToast('⚠️ Could not save edit'); return; }
+            const startAnchorIdx = parseInt(startA.dataset.anchor, 10);
+            const endAnchorIdx   = parseInt(endA.dataset.anchor, 10);
+            if (startAnchorIdx === endAnchorIdx && endOffset <= startOffset) return;
+            if (endAnchorIdx < startAnchorIdx) return;
+            const singleAnchor = (startAnchorIdx === endAnchorIdx);
+            const payload = {
+                type: 'highlight', bookId, bookTitle: title,
+                anchor: startAnchorIdx,
+                offset: startOffset,
+                length: singleAnchor ? (endOffset - startOffset) : null,
+                endAnchor: singleAnchor ? null : endAnchorIdx,
+                endOffset: singleAnchor ? null : endOffset,
+                page: currentEpubPage, total: totalPages,
+                text, color: 'yellow',
+            };
+            try {
+                const r = await fetch(`${API_URL}/highlights`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const saved = await r.json();
+                // Rename the registry key; the stored range reference is unchanged.
+                _hlRanges.delete(hlId);
+                _hlRanges.set(saved.id, stored);
+                _rebuildCSSHL();
+                // Delete the old server record best-effort.
+                try { await fetch(`${API_URL}/highlights/${hlId}`, { method: 'DELETE' }); } catch (_) {}
+                // Re-show popup for the new id.
+                showHLPopup(saved.id);
+            } catch (e) {
+                flashToast('⚠️ Save failed: ' + e.message);
+                // Keep handles shown so the user can try again.
+                _showHLHandles(hlId);
+                _scheduleHLFade();
+            }
+        }
+
+        // ---- Magnifier lens ----
+        // Mimics the native Android text-selection magnifier so the user
+        // can see exactly which glyph their handle will snap to even with
+        // a finger covering the actual text. Implementation: clone
+        // #epub-content once at pointerdown, then on every pointermove
+        // translate+scale the clone inside the circular magnifier so the
+        // touch point lands at the centre of the lens.
+        const _MAG_W = 160, _MAG_H = 110, _MAG_SCALE = 2;
+        let _hlMagSrcRect = null;
+        function _showMagnifier() {
+            const mag      = document.getElementById('hl-magnifier');
+            const clone    = document.getElementById('hl-magnifier-clone');
+            const src      = document.getElementById('epub-content');
+            const viewport = document.getElementById('epub-viewport');
+            if (!mag || !clone || !src || !viewport) return;
+            clone.innerHTML = '';
+            // Deep clone; preserves inline style (pagination transform,
+            // column geometry, font size). Strip the id so CSS rules
+            // targeting #epub-content don't double-apply.
+            const c = src.cloneNode(true);
+            c.removeAttribute('id');
+            // Match the original's box size exactly so column layout
+            // inside the clone is identical.
+            c.style.width  = src.offsetWidth  + 'px';
+            c.style.height = src.offsetHeight + 'px';
+            clone.appendChild(c);
+            // IMPORTANT: use the viewport's rect (no transform applied),
+            // NOT epub-content's rect (which includes translateX for the
+            // current page offset). epub-content's getBoundingClientRect()
+            // incorporates the translateX(-pageOffset) which would then
+            // be double-counted in the tx calculation and push the content
+            // completely off-screen inside the lens.
+            _hlMagSrcRect = viewport.getBoundingClientRect();
+            mag.style.display = 'block';
+        }
+        function _moveMagnifier(x, y) {
+            const mag     = document.getElementById('hl-magnifier');
+            const clone   = document.getElementById('hl-magnifier-clone');
+            const overlay = document.getElementById('hl-magnifier-overlay');
+            if (!mag || !clone || !_hlMagSrcRect) return;
+            // Place the lens above the finger; flip below if no room.
+            let mLeft = x - _MAG_W / 2;
+            let mTop  = y - _MAG_H - 50;
+            if (mTop < 8) mTop = y + 50;
+            mLeft = Math.max(8, Math.min(mLeft, window.innerWidth  - _MAG_W - 8));
+            mTop  = Math.max(8, Math.min(mTop,  window.innerHeight - _MAG_H - 8));
+            mag.style.left = mLeft + 'px';
+            mag.style.top  = mTop  + 'px';
+            // Translate+scale the clone so viewport point (x,y) lands at
+            // the lens centre. tx = MW/2 - SCALE * (x - srcLeft), etc.
+            const tx = _MAG_W / 2 - _MAG_SCALE * (x - _hlMagSrcRect.left);
+            const ty = _MAG_H / 2 - _MAG_SCALE * (y - _hlMagSrcRect.top);
+            clone.style.transform = 'translate(' + tx + 'px,' + ty + 'px) scale(' + _MAG_SCALE + ')';
+            // Repaint the highlight overlay using the live Range's rects.
+            if (overlay) {
+                overlay.innerHTML = '';
+                const stored = _hlRanges.get(_draggingHLId);
+                if (stored) {
+                    for (const r of stored.getClientRects()) {
+                        const ox = _MAG_W / 2 + _MAG_SCALE * (r.left - x);
+                        const oy = _MAG_H / 2 + _MAG_SCALE * (r.top  - y);
+                        const ow = r.width  * _MAG_SCALE;
+                        const oh = r.height * _MAG_SCALE;
+                        const d = document.createElement('div');
+                        d.style.cssText = 'position:absolute;background:rgba(255,213,79,0.45);'
+                            + 'left:' + ox + 'px;top:' + oy + 'px;'
+                            + 'width:' + ow + 'px;height:' + oh + 'px;';
+                        overlay.appendChild(d);
+                    }
+                }
+            }
+        }
+        function _hideMagnifier() {
+            const mag     = document.getElementById('hl-magnifier');
+            const clone   = document.getElementById('hl-magnifier-clone');
+            const overlay = document.getElementById('hl-magnifier-overlay');
+            if (mag)     mag.style.display = 'none';
+            if (clone)   clone.innerHTML   = '';
+            if (overlay) overlay.innerHTML = '';
+            _hlMagSrcRect = null;
+        }
+
+        function _onHandlePointerMove(e) {
+            if (!_draggingHandle || !_draggingHLId) return;
+            e.preventDefault();
+            const stored = _hlRanges.get(_draggingHLId);
+            if (!stored) return;
+            // Hit-test at the pointer position, offset upward slightly so
+            // the finger doesn't occlude the target text on small lines.
+            const x = e.clientX;
+            const y = e.clientY - 12;
+            let caret = null;
+            if (document.caretRangeFromPoint) {
+                caret = document.caretRangeFromPoint(x, y);
+            } else if (document.caretPositionFromPoint) {
+                const p = document.caretPositionFromPoint(x, y);
+                if (p) {
+                    caret = document.createRange();
+                    caret.setStart(p.offsetNode, p.offset);
+                    caret.collapse(true);
+                }
+            }
+            if (!caret) {
+                // Even with no caret hit, keep the lens tracking the finger.
+                _moveMagnifier(e.clientX, e.clientY);
+                return;
+            }
+            try {
+                if (_draggingHandle === 'start') {
+                    // Don't let start cross end
+                    if (caret.compareBoundaryPoints(Range.END_TO_END, stored) <= 0) {
+                        stored.setStart(caret.startContainer, caret.startOffset);
+                    }
+                } else {
+                    // Don't let end cross start
+                    if (caret.compareBoundaryPoints(Range.START_TO_START, stored) >= 0) {
+                        stored.setEnd(caret.startContainer, caret.startOffset);
+                    }
+                }
+            } catch (_) {}
+            _rebuildCSSHL();
+            _positionHLHandles(_draggingHLId);
+            _moveMagnifier(e.clientX, e.clientY);
+        }
+
+        async function _onHandlePointerUp(e) {
+            document.removeEventListener('pointermove', _onHandlePointerMove);
+            document.removeEventListener('pointerup',   _onHandlePointerUp);
+            _hideMagnifier();
+            const hlId = _draggingHLId;
+            _draggingHandle = null;
+            _draggingHLId   = null;
+            if (!hlId) return;
+            // If the range is non-empty, persist it.
+            const stored = _hlRanges.get(hlId);
+            if (stored && stored.toString().trim()) {
+                await _saveHandleDragResult(hlId);
+            } else {
+                _showHLHandles(hlId);
+                _scheduleHLFade();
+            }
+        }
+
+        function _onHandlePointerDown(e, which) {
+            e.stopPropagation();
+            e.preventDefault();
+            _draggingHandle = which;
+            _draggingHLId   = _activeHLId;
+            // Keep the popup visible while dragging.
+            if (_hlPopupTimer) { clearTimeout(_hlPopupTimer); _hlPopupTimer = null; }
+            _showMagnifier();
+            _moveMagnifier(e.clientX, e.clientY);
+            document.addEventListener('pointermove', _onHandlePointerMove, { passive: false });
+            document.addEventListener('pointerup',   _onHandlePointerUp,   { once: true });
         }
 
         // Debounced "selection settled" watcher. This is the ONLY thing that
@@ -2972,10 +3308,7 @@
             popup.style.left = left + 'px';
             popup.style.top  = top + 'px';
             _scheduleHLFade();
-            // Restore native selection handles over the whole highlight so
-            // the user can immediately drag them to adjust bounds — both
-            // when the popup appears after a new highlight is created AND
-            // when the user taps an existing highlight.
+            // Show custom drag handles at the highlight's visual endpoints.
             _reselectHighlight(hlId);
         }
         function hideHLPopup() {
@@ -2983,11 +3316,8 @@
             const popup = document.getElementById('hl-popup');
             if (popup) { popup.style.opacity = '1'; popup.style.display = 'none'; }
             _activeHLId = null; _activeHLText = '';
-            // Collapse the selection so handles disappear on explicit dismiss.
             _editingHLId = null;
-            try { window.getSelection().removeAllRanges(); } catch (_) {}
-            // Restore the active highlight to the CSS paint pass — it was
-            // temporarily hidden while the selection overlay covered it.
+            _hideHLHandles();
             _rebuildCSSHL();
         }
         async function copyHL() {
@@ -3372,6 +3702,8 @@
             document.addEventListener('click', (e) => {
                 const inPopup = e.target.closest && e.target.closest('#hl-popup');
                 if (inPopup) return;
+                // Ignore clicks on drag handles — they have their own pointerdown.
+                if (e.target.id === 'hl-handle-start' || e.target.id === 'hl-handle-end') return;
                 const content = document.getElementById('epub-content');
                 if (content && content.contains(e.target)) {
                     const hlId = findHighlightAtPoint(e.clientX, e.clientY);
@@ -3379,6 +3711,12 @@
                 }
                 hideHLPopup();
             }, true);
+            // Wire the custom drag handles. pointerdown is all we need here;
+            // pointermove / pointerup are attached dynamically on each drag.
+            const hs = document.getElementById('hl-handle-start');
+            const he = document.getElementById('hl-handle-end');
+            if (hs) hs.addEventListener('pointerdown', (e) => _onHandlePointerDown(e, 'start'));
+            if (he) he.addEventListener('pointerdown', (e) => _onHandlePointerDown(e, 'end'));
         }
 
         // ---------- IndexedDB book cache (shared with index.html) ----------
@@ -3970,6 +4308,8 @@
                 if (sel && !sel.isCollapsed && sel.toString().trim()) return;
                 const tgt = e.target;
                 if (tgt && tgt.closest && tgt.closest('#hl-popup')) return;
+                // Ignore touches on the custom drag handles.
+                if (tgt && (tgt.id === 'hl-handle-start' || tgt.id === 'hl-handle-end')) return;
                 // CSS Highlight registry is hit-tested by viewport point —
                 // there's no <span> ancestor to walk up to.
                 const t = e.changedTouches[0];

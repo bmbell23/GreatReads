@@ -406,21 +406,21 @@
     "created": 1780155213747
   },
   {
-    "id": "4fbc60d5-dd1c-433e-81f0-e6798d315474",
-    "type": "highlight",
+    "id": "c653d670-093c-4e49-8aee-704095a6a037",
+    "type": "auto-bookmark",
     "bookId": "573",
     "bookTitle": "Iron Gold",
     "bookAuthor": "",
-    "anchor": 2520,
-    "offset": 0,
-    "length": 459,
+    "anchor": 2522,
+    "offset": null,
+    "length": null,
     "endAnchor": null,
     "endOffset": null,
-    "page": 524,
-    "total": 1248,
-    "text": "The thought of this being a metal coffin makes my skin crawl again. But no torpedo comes and we press through the grid. After this, Republic cyber forensics will discover Winkle\u2019s back door and we\u2019ll be severed from the Republic\u2019s information network. It\u2019s a hard price to pay, but worth it if it gets us onto Venus. I only hope Theodora isn\u2019t incriminated. With her position in Starhall\u2019s intelligence bureau, she\u2019s too valuable to my wife to be spent on me.",
+    "page": 301,
+    "total": 716,
+    "text": "",
     "note": "",
     "color": "yellow",
-    "created": 1780163881505
+    "created": 1780189179169
   }
 ]

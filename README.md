@@ -7,24 +7,34 @@ A custom ereader Android app that connects to your Calibre library. Built becaus
 - 📚 **Calibre Integration** - Direct access to your Calibre Content Server
 - 🏷️ **Full Metadata** - Authors, series, tags, cover art, descriptions
 - ⬇️ **Download to phone** - Save books locally for offline reading
-- 📖 **PDF Reader** - Clean, simple PDF reading experience
+- 📖 **EPUB & PDF Reader** - Custom rendering with pagination and TOC
+- 🖊️ **Highlights** - Tap to select, edit with custom drag handles and magnifier
 - 🌐 **VPN-ready** - Works over local network or VPN
-- 🔮 **Future-proof** - Designed with web interface in mind
+- 🔮 **Foldable Support** - Optimized for Pixel 10 Pro Fold posture changes
 
 ## Architecture
 
 ```
 ┌─────────────────┐         ┌──────────────────┐         ┌──────────────────┐
 │  Android App    │◄────────┤  Flask Backend   │◄────────┤ Calibre Content  │
-│  (React Native) │  HTTP   │  (API Proxy)     │  HTTP   │     Server       │
+│ (WebView + JS)  │  HTTP   │  (API Proxy)     │  HTTP   │     Server       │
 │                 │         │                  │         │                  │
-│  Local Storage  │         │                  │         │  Calibre Library │
+│  IndexedDB      │         │                  │         │  Calibre Library │
 └─────────────────┘         └──────────────────┘         └──────────────────┘
 ```
 
 **Backend**: Flask REST API that proxies and enhances Calibre's API
 **Calibre**: Your existing Calibre Content Server with all your books and metadata
-**Frontend**: React Native Android app (with future web support in mind)
+**Frontend**: Native Android WebView wrapper (`simple-app/`) serving local static files (`web/`)
+
+## Highlight Editing
+
+GreatReads uses a custom highlight system designed for mobile touch:
+1. **Create**: Long-press and drag to select text. Release to save.
+2. **Select**: Tap any existing highlight to bring up the edit handles.
+3. **Adjust**: Drag the blue circles to change the start/end bounds.
+4. **Magnifier**: A 2x zoom lens appears while dragging handles to help with precise caret placement.
+5. **Lookup**: Direct links to dictionary, Wikipedia, or custom URLs for the selected text.
 
 ## Quick Start
 
@@ -71,26 +81,22 @@ A custom ereader Android app that connects to your Calibre library. Built becaus
 Ereader/
 ├── backend/           # Flask server
 │   ├── server.py      # Main API server
-│   ├── requirements.txt
 │   └── run.sh
-├── app/              # React Native app
-│   ├── android/      # Android-specific code
-│   ├── src/          # App source code
-│   │   ├── screens/  # UI screens
-│   │   ├── App.js    # Main app component
-│   │   └── config.js # Configuration
-│   └── package.json
-├── build-app.sh      # Automated build script
-├── QUICKSTART.md     # Quick start guide
-└── SETUP.md          # Detailed setup instructions
+├── simple-app/       # Android WebView app
+│   └── app/src/main   # Java bridge + WebView logic
+├── web/              # Static frontend (HTML/JS/CSS)
+│   ├── reader.html    # Core EPUB/PDF reading engine
+│   └── index.html     # Library browser
+├── build-app.sh      # Automated build & stage script
+└── QUICKSTART.md     # Quick start guide
 ```
 
 ## Supported Formats
 
 | Format | Status |
 |--------|--------|
-| PDF    | ✅ Supported |
-| EPUB   | 🔜 Coming soon |
+| EPUB   | ✅ Supported (Custom Pagination) |
+| PDF    | ✅ Supported (PDF.js) |
 | MOBI   | 🔜 Coming soon |
 | AZW3   | 🔜 Planned |
 
@@ -117,20 +123,19 @@ python server.py
 
 ### App Development
 ```bash
-cd app
-npm install
-npm start  # Start Metro bundler
-npm run android  # Run on connected device
+# Just edit web/*.html and refresh the app (or adb shell am force-stop / start)
+# To rebuild the native bridge:
+./build-app.sh
 ```
 
 ## Future Plans
 
-- [ ] EPUB reader support
+- [x] EPUB reader support
+- [x] Font size and style customization
+- [x] Bookmarks and highlights
 - [ ] Reading progress tracking across devices
-- [ ] Bookmarks and highlights
-- [ ] Web interface for desktop reading
 - [ ] Night mode / custom themes
-- [ ] Font size and style customization
+- [ ] Web interface for desktop reading
 - [ ] Collections/categories
 - [ ] Search functionality
 - [ ] Book metadata editing
