@@ -2883,6 +2883,16 @@
         // delete-and-recreate. The old spans are unwrapped first (using
         // the keepNodes variant) so the live selection range's endpoints
         // survive into the new wrap.
+        // True if DOM ranges a and b overlap at all. Uses comparePoint
+        // (unambiguous direction) rather than compareBoundaryPoints.
+        function _rangesIntersect(a, b) {
+            try {
+                if (b.comparePoint(a.endContainer,   a.endOffset)   < 0) return false; // a ends before b
+                if (b.comparePoint(a.startContainer, a.startOffset) > 0) return false; // a starts after b
+                return true;
+            } catch (_) { return false; }
+        }
+
         async function handleSelectionMaybe() {
             let range = getEpubSelectionRange();
             if (!range) return false;
@@ -2890,8 +2900,16 @@
             // Capture and clear immediately so the re-wrap at the end
             // (which sets the selection again and re-arms the settle
             // timer) doesn't see itself as another edit.
-            const replacingId = _editingHLId;
+            let replacingId = _editingHLId;
             _editingHLId = null;
+            // A long-press re-drag over an existing highlight (no menu
+            // opened first) should still ADJUST it — replace the overlapped
+            // highlight rather than stacking a duplicate band on top.
+            if (!replacingId) {
+                for (const [id, r] of _hlRanges) {
+                    if (r && _rangesIntersect(range, r)) { replacingId = id; break; }
+                }
+            }
 
             if (replacingId) {
                 // If the selection still matches the existing highlight's
@@ -3214,14 +3232,7 @@
                     caret.collapse(true);
                 }
             }
-            if (!caret) {
-                // No caret hit — keep the lens centred on the dragged edge's
-                // current position rather than snapping it to the finger.
-                const edge = _rangeEdgePoint(stored, _draggingHandle);
-                _moveMagnifier(edge ? edge.x : e.clientX,
-                               edge ? edge.y : e.clientY - 12);
-                return;
-            }
+            if (!caret) return;
             try {
                 if (_draggingHandle === 'start') {
                     // Don't let start cross end
@@ -3237,18 +3248,11 @@
             } catch (_) {}
             _rebuildCSSHL();
             _positionHLHandles(_draggingHLId);
-            // Centre the lens on the selection edge we just moved (not the
-            // raw finger), so the crosshair sits exactly on the character the
-            // handle will snap to — same behaviour as the native magnifier.
-            const edge = _rangeEdgePoint(stored, _draggingHandle);
-            _moveMagnifier(edge ? edge.x : e.clientX,
-                           edge ? edge.y : e.clientY - 12);
         }
 
         async function _onHandlePointerUp(e) {
             document.removeEventListener('pointermove', _onHandlePointerMove);
             document.removeEventListener('pointerup',   _onHandlePointerUp);
-            _hideMagnifier();
             const hlId = _draggingHLId;
             _draggingHandle = null;
             _draggingHLId   = null;
@@ -3268,15 +3272,13 @@
             e.preventDefault();
             _draggingHandle = which;
             _draggingHLId   = _activeHLId;
-            // Keep the popup visible while dragging.
+            // Keep the popup visible while dragging. Custom magnifier
+            // intentionally NOT shown — it was visually inaccurate (pointed
+            // at the wrong text). The user can long-press the highlighted
+            // text instead to get the OS-native handles + magnifier; the
+            // overlap check in handleSelectionMaybe makes that long-press
+            // replace this highlight rather than duplicating it.
             if (_hlPopupTimer) { clearTimeout(_hlPopupTimer); _hlPopupTimer = null; }
-            _showMagnifier();
-            // Open the lens centred on the handle's current edge, not the
-            // finger, so it shows the correct text from the first frame.
-            const stored = _hlRanges.get(_draggingHLId);
-            const edge = stored && _rangeEdgePoint(stored, which);
-            _moveMagnifier(edge ? edge.x : e.clientX,
-                           edge ? edge.y : e.clientY - 12);
             document.addEventListener('pointermove', _onHandlePointerMove, { passive: false });
             document.addEventListener('pointerup',   _onHandlePointerUp,   { once: true });
         }
@@ -3338,8 +3340,24 @@
             popup.style.left = left + 'px';
             popup.style.top  = top + 'px';
             _scheduleHLFade();
-            // Show custom drag handles at the highlight's visual endpoints.
-            _reselectHighlight(hlId);
+            // Arm replace-on-reselect. To ADJUST the bounds the user
+            // long-presses the highlighted text again: Android then shows
+            // its NATIVE selection handles + magnifier. (The OS refuses to
+            // show those for a programmatically-set selection — see the note
+            // above the custom-handle code — so a genuine long-press is the
+            // only way to get the native magnifier.) The overlap check in
+            // handleSelectionMaybe makes that re-selection replace this
+            // highlight instead of duplicating it, regardless of timing.
+            //
+            // NOTE: we deliberately do NOT clear window.getSelection() here.
+            // When this popup is shown immediately after a fresh highlight
+            // save, the native selection is still alive — leaving it intact
+            // keeps the OS-native handles + magnifier visible so the user
+            // can fine-tune the boundaries with the proper native lens.
+            // When the popup is shown by tapping an existing highlight, no
+            // native selection exists in the first place, so nothing to clear.
+            _editingHLId = hlId;
+            _rebuildCSSHL();
         }
         function hideHLPopup() {
             if (_hlPopupTimer) { clearTimeout(_hlPopupTimer); _hlPopupTimer = null; }
