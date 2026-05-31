@@ -925,17 +925,30 @@
         <button id="next-btn" onclick="nextPage()">Next ►</button>
     </div>
 
-    <!-- Transparent page progress bar at bottom — three cells -->
+    <!-- Transparent page progress bar at bottom — two stacked rows.
+         Row 1 (metrics, top):  chapter time left | time on current page |
+                                WPM / WPP | avg sec/page | book time left
+         Row 2 (progress, btm): chapter page x/y | chapter title | book x/y
+         Row 1 is hidden until we have ≥3 valid page samples to avoid
+         flashing meaningless "—" values before the reader settles. -->
     <div id="page-progress" style="position:fixed;bottom:-3px;left:0;right:0;pointer-events:none;z-index:9000;
-         align-items:baseline;padding:4px 44px;display:none;
+         flex-direction:column;padding:4px 44px;display:none;
          font-size:11px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
          color:rgba(0,0,0,0.55);background:transparent;">
-        <!-- chapter progress (left) -->
-        <span id="progress-chapter" style="flex:0 0 auto;white-space:nowrap;"></span>
-        <!-- chapter title (center) -->
-        <span id="progress-title" style="flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;"></span>
-        <!-- book progress (right) -->
-        <span id="progress-book" style="flex:0 0 auto;white-space:nowrap;text-align:right;"></span>
+        <!-- Row 1: live reading-speed metrics. Floated ~10px above Row 2 via margin-bottom. -->
+        <div id="progress-metrics" style="display:none;align-items:baseline;line-height:1.4;margin-bottom:5px;">
+            <span id="metric-chapter-remain" style="flex:0 0 auto;white-space:nowrap;"></span>
+            <span id="metric-page-now"       style="flex:1;text-align:left;padding-left:16px;white-space:nowrap;"></span>
+            <span id="metric-wpm-wpp"        style="flex:0 0 auto;white-space:nowrap;text-align:center;padding:0 8px;"></span>
+            <span id="metric-page-avg"       style="flex:1;text-align:right;padding-right:16px;white-space:nowrap;"></span>
+            <span id="metric-book-remain"    style="flex:0 0 auto;white-space:nowrap;text-align:right;"></span>
+        </div>
+        <!-- Row 2: existing chapter/book progress (unchanged behaviour) -->
+        <div style="display:flex;align-items:baseline;">
+            <span id="progress-chapter" style="flex:0 0 auto;white-space:nowrap;"></span>
+            <span id="progress-title"   style="flex:1;text-align:center;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;padding:0 8px;"></span>
+            <span id="progress-book"    style="flex:0 0 auto;white-space:nowrap;text-align:right;"></span>
+        </div>
     </div>
 
     <!-- Full-screen TOC overlay -->
@@ -1550,7 +1563,8 @@
             Promise.all([
                 loadHighlightsForBook(),
                 loadBookmarksForBook(),
-                syncReadingStateFromServer()
+                syncReadingStateFromServer(),
+                loadBookWordCount()
             ]).finally(() => {
                 setTimeout(calculatePages, 100);
             });
@@ -1672,6 +1686,14 @@
             const content = document.getElementById('epub-content');
             const viewport = document.getElementById('epub-viewport');
             if (!content) return;
+
+            // Layout change (font reflow, dual-page toggle, resize / fold).
+            // Discard the in-flight per-page sample so the time spent under
+            // the OLD layout isn't recorded against the new one — and so the
+            // renderEpubPage() at the end of this function (which fires
+            // _onPageTurn) starts a fresh timer instead of pushing a sample
+            // whose `words` count no longer matches the page geometry.
+            if (preserveProgress) _pageStartMs = null;
 
             // Capture the user's current position BEFORE we change any layout
             // styles. Two strategies, in priority order:
@@ -1995,6 +2017,7 @@
             console.log('📄 Page', currentEpubPage + 1, '/', totalPages,
                         '| offset:', offset, '| stride:', columnStride,
                         animated ? '(animated)' : '(snap)');
+            _onPageTurn();             // capture prev-page duration, reset timer
             updateProgress();
             updateBookmarkIndicator();
             resetAutoBookmarkTimer();
@@ -2079,6 +2102,7 @@
             const titleEl = document.getElementById('progress-title');
             if (titleEl) titleEl.textContent = chTitle;
 
+            updateReadingSpeedUI();
             saveReadingState();
         }
 
@@ -2177,6 +2201,176 @@
             } catch (e) { /* quota / private mode */ }
         }
 
+        // ---------- Reading-speed tracking ----------
+        // Rolling buffer of recent valid page-turn samples — drives the
+        // metrics row in the bottom bar (WPM, time-remaining, etc.). Samples
+        // outside [minSec, maxSec] are dropped (accidental swipes / phone
+        // put down). Buffer is persisted alongside the position in
+        // progress.json so a fresh APK install / device swap can resume the
+        // user's calibrated reading speed immediately.
+        const READING_MIN_KEY = 'ereader.settings.readingMinSec';
+        const READING_MAX_KEY = 'ereader.settings.readingMaxSec';
+        const READING_SPEED = {
+            minSec: 10, maxSec: 120,
+            // 30 samples ≈ 15–30 min of reading history. Big enough that a
+            // single slow page can't yank the average around; small enough to
+            // track within-session changes (fatigue, denser prose).
+            bufferSize: 30, minSamplesForDisplay: 2,
+        };
+        (function _loadReadingSpeedSettings() {
+            const mn = parseInt(localStorage.getItem(READING_MIN_KEY), 10);
+            const mx = parseInt(localStorage.getItem(READING_MAX_KEY), 10);
+            if (Number.isFinite(mn) && mn > 0) READING_SPEED.minSec = mn;
+            if (Number.isFinite(mx) && mx > 0) READING_SPEED.maxSec = mx;
+        })();
+
+        let _bookWordCount      = null;   // null = unknown → hide WPM cell
+        let _recentPages        = [];     // [{ms, words}, ...]
+        let _pageStartMs        = null;
+        let _pageElapsedAccrued = 0;      // ms accrued before last hide
+        let _pageHiddenAt       = null;   // timestamp when WebView went hidden
+
+        function _currentWPP() {
+            if (!_bookWordCount || !totalPages) return null;
+            return _bookWordCount / totalPages;
+        }
+        function _pageTimeMs() {
+            if (_pageStartMs == null) return 0;
+            if (_pageHiddenAt != null) return _pageElapsedAccrued;
+            return _pageElapsedAccrued + (Date.now() - _pageStartMs);
+        }
+        // Discard the in-flight per-page timer WITHOUT recording a sample.
+        // Used for state changes that invalidate the current page's time:
+        // app background / screen lock, font-size change, dual-page toggle,
+        // foldable posture change. The next _onPageTurn() will see
+        // _pageStartMs == null and just start a fresh timer.
+        function _resetPageTimer() {
+            _pageStartMs = (format.toLowerCase() === 'epub') ? Date.now() : null;
+            _pageElapsedAccrued = 0;
+            _pageHiddenAt = null;
+        }
+        function _onPageTurn() {
+            // EPUB only — PDFs don't have the chapter/pagination model the
+            // metrics row depends on.
+            if (format.toLowerCase() !== 'epub') return;
+            if (_pageStartMs != null) {
+                const ms  = _pageTimeMs();
+                const wpp = _currentWPP();
+                const lo  = READING_SPEED.minSec * 1000;
+                const hi  = READING_SPEED.maxSec * 1000;
+                if (ms >= lo && ms <= hi) {
+                    _recentPages.push({
+                        ms: Math.round(ms),
+                        words: wpp != null ? Math.round(wpp) : null
+                    });
+                    if (_recentPages.length > READING_SPEED.bufferSize) _recentPages.shift();
+                    // Piggyback on the existing reading-state push — the
+                    // debounced PUT will pick up _recentPages via the
+                    // flushReadingState body.
+                }
+            }
+            _pageStartMs = Date.now();
+            _pageElapsedAccrued = 0;
+            _pageHiddenAt = null;
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'hidden') {
+                // User is away (screen lock, app switch, force-stop) — discard
+                // the in-flight sample so background time isn't charged to
+                // this page.
+                _pageStartMs = null;
+                _pageElapsedAccrued = 0;
+                _pageHiddenAt = null;
+            } else {
+                // Returning to the reader on the same page — start a fresh
+                // per-page timer from now.
+                _resetPageTimer();
+            }
+        });
+
+        function _fmtHMS(seconds) {
+            if (!Number.isFinite(seconds) || seconds < 0) return '—';
+            const h = Math.floor(seconds / 3600);
+            const m = Math.floor((seconds % 3600) / 60);
+            const s = Math.floor(seconds % 60);
+            const mm = String(m).padStart(2, '0');
+            const ss = String(s).padStart(2, '0');
+            return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
+        }
+        // Average ms per WORD from samples that have a word count. Layout-
+        // invariant: a dual-page sample and a single-page sample contribute
+        // proportionally, so the buffer survives dual-page / font-size
+        // changes that alter words-per-page.
+        function _avgMsPerWord() {
+            const valid = _recentPages.filter(p => p.words != null && p.words > 0);
+            if (valid.length < READING_SPEED.minSamplesForDisplay) return null;
+            const totalMs    = valid.reduce((s, p) => s + p.ms, 0);
+            const totalWords = valid.reduce((s, p) => s + p.words, 0);
+            if (totalWords === 0) return null;
+            return totalMs / totalWords;
+        }
+        function _avgMs() {
+            // Prefer the layout-aware path: ms-per-word × current words-per-page
+            // gives an accurate per-page estimate immediately after a dual-page
+            // toggle / font-size change, without having to refill the buffer.
+            const mpw = _avgMsPerWord();
+            const wpp = _currentWPP();
+            if (mpw != null && wpp != null) return mpw * wpp;
+            // Fallback for books without a Calibre #word_count: raw average
+            // page time. Stale across layout changes — the buffer will refill
+            // over the next few pages.
+            if (_recentPages.length < READING_SPEED.minSamplesForDisplay) return null;
+            return _recentPages.reduce((s, p) => s + p.ms, 0) / _recentPages.length;
+        }
+        function _avgWPM() {
+            const mpw = _avgMsPerWord();
+            if (mpw == null || mpw === 0) return null;
+            return Math.round(60000 / mpw);
+        }
+        function updateReadingSpeedUI() {
+            const row = document.getElementById('progress-metrics');
+            if (!row) return;
+            if (format.toLowerCase() !== 'epub') { row.style.display = 'none'; return; }
+            // Always show the row on EPUBs so the page-elapsed timer gives
+            // the user immediate feedback. Cells with no data yet show "—".
+            row.style.display = 'flex';
+
+            const avgMs      = _avgMs();
+            const avgSec     = avgMs != null ? avgMs / 1000 : null;
+            const wpm        = _avgWPM();
+            const wpp        = _currentWPP();
+            const pageSecNow = Math.floor(_pageTimeMs() / 1000);
+            const bookRemain = avgSec != null
+                ? Math.max(0, totalPages - (currentEpubPage + 1)) * avgSec
+                : null;
+            // Chapter remaining — mirrors the chapter-derivation logic in
+            // updateProgress(). Skipped when no chapter map is available.
+            let chRemain = null;
+            if (avgSec != null && chapterStarts && chapterStarts.length > 0) {
+                let idx = 0;
+                for (let i = 0; i < chapterStarts.length; i++) {
+                    if (chapterStarts[i].page <= currentEpubPage) idx = i;
+                    else break;
+                }
+                const next  = chapterStarts[idx + 1];
+                const chEnd = next ? next.page : totalPages;
+                chRemain = Math.max(0, chEnd - (currentEpubPage + 1)) * avgSec;
+            }
+
+            document.getElementById('metric-chapter-remain').textContent =
+                chRemain != null ? _fmtHMS(chRemain) : '—';
+            document.getElementById('metric-page-now').textContent = pageSecNow + 's';
+            document.getElementById('metric-wpm-wpp').textContent =
+                (wpm != null && wpp != null) ? `${wpm} / ${Math.round(wpp)}` : '—';
+            document.getElementById('metric-page-avg').textContent =
+                avgSec != null ? Math.round(avgSec) + 's' : '—';
+            document.getElementById('metric-book-remain').textContent =
+                bookRemain != null ? _fmtHMS(bookRemain) : '—';
+        }
+        // Tick the "current page time" cell once a second. Cheap — only one
+        // DOM read + 5 textContent writes, gated on the row being visible.
+        setInterval(updateReadingSpeedUI, 1000);
+
         // ---------- Server-side progress sync ----------
         // saveReadingState() runs on every page turn; we don't want to PUT
         // that often. Coalesce with a short timer and flush immediately on
@@ -2195,13 +2389,17 @@
         function flushReadingState(useKeepalive) {
             if (!_pendingState || !bookId) return;
             const body = JSON.stringify({
-                bookTitle:  title,
-                format:     format,
-                anchor:     _pendingState.anchor,
-                page:       _pendingState.page,
-                total:      _pendingState.total,
-                progress:   _pendingState.progress,
-                fontSize:   _pendingState.fontSize
+                bookTitle:   title,
+                format:      format,
+                anchor:      _pendingState.anchor,
+                page:        _pendingState.page,
+                total:       _pendingState.total,
+                progress:    _pendingState.progress,
+                fontSize:    _pendingState.fontSize,
+                // Latest snapshot of the reading-speed rolling buffer (see
+                // "Reading-speed tracking" block above). Server just stores
+                // it verbatim; restored on next open via syncReadingState.
+                recentPages: _recentPages,
             });
             _pendingState = null;
             if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
@@ -2243,6 +2441,27 @@
                         ts:       remote.updated
                     }));
                     console.log('☁️  Restored reading position from server:', remote);
+                }
+                // Restore reading-speed buffer regardless of who wins on
+                // position — the rolling sample buffer is per-book metadata
+                // that should follow the book across devices.
+                if (Array.isArray(remote.recentPages)) {
+                    _recentPages = remote.recentPages.slice(-READING_SPEED.bufferSize);
+                }
+            } catch (_) {}
+        }
+
+        // Fetch the book's word count (Calibre #word_count custom column).
+        // Drives WPM / WPP / time-remaining; if null the metrics row stays
+        // hidden until we have samples AND a count to multiply by.
+        async function loadBookWordCount() {
+            if (!bookId) return;
+            try {
+                const r = await fetch(`${API_URL}/books/${encodeURIComponent(bookId)}`);
+                if (!r.ok) return;
+                const meta = await r.json();
+                if (Number.isFinite(meta.wordCount) && meta.wordCount > 0) {
+                    _bookWordCount = meta.wordCount;
                 }
             } catch (_) {}
         }

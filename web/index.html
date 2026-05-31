@@ -444,6 +444,25 @@
                 </label>
             </div>
 
+            <!-- Reading section — page-time sample thresholds for the
+                 reader's WPM / time-remaining metrics. Samples outside this
+                 window are discarded as accidental swipes or phone-down time. -->
+            <div class="setting-section">Reading</div>
+            <div class="setting-row">
+                <span class="setting-row-label">Minimum seconds per page<br>
+                    <span class="setting-hint" style="margin:0;">Faster page turns are ignored (accidental swipes).</span>
+                </span>
+                <input type="number" id="setting-reading-min-sec" min="1" max="3600" step="1"
+                       style="width:80px;padding:8px;background:#2a2a2a;border:none;border-radius:8px;color:#fff;font-size:14px;text-align:right;">
+            </div>
+            <div class="setting-row">
+                <span class="setting-row-label">Maximum seconds per page<br>
+                    <span class="setting-hint" style="margin:0;">Longer pauses are ignored (phone put down).</span>
+                </span>
+                <input type="number" id="setting-reading-max-sec" min="1" max="3600" step="1"
+                       style="width:80px;padding:8px;background:#2a2a2a;border:none;border-radius:8px;color:#fff;font-size:14px;text-align:right;">
+            </div>
+
             <!-- Lookup URLs section -->
             <div class="setting-section">Lookup URLs</div>
             <div class="setting-url-row">
@@ -1082,6 +1101,12 @@
         const DICT_DEFAULT = 'https://www.merriam-webster.com/dictionary/{word}';
         const WIKI_DEFAULT = 'https://en.wikipedia.org/wiki/Special:Search?search={word}';
         const KEEP_AWAKE_KEY = 'ereader.settings.keepAwake';
+        // Page-sample thresholds mirrored by reader.html — same keys, same
+        // defaults. The reader reads these on init; we only need to write.
+        const READING_MIN_KEY = 'ereader.settings.readingMinSec';
+        const READING_MAX_KEY = 'ereader.settings.readingMaxSec';
+        const READING_MIN_DEFAULT = 10;
+        const READING_MAX_DEFAULT = 120;
 
         function openSettings() {
             // Populate fields from localStorage
@@ -1091,6 +1116,12 @@
                 localStorage.getItem(DICT_KEY) || '';
             document.getElementById('setting-wiki-url').value =
                 localStorage.getItem(WIKI_KEY) || '';
+            const mn = parseInt(localStorage.getItem(READING_MIN_KEY), 10);
+            const mx = parseInt(localStorage.getItem(READING_MAX_KEY), 10);
+            document.getElementById('setting-reading-min-sec').value =
+                (Number.isFinite(mn) && mn > 0) ? mn : READING_MIN_DEFAULT;
+            document.getElementById('setting-reading-max-sec').value =
+                (Number.isFinite(mx) && mx > 0) ? mx : READING_MAX_DEFAULT;
             document.getElementById('settings-overlay').classList.add('open');
         }
         function closeSettings() {
@@ -1105,6 +1136,16 @@
             const wiki = document.getElementById('setting-wiki-url').value.trim() || WIKI_DEFAULT;
             localStorage.setItem(DICT_KEY, dict);
             localStorage.setItem(WIKI_KEY, wiki);
+            // Reading thresholds — clamp to a sane range, fall back to defaults
+            // on garbage input. min must be < max or the filter rejects every
+            // sample, so enforce that here too.
+            let mn = parseInt(document.getElementById('setting-reading-min-sec').value, 10);
+            let mx = parseInt(document.getElementById('setting-reading-max-sec').value, 10);
+            if (!Number.isFinite(mn) || mn < 1)  mn = READING_MIN_DEFAULT;
+            if (!Number.isFinite(mx) || mx < 1)  mx = READING_MAX_DEFAULT;
+            if (mn >= mx) { mn = READING_MIN_DEFAULT; mx = READING_MAX_DEFAULT; }
+            localStorage.setItem(READING_MIN_KEY, String(mn));
+            localStorage.setItem(READING_MAX_KEY, String(mx));
             closeSettings();
         }
         // Auto-save the toggle the instant it's flipped (no need to hit Save for that)

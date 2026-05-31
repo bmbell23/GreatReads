@@ -56,7 +56,7 @@ All endpoints are JSON unless noted. CORS is permissive.
 
 - **Books (Calibre proxy)**
   - `GET  /api/books?limit&offset&query` — list books (sorted by author last name, then series, then pubdate)
-  - `GET  /api/books/<id>` — single book metadata
+  - `GET  /api/books/<id>` — single book metadata; includes `wordCount` from the Calibre `#word_count` custom column (null when unset)
   - `GET  /api/books/<id>/cover?type=cover|thumb` — proxied image (30-day cache, SVG placeholder fallback)
   - `GET  /api/books/<id>/download?format=epub|pdf|...` — streams the file from Calibre
   - `GET  /api/search?q&limit&offset` — same as `/api/books` with a query
@@ -68,7 +68,7 @@ All endpoints are JSON unless noted. CORS is permissive.
 - **Per-book reading progress** (cross-device "where am I")
   - `GET    /api/progress` — all books, newest-updated first (powers "Continue reading")
   - `GET    /api/progress/<bookId>`
-  - `PUT    /api/progress/<bookId>` — upsert; last-writer-wins on `updated` timestamp
+  - `PUT    /api/progress/<bookId>` — upsert; last-writer-wins on `updated` timestamp. Body may include `recentPages` (rolling buffer of `{ms, words}` page-turn samples, see "Highlight & Bookmark Model" → progress record)
   - `DELETE /api/progress/<bookId>`
 - **Feature requests / TODO list** (see "Requests Workflow" below)
   - `GET    /api/requests?status=` — list, newest-updated first; optional status filter
@@ -155,7 +155,7 @@ Items are anchored to the *source DOM*, not the paginated layout, so they surviv
 
 The reader re-renders highlights every time it paginates; never trust `page` to find a highlight, always walk the DOM via `anchor` + `offset`.
 
-Progress records (`/api/progress/<bookId>`) use the same `anchor` field plus a `progress` float (0..1) and a `fontSize` so the next device opens at the same place at the same size.
+Progress records (`/api/progress/<bookId>`) use the same `anchor` field plus a `progress` float (0..1) and a `fontSize` so the next device opens at the same place at the same size. They also carry `recentPages` — a rolling buffer (max 10) of `{ms: int, words: int}` samples capturing how long the user spent on recent pages and the per-page word count at that moment. The reader uses this to compute WPM / WPP / time-remaining in the bottom-bar metrics row. Samples outside `[readingMinSec, readingMaxSec]` (default 10s..120s, settable in the main Settings overlay → keys `ereader.settings.readingMinSec` / `ereader.settings.readingMaxSec`) are dropped client-side as accidental swipes / phone-down time. EPUB only — PDFs don't populate this.
 
 ## Calibre Integration
 

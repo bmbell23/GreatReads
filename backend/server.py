@@ -207,6 +207,16 @@ def get_book_metadata(book_id):
         # Get external-facing URL (replace localhost with actual host)
         host = os.environ.get('PUBLIC_HOST', '100.69.184.113:8091')
 
+        # Calibre's #word_count custom column ("Words" in the user's library)
+        # — exposed so the reader can compute reading-speed estimates without
+        # walking the full text DOM. May be None for older imports; the reader
+        # treats null as "no WPM display".
+        word_count = None
+        try:
+            word_count = book.get('user_metadata', {}).get('#word_count', {}).get('#value#')
+        except (AttributeError, TypeError):
+            pass
+
         return {
             'id': str(book_id),
             'title': book.get('title', 'Unknown'),
@@ -224,6 +234,7 @@ def get_book_metadata(book_id):
             'isbn': book.get('isbn', ''),
             'published': book.get('pubdate', ''),
             'rating': book.get('rating', 0),
+            'wordCount': word_count,
         }
     except Exception as e:
         print(f"Error fetching book {book_id}: {e}")
@@ -491,17 +502,26 @@ def put_progress(book_id):
     bookId + updated timestamp. Last-writer-wins (the client compares
     `updated` against its local copy before pushing)."""
     body = request.get_json(silent=True) or {}
+    # `recentPages` is a rolling buffer of recent valid page-turn samples
+    # used to compute WPM / time-remaining in the reader bottom bar. Each
+    # entry is {ms: int, words: int}; capped at 10 entries client-side.
+    # We accept whatever shape the client sends and just persist it — no
+    # validation beyond a list-of-dicts sanity check.
+    recent = body.get('recentPages')
+    if not isinstance(recent, list):
+        recent = []
     item = {
-        'bookId':     str(book_id),
-        'bookTitle':  body.get('bookTitle') or '',
-        'bookAuthor': body.get('bookAuthor') or '',
-        'format':     body.get('format') or '',
-        'anchor':     body.get('anchor'),
-        'page':       body.get('page'),
-        'total':      body.get('total'),
-        'progress':   body.get('progress'),
-        'fontSize':   body.get('fontSize'),
-        'updated':    int(time.time() * 1000),
+        'bookId':      str(book_id),
+        'bookTitle':   body.get('bookTitle') or '',
+        'bookAuthor':  body.get('bookAuthor') or '',
+        'format':      body.get('format') or '',
+        'anchor':      body.get('anchor'),
+        'page':        body.get('page'),
+        'total':       body.get('total'),
+        'progress':    body.get('progress'),
+        'fontSize':    body.get('fontSize'),
+        'recentPages': recent,
+        'updated':     int(time.time() * 1000),
     }
     with _progress_lock:
         data = _load_progress()
