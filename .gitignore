@@ -44,6 +44,9 @@ Thumbs.db
 *.keystore
 !app/android/app/debug.keystore
 
+# Runtime data
+backend/data/
+
 # Misc
 *.orig
 .watchmanconfig
