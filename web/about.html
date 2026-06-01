@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+    <meta http-equiv="Pragma" content="no-cache">
+    <meta http-equiv="Expires" content="0">
+    <title>About · GreatReads</title>
+    <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            background: #121212;
+            color: #e6e6e6;
+            overflow-x: hidden;
+            padding-top: 56px;
+            padding-bottom: 60px;
+            line-height: 1.55;
+        }
+        /* Top bar mirrors requests.html — back arrow + title. */
+        .top-bar {
+            position: fixed;
+            top: 0; left: 0; right: 0;
+            height: 56px;
+            z-index: 99999;
+            background: rgba(18, 18, 18, 0.92);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+            display: flex;
+            align-items: center;
+            padding: 0 12px;
+            gap: 8px;
+        }
+        .top-bar .icon-btn {
+            background: transparent;
+            border: none;
+            color: #fff;
+            font-size: 22px;
+            width: 40px;
+            height: 40px;
+            border-radius: 8px;
+            cursor: pointer;
+        }
+        .top-bar .icon-btn:active { background: #2a2a2a; }
+        .top-bar .title {
+            flex: 1;
+            font-size: 16px;
+            font-weight: 600;
+            text-align: center;
+            letter-spacing: 0.2px;
+        }
+        .container { padding: 16px 16px 40px 16px; max-width: 760px; margin: 0 auto; }
+        h2 {
+            font-size: 13px;
+            font-weight: 700;
+            text-transform: uppercase;
+            letter-spacing: 0.6px;
+            color: #888;
+            margin: 28px 0 10px 0;
+        }
+        h2:first-child { margin-top: 0; }
+        h3 {
+            font-size: 15px;
+            font-weight: 600;
+            color: #ddd;
+            margin: 18px 0 6px 0;
+        }
+        p, li { font-size: 14px; color: #cfcfcf; }
+        p { margin: 8px 0; }
+        ul { padding-left: 22px; margin: 6px 0 10px 0; }
+        li { margin: 4px 0; }
+        code {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 12.5px;
+            background: #1e1e1e;
+            color: #f0a060;
+            padding: 1px 5px;
+            border-radius: 4px;
+        }
+        .card {
+            background: #1a1a1a;
+            border: 1px solid #262626;
+            border-radius: 10px;
+            padding: 14px 16px;
+            margin: 10px 0;
+        }
+        .formula {
+            font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+            font-size: 13px;
+            background: #0e0e0e;
+            color: #9cd6ff;
+            padding: 10px 12px;
+            border-radius: 8px;
+            margin: 8px 0;
+            overflow-x: auto;
+            white-space: pre;
+        }
+        .meta-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 6px 0;
+            border-bottom: 1px solid #222;
+            font-size: 13px;
+        }
+        .meta-row:last-child { border-bottom: none; }
+        .meta-row .k { color: #888; }
+        .meta-row .v { color: #ddd; font-family: ui-monospace, monospace; }
+    </style>
+</head>
+<body>
+    <div class="top-bar">
+        <button class="icon-btn" onclick="history.length > 1 ? history.back() : (location.href='/')" aria-label="Back">←</button>
+        <div class="title">About</div>
+        <div style="width:40px;"></div>
+    </div>
+
+    <div class="container" id="container">Loading…</div>
+
+    <!-- about.js MUST load before the inline bootstrap below — otherwise
+         `render` is undefined when the inline script captures it, the
+         page silently stays on "Loading…", and you spend an embarrassing
+         amount of time wondering why. -->
+    <script src="about.js"></script>
+    <script>
+        const API = 'http://100.69.184.113:8091';
+
+        async function loadMeta() {
+            const out = {version: '?', buildStamp: '?'};
+            try {
+                const v = await fetch(`${API}/api/version`, {cache: 'no-store'}).then(r => r.json());
+                if (v && v.version) out.version = v.version;
+            } catch (_) {}
+            try {
+                const b = await fetch(`${API}/api/build-stamp`, {cache: 'no-store'}).then(r => r.json());
+                if (b && b.stamp) out.buildStamp = b.stamp;
+            } catch (_) {}
+            return out;
+        }
+
+        loadMeta().then(render);
+    </script>
+</body>
+</html>

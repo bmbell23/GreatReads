@@ -2291,6 +2291,20 @@
             // single slow page can't yank the average around; small enough to
             // track within-session changes (fatigue, denser prose).
             bufferSize: 30, minSamplesForDisplay: 2,
+            // MAD-based outlier rejection. The absolute [minSec, maxSec]
+            // window above is the first-pass filter (catches accidental
+            // swipes / phone-down time). This second-pass filter catches
+            // *contextual* outliers — a 20s page in a 63s-typical book is
+            // probably an epigraph or chapter-end page, not real reading.
+            //   • Modified z-score: M = 0.6745 · (x − median) / MAD
+            //   • |M| > 3.5 is the Iglewicz & Hoaglin threshold (~p<0.001
+            //     under a normal assumption). On a buffer of 30 typical
+            //     samples that means roughly zero false positives in steady-
+            //     state reading.
+            // We need a minimum sample count before the median/MAD are
+            // meaningful — below this, no statistical filtering happens.
+            outlierMinSamples: 5,
+            outlierMadThreshold: 3.5,
         };
         (function _loadReadingSpeedSettings() {
             const mn = parseInt(localStorage.getItem(READING_MIN_KEY), 10);
@@ -2402,6 +2416,37 @@
             const ss = String(s).padStart(2, '0');
             return h > 0 ? `${h}:${mm}:${ss}` : `${m}:${ss}`;
         }
+        // ----- Statistical helpers for outlier rejection -----
+        function _median(nums) {
+            if (!nums.length) return null;
+            const a = nums.slice().sort((x, y) => x - y);
+            const m = a.length >> 1;
+            return (a.length & 1) ? a[m] : (a[m - 1] + a[m]) / 2;
+        }
+        // Modified z-score using median absolute deviation (Iglewicz &
+        // Hoaglin). Returns the subset of `samples` whose `keyFn(sample)`
+        // value has |M| ≤ outlierMadThreshold, where
+        //   M = 0.6745 · (x − median) / MAD
+        // Pass-through (no filtering) until we have outlierMinSamples points,
+        // because median/MAD are meaningless on tiny buffers.
+        // Degenerate case: when MAD == 0 (all values identical, or near-
+        // identical with an even count), every non-equal value would have
+        // infinite z. Fall back to a relative-spread check (±50% of median)
+        // so we still drop the obvious epigraph page in a uniform buffer.
+        function _filterByMad(samples, keyFn) {
+            if (samples.length < READING_SPEED.outlierMinSamples) return samples;
+            const vals = samples.map(keyFn);
+            const med  = _median(vals);
+            if (med == null || med === 0) return samples;
+            const mad  = _median(vals.map(v => Math.abs(v - med)));
+            const thr  = READING_SPEED.outlierMadThreshold;
+            if (mad === 0) {
+                return samples.filter((_, i) => Math.abs(vals[i] - med) <= med * 0.5);
+            }
+            return samples.filter((_, i) =>
+                Math.abs(0.6745 * (vals[i] - med) / mad) <= thr
+            );
+        }
         // Average ms per WORD from samples that have a word count. Layout-
         // invariant: a dual-page sample and a single-page sample contribute
         // proportionally, so the buffer survives dual-page / font-size
@@ -2409,8 +2454,14 @@
         function _avgMsPerWord() {
             const valid = _recentPages.filter(p => p.words != null && p.words > 0);
             if (valid.length < READING_SPEED.minSamplesForDisplay) return null;
-            const totalMs    = valid.reduce((s, p) => s + p.ms, 0);
-            const totalWords = valid.reduce((s, p) => s + p.words, 0);
+            // Outlier-reject on ms-per-word (the layout-invariant per-sample
+            // reading-speed proxy) so a fast page is only "fast" if its
+            // time-per-word is anomalous, not just because it had fewer
+            // words on the page (dual-page / font-size).
+            const kept = _filterByMad(valid, p => p.ms / p.words);
+            if (kept.length < READING_SPEED.minSamplesForDisplay) return null;
+            const totalMs    = kept.reduce((s, p) => s + p.ms, 0);
+            const totalWords = kept.reduce((s, p) => s + p.words, 0);
             if (totalWords === 0) return null;
             return totalMs / totalWords;
         }
@@ -2421,11 +2472,14 @@
             const mpw = _avgMsPerWord();
             const wpp = _currentWPP();
             if (mpw != null && wpp != null) return mpw * wpp;
-            // Fallback for books without a Calibre #word_count: raw average
-            // page time. Stale across layout changes — the buffer will refill
+            // Fallback for books without a Calibre #word_count: outlier-
+            // reject on raw ms (the only signal available) and average what's
+            // left. Stale across layout changes — the buffer will refill
             // over the next few pages.
             if (_recentPages.length < READING_SPEED.minSamplesForDisplay) return null;
-            return _recentPages.reduce((s, p) => s + p.ms, 0) / _recentPages.length;
+            const kept = _filterByMad(_recentPages, p => p.ms);
+            if (kept.length < READING_SPEED.minSamplesForDisplay) return null;
+            return kept.reduce((s, p) => s + p.ms, 0) / kept.length;
         }
         function _avgWPM() {
             const mpw = _avgMsPerWord();

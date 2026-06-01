@@ -418,6 +418,7 @@
         <button id="menu-bookmarks">🔖 Bookmarks</button>
         <button id="menu-requests">📋 Requests</button>
         <button id="menu-settings">⚙️ Settings</button>
+        <button id="menu-about">ℹ️ About</button>
     </div>
 
     <!-- Per-book context menu (right-click on desktop, long-press on touch).
@@ -1116,6 +1117,10 @@
         document.getElementById('menu-settings').addEventListener('click', () => {
             menuPopup.classList.remove('open');
             openSettings();
+        });
+        document.getElementById('menu-about').addEventListener('click', () => {
+            menuPopup.classList.remove('open');
+            window.location.href = '/about.html';
         });
 
         // ---------- Settings overlay ----------

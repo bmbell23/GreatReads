@@ -48,6 +48,7 @@ description: Ereader agent guidelines — extends shared server guidelines
   - `web/index.html` — library browser (~1240 lines)
   - `web/reader.html` — PDF + EPUB reader (~4450 lines, consumed in-app via WebView)
   - `web/requests.html` + `web/requests.js` — in-app feature-request / TODO list ("📋 Requests" hamburger entry). See "Requests Workflow" below.
+  - `web/about.html` + `web/about.js` — in-app About page ("ℹ️ About" hamburger entry). Documents the reading-speed algorithm and shows live `/api/version` + `/api/build-stamp`.
   - `web/serve.py` — preferred static server (no-cache headers, correct `.apk` MIME, permissive CORS). Use this over `python3 -m http.server` so the WebView never serves stale HTML.
 - **Android app**: `simple-app/` — minimal native WebView wrapper pointing at `http://100.69.184.113:8090`
   - Single Activity: `simple-app/app/src/main/java/com/ereader/simple/MainActivity.java`
@@ -172,7 +173,7 @@ Items are anchored to the *source DOM*, not the paginated layout, so they surviv
 
 The reader re-renders highlights every time it paginates; never trust `page` to find a highlight, always walk the DOM via `anchor` + `offset`.
 
-Progress records (`/api/progress/<bookId>`) use the same `anchor` field plus a `progress` float (0..1) and a `fontSize` so the next device opens at the same place at the same size. They also carry `recentPages` — a rolling buffer (max 10) of `{ms: int, words: int}` samples capturing how long the user spent on recent pages and the per-page word count at that moment. The reader uses this to compute WPM / WPP / time-remaining in the bottom-bar metrics row. Samples outside `[readingMinSec, readingMaxSec]` (default 10s..120s, settable in the main Settings overlay → keys `ereader.settings.readingMinSec` / `ereader.settings.readingMaxSec`) are dropped client-side as accidental swipes / phone-down time. EPUB only — PDFs don't populate this.
+Progress records (`/api/progress/<bookId>`) use the same `anchor` field plus a `progress` float (0..1) and a `fontSize` so the next device opens at the same place at the same size. They also carry `recentPages` — a rolling buffer (max 30) of `{ms: int, words: int}` samples capturing how long the user spent on recent pages and the per-page word count at that moment. The reader uses this to compute WPM / WPP / time-remaining in the bottom-bar metrics row. Two-stage outlier filter: (1) at insert time, samples outside `[readingMinSec, readingMaxSec]` (default 10s..120s, settable in the main Settings overlay → keys `ereader.settings.readingMinSec` / `ereader.settings.readingMaxSec`) are dropped as accidental swipes / phone-down time; (2) at compute time, a MAD-based modified-z-score filter (Iglewicz & Hoaglin, `|0.6745·(x−median)/MAD| > 3.5`) drops contextual outliers (epigraph / chapter-end pages) — applied to ms-per-word when a word count is available, raw ms otherwise, gated by `outlierMinSamples` (5) so tiny buffers don't trigger it. EPUB only — PDFs don't populate this. The full algorithm is also documented in `web/about.js` (user-facing).
 
 ## Calibre Integration
 
