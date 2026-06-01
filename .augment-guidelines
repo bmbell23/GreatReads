@@ -91,7 +91,7 @@ All endpoints are JSON unless noted. CORS is permissive.
 - **Feature requests / TODO list** (see "Requests Workflow" below)
   - `GET    /api/requests?status=` — list, newest-updated first; optional status filter
   - `POST   /api/requests` — create (`title` required; defaults to `Backlog`)
-  - `PUT    /api/requests/<id>` — partial update; mutable: `title`, `body`, `status`
+  - `PUT    /api/requests/<id>` — partial update; mutable: `title`, `body`, `status`, `sections`
   - `DELETE /api/requests/<id>`
   - `POST   /api/requests/<id>/comments` — append a comment `{text, author?}` (iteration thread)
 - **Meta**
@@ -115,8 +115,11 @@ The in-app **Requests** page (📋 in the hamburger menu → `web/requests.html`
 
 ```
 { id, title, body, status, comments: [{ts, author, text}],
+  sections: [{ id, title, body: html }],
   created: epoch_ms, updated: epoch_ms }
 ```
+
+`sections` is the rich-text body of a feature doc, rendered as tabs in the detail view (Overview / UX / Technical / Implementation / Open Questions / References by convention, but freely renamable). Each section's `body` is sanitised HTML (the editor strips `<script>`, inline event handlers, and `javascript:` URLs in `web/requests.js` → `sanitizeHTML`). Legacy items pre-dating sections have `sections: []` and fall back to the plain `body` string — the UI synthesises a single "Overview" section from it on open. When you POST or PUT a request, send `sections` if you want structured content; omit it to leave existing sections untouched.
 
 `status ∈ {"Backlog", "Requested", "In Progress", "Done"}`:
 

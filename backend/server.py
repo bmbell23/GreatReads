@@ -45,6 +45,26 @@ _progress_lock = threading.Lock()
 REQUESTS_FILE = os.path.join(DATA_DIR, 'requests.json')
 _requests_lock = threading.Lock()
 REQUEST_STATUSES = ('Backlog', 'Requested', 'In Progress', 'Done')
+
+def _normalize_sections(raw):
+    """Coerce a client-supplied `sections` value into the on-disk shape:
+    list of {id, title, body}. Drops malformed entries silently rather than
+    erroring — the requests UI is single-user and we'd rather not lose a
+    long edit to a schema nit. Returns None if input is not a list at all,
+    so callers can distinguish "field omitted" from "field cleared to []"."""
+    if not isinstance(raw, list):
+        return None
+    out = []
+    for s in raw:
+        if not isinstance(s, dict):
+            continue
+        sid = str(s.get('id') or uuid.uuid4())
+        title = str(s.get('title') or 'Untitled').strip() or 'Untitled'
+        body = s.get('body') or ''
+        if not isinstance(body, str):
+            body = str(body)
+        out.append({'id': sid, 'title': title, 'body': body})
+    return out
 REQUESTS_SEED = [
     {'title': 'Adding physical book pages',
      'body':  'Adding physical book pages'},
@@ -582,7 +602,12 @@ def list_requests():
 
 @app.route('/api/requests', methods=['POST'])
 def create_request():
-    """Create a new request. Defaults to Backlog if status is omitted."""
+    """Create a new request. Defaults to Backlog if status is omitted.
+
+    Optional `sections` field — list of {id?, title, body} where body is
+    HTML produced by the rich-text editor. When present it supersedes the
+    legacy single-string `body`; both are persisted for back-compat so
+    older clients keep rendering something."""
     body = request.get_json(silent=True) or {}
     title = (body.get('title') or '').strip()
     if not title:
@@ -591,10 +616,12 @@ def create_request():
     if status not in REQUEST_STATUSES:
         return jsonify({'error': f'status must be one of {REQUEST_STATUSES}'}), 400
     now = int(time.time() * 1000)
+    sections = _normalize_sections(body.get('sections'))
     item = {
         'id':       str(uuid.uuid4()),
         'title':    title,
         'body':     body.get('body') or '',
+        'sections': sections if sections is not None else [],
         'status':   status,
         'comments': [],
         'created':  now,
@@ -608,11 +635,16 @@ def create_request():
 
 @app.route('/api/requests/<item_id>', methods=['PUT'])
 def update_request(item_id):
-    """Partial update — allows mutating title, body, status."""
+    """Partial update — allows mutating title, body, status, sections."""
     body = request.get_json(silent=True) or {}
     allowed = ('title', 'body', 'status')
     if 'status' in body and body['status'] not in REQUEST_STATUSES:
         return jsonify({'error': f'status must be one of {REQUEST_STATUSES}'}), 400
+    sections = None
+    if 'sections' in body:
+        sections = _normalize_sections(body.get('sections'))
+        if sections is None:
+            return jsonify({'error': 'sections must be a list'}), 400
     with _requests_lock:
         items = _load_requests()
         for it in items:
@@ -620,6 +652,8 @@ def update_request(item_id):
                 for k in allowed:
                     if k in body:
                         it[k] = body[k]
+                if sections is not None:
+                    it['sections'] = sections
                 it['updated'] = int(time.time() * 1000)
                 _save_requests(items)
                 return jsonify(it)
