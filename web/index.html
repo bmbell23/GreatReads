@@ -826,6 +826,27 @@
 
             // Trigger cover loading from cache/network
             document.querySelectorAll('.book-cover[data-src]').forEach(loadCover);
+
+            // Attach an IntersectionObserver to the sentinel so the next batch
+            // loads the moment it scrolls into view — works on desktop and mobile
+            // regardless of how the scrollable container is set up.
+            _observeSentinel();
+        }
+
+        let _sentinelObserver = null;
+        function _observeSentinel() {
+            // Disconnect any previous observer so we don't double-fire.
+            if (_sentinelObserver) { _sentinelObserver.disconnect(); _sentinelObserver = null; }
+            const sentinel = document.querySelector('.loading-more');
+            if (!sentinel || searchQuery) return;
+            _sentinelObserver = new IntersectionObserver((entries) => {
+                if (entries[0].isIntersecting) {
+                    _sentinelObserver.disconnect();
+                    _sentinelObserver = null;
+                    loadBooks();
+                }
+            }, { rootMargin: '200px' }); // start loading 200px before it hits the fold
+            _sentinelObserver.observe(sentinel);
         }
 
         async function openBook(id, format, title) {
@@ -927,14 +948,13 @@
             }
         });
 
-        // Infinite scroll
+        // Fallback scroll listener: catches cases where the IntersectionObserver
+        // fires before layout is fully settled (rare on desktop, harmless on mobile).
         window.addEventListener('scroll', () => {
-            if (window.innerHeight + window.scrollY >= document.body.offsetHeight - 500) {
-                if (!searchQuery) {
-                    loadBooks();
-                }
+            if (!searchQuery && window.innerHeight + window.scrollY >= document.body.offsetHeight - 300) {
+                loadBooks();
             }
-        });
+        }, { passive: true });
 
         // ---------- Per-book context menu ----------
         // Triggered by right-click (desktop) or long-press (touch). Currently
