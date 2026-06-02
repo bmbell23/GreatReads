@@ -704,7 +704,7 @@
             touch-action: none;
             /* Center the circle on its anchor point */
             transform: translate(-50%, -50%);
-            transition: transform 0.08s;
+            transition: transform 0.08s, opacity 0.4s ease;
         }
         .hl-handle:active { transform: translate(-50%, -50%) scale(1.3); }
 
@@ -1391,7 +1391,7 @@
                 for (let itemref of itemrefs) {
                     const idref = itemref.getAttribute('idref');
                     const href = manifest[idref];
-                    if (href && (href.endsWith('.html') || href.endsWith('.xhtml'))) {
+                    if (href && (href.endsWith('.html') || href.endsWith('.xhtml') || href.endsWith('.htm'))) {
                         const fullPath = opfPath + href;
                         if (zip.files[fullPath]) {
                             let html = await zip.files[fullPath].async('text');
@@ -1474,6 +1474,13 @@
         let currentColumnCount = 1; // live: 1 (single page) or 2 (dual page).
                                   // Set by calculatePages(); read by margin/long-press logic.
         const SIDE_PADDING = 40;  // visual gutter on each side of the visible column
+        // Anchor of the first paragraph on the most recently rendered page.
+        // Updated at the end of renderEpubPage(), when columnStride /
+        // currentEpubPage / the DOM are guaranteed to be consistent. Read
+        // by scheduleRepaginate() to restore position after a fold/resize,
+        // since by then the DOM has reflowed but columnStride is stale and
+        // a fresh capture would return the wrong anchor.
+        let _lastRenderedAnchor = null;
 
         function renderEpubContent(htmlContent, imageMap) {
             // Get all content
@@ -1747,6 +1754,103 @@
             return Math.max(0, Math.floor(rawLeft / columnStride));
         }
 
+        // Fine-grained capture: returns { anchor, offset } where `offset` is
+        // the character index within the anchor's combined textContent of the
+        // glyph sitting at the top-left of the visible column. Used ONLY for
+        // in-memory layout-transition preservation (fold/resize, font change,
+        // dual-page toggle) — persisted state (highlights, bookmarks, saved
+        // progress) still uses the integer anchor from captureFirstVisibleAnchor.
+        //
+        // Why we need this: captureFirstVisibleAnchor snaps to the FIRST
+        // paragraph that BEGINS on the page. When the user is mid-paragraph
+        // (page top shows a continuation of a paragraph started earlier),
+        // restoring to the next-paragraph's start drifts the user forward by
+        // up to a paragraph's worth of lines. With a char offset we restore
+        // to the same character, eliminating that drift across reflows.
+        function captureFineAnchor() {
+            const viewport = document.getElementById('epub-viewport');
+            const content  = document.getElementById('epub-content');
+            if (!viewport || !content) return null;
+            const vRect = viewport.getBoundingClientRect();
+            // Top-left of the visible reading column. SIDE_PADDING is the
+            // gutter inset; the small y nudge clears any line-leading above
+            // the first baseline. In dual-page mode this is the left column,
+            // which is correct — "first visible line" is what we preserve.
+            const x = vRect.left + SIDE_PADDING + 4;
+            const y = vRect.top + 8;
+            // Chromium WebView ships caretRangeFromPoint; spec-compliant
+            // browsers expose caretPositionFromPoint. Support both.
+            let textNode = null, off = 0;
+            if (document.caretRangeFromPoint) {
+                const r = document.caretRangeFromPoint(x, y);
+                if (r && r.startContainer && r.startContainer.nodeType === 3) {
+                    textNode = r.startContainer; off = r.startOffset;
+                }
+            } else if (document.caretPositionFromPoint) {
+                const p = document.caretPositionFromPoint(x, y);
+                if (p && p.offsetNode && p.offsetNode.nodeType === 3) {
+                    textNode = p.offsetNode; off = p.offset;
+                }
+            }
+            if (!textNode) return null;
+            let el = textNode.parentElement;
+            while (el && !(el.dataset && el.dataset.anchor)) el = el.parentElement;
+            if (!el) return null;
+            const anchorIdx = parseInt(el.dataset.anchor, 10);
+            if (!isFinite(anchorIdx)) return null;
+            // Walk the anchor's text nodes to sum lengths up to the hit node.
+            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+            let charOff = 0, n;
+            while ((n = walker.nextNode())) {
+                if (n === textNode) return { anchor: anchorIdx, offset: charOff + off };
+                charOff += n.nodeValue.length;
+            }
+            return { anchor: anchorIdx, offset: 0 };
+        }
+
+        // Resolve a fine anchor to a page index in the current (reflowed)
+        // layout. Walks the anchor's text nodes to find the one containing
+        // the target character, then reads a 1-char Range's bounding rect
+        // to convert horizontal position → page. Falls back to the anchor's
+        // own left edge if the character is past the end.
+        function findPageForFineAnchor(fine) {
+            if (!fine || typeof fine !== 'object') return null;
+            const content = document.getElementById('epub-content');
+            if (!content || !columnStride) return null;
+            const el = content.querySelector('[data-anchor="' + fine.anchor + '"]');
+            if (!el) return null;
+            const target = Math.max(0, fine.offset | 0);
+            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+            let seen = 0, node = null, localOff = 0, cur;
+            while ((cur = walker.nextNode())) {
+                const len = cur.nodeValue.length;
+                if (seen + len >= target) {
+                    node = cur; localOff = Math.max(0, target - seen);
+                    break;
+                }
+                seen += len;
+            }
+            const contentLeft = content.getBoundingClientRect().left;
+            if (!node) {
+                const left = el.getBoundingClientRect().left - contentLeft;
+                return Math.max(0, Math.floor(left / columnStride));
+            }
+            try {
+                const r = document.createRange();
+                r.setStart(node, localOff);
+                r.setEnd(node, Math.min(localOff + 1, node.nodeValue.length));
+                const rect = r.getBoundingClientRect();
+                if (!rect || (rect.width === 0 && rect.height === 0)) {
+                    const left = el.getBoundingClientRect().left - contentLeft;
+                    return Math.max(0, Math.floor(left / columnStride));
+                }
+                const left = rect.left - contentLeft;
+                return Math.max(0, Math.floor(left / columnStride));
+            } catch (_) {
+                return null;
+            }
+        }
+
         // calculatePages(preserveProgress, presetAnchor)
         //   preserveProgress  — true on resize/font-change/dual-toggle; false
         //                       on first paint (where we restore from disk).
@@ -1779,14 +1883,23 @@
             //      is available (e.g. first paint with only a legacy saved
             //      state from an older build).
             let anchorIdx = null;
+            let fineAnchor = null;  // { anchor, offset } when caller supplied character-precision capture
             let prevProgress = 0;
             let directPage = null;  // used by "jump to bookmark" when no anchor
             if (preserveProgress && totalPages > 0) {
                 // presetAnchor wins if provided (caller already captured before
-                // their own reflow-causing change).
-                anchorIdx = (presetAnchor !== undefined && presetAnchor !== null)
-                    ? presetAnchor
-                    : captureFirstVisibleAnchor();
+                // their own reflow-causing change). Two shapes accepted:
+                //   - number: legacy integer anchor (paragraph index)
+                //   - { anchor, offset }: character-precise (preferred for
+                //     layout transitions — eliminates mid-paragraph drift)
+                if (presetAnchor && typeof presetAnchor === 'object') {
+                    fineAnchor = presetAnchor;
+                    anchorIdx  = presetAnchor.anchor;  // fallback if fine resolution fails
+                } else if (presetAnchor != null) {
+                    anchorIdx = presetAnchor;
+                } else {
+                    anchorIdx = captureFirstVisibleAnchor();
+                }
                 prevProgress = currentEpubPage / totalPages;
             } else {
                 const saved = loadReadingState();
@@ -1855,12 +1968,19 @@
                 // Number of viewport-sized pages. Use ceil so trailing content isn't clipped.
                 totalPages = Math.max(1, Math.ceil(contentWidth / columnStride));
 
-                // Prefer the anchor — it gives us "same first words on the page"
-                // even though totalPages may have changed. Fall back to the
-                // saved progress fraction if the anchor isn't available (e.g.
-                // legacy state from before this build).
+                // Resolution priority:
+                //   1. fineAnchor — character-precise; restores the exact
+                //      glyph that was at the top-left of the visible page,
+                //      so mid-paragraph reading positions survive reflows.
+                //   2. anchorIdx — integer paragraph index; snaps to where
+                //      that paragraph BEGINS in the new layout.
+                //   3. directPage — for "jump to bookmark" with no anchor.
+                //   4. prevProgress — bare 0..1 fraction, last-ditch fallback.
                 let targetPage = null;
-                if (anchorIdx != null) {
+                if (fineAnchor) {
+                    targetPage = findPageForFineAnchor(fineAnchor);
+                }
+                if (targetPage == null && anchorIdx != null) {
                     targetPage = findPageForAnchor(anchorIdx);
                 }
                 if (targetPage == null && directPage != null) {
@@ -1876,7 +1996,8 @@
                     columnWidth, columnGap,
                     contentScrollWidth: contentWidth,
                     totalPages, currentEpubPage,
-                    anchorIdx, viaAnchor: anchorIdx != null
+                    anchorIdx, fineAnchor,
+                    viaFine: fineAnchor != null, viaAnchor: anchorIdx != null
                 });
 
                 // Anchors -> pages can change on every re-pagination
@@ -2087,6 +2208,12 @@
             // on sits in the same centered band as page 1.
             const offset = -(currentEpubPage * columnStride);
             content.style.transform = `translateX(${offset}px)`;
+            // Restore visibility — scheduleRepaginate() hides #epub-content
+            // on resize to mask the brief window where it sits at the stale
+            // translateX inside an already-reflowed viewport. This is the
+            // unconditional point where we know the new translateX is in
+            // effect, so it's safe to show again.
+            if (content.style.visibility === 'hidden') content.style.visibility = '';
 
             console.log('📄 Page', currentEpubPage + 1, '/', totalPages,
                         '| offset:', offset, '| stride:', columnStride,
@@ -2096,6 +2223,18 @@
             updateBookmarkIndicator();
             resetAutoBookmarkTimer();
             renderLineBookmarkFlags();
+            // Track the first-visible anchor every time we successfully
+            // render a page. This is the only moment columnStride,
+            // currentEpubPage, and the live DOM are guaranteed to agree —
+            // captureFirstVisibleAnchor() here is therefore correct. The
+            // resize/fold path (scheduleRepaginate) uses this stored value
+            // because by the time the resize event fires, the WebView has
+            // already reflowed to the new viewport width but columnStride
+            // is still stale, so a fresh capture there would lie.
+            // Fine anchor preferred (character-precise, survives mid-paragraph
+            // reflow). Falls back to integer paragraph anchor if caretRangeFromPoint
+            // isn't available or returns no hit (e.g. blank column on last page).
+            _lastRenderedAnchor = captureFineAnchor() ?? captureFirstVisibleAnchor();
         }
 
         // Flatten tocTree (hierarchical TOC parsed from nav.xhtml / toc.ncx)
@@ -2222,7 +2361,7 @@
             // Button-driven (single discrete step) — capture immediately,
             // then route through the debouncer so rapid taps still coalesce.
             if (fontChangeAnchor == null) {
-                fontChangeAnchor = captureFirstVisibleAnchor();
+                fontChangeAnchor = captureFineAnchor() ?? captureFirstVisibleAnchor();
             }
             fontSize = Math.max(12, Math.min(32, fontSize + delta));
             document.getElementById('font-slider').value = fontSize;
@@ -2238,7 +2377,7 @@
             // subsequent tick reuses that captured anchor so the user's
             // visible position survives the whole drag.
             if (fontChangeAnchor == null) {
-                fontChangeAnchor = captureFirstVisibleAnchor();
+                fontChangeAnchor = captureFineAnchor() ?? captureFirstVisibleAnchor();
             }
             fontSize = parseInt(size);
             const label = document.getElementById('font-size-label');
@@ -2371,10 +2510,13 @@
             // Recompute the time-remaining baselines so the real-time
             // countdown in updateReadingSpeedUI starts from the freshly
             // updated estimate (incorporating the sample we just recorded).
+            // currentEpubPage is 0-indexed, so (end - currentEpubPage) counts
+            // the current page plus all following pages — meaning the last page
+            // of a chapter/book shows its full avg time, not 0:00.
             const avgMs  = _avgMs();
             const avgSec = avgMs != null ? avgMs / 1000 : null;
             if (avgSec != null) {
-                _pageStartBookRemainSec = Math.max(0, totalPages - (currentEpubPage + 1)) * avgSec;
+                _pageStartBookRemainSec = Math.max(0, totalPages - currentEpubPage) * avgSec;
                 if (chapterStarts && chapterStarts.length > 0) {
                     let idx = 0;
                     for (let i = 0; i < chapterStarts.length; i++) {
@@ -2383,7 +2525,7 @@
                     }
                     const next  = chapterStarts[idx + 1];
                     const chEnd = next ? next.page : totalPages;
-                    _pageStartChRemainSec = Math.max(0, chEnd - (currentEpubPage + 1)) * avgSec;
+                    _pageStartChRemainSec = Math.max(0, chEnd - currentEpubPage) * avgSec;
                 } else {
                     _pageStartChRemainSec = null;
                 }
@@ -2510,7 +2652,8 @@
             if (_pageStartBookRemainSec != null && pageSecNow < _pageStartBookRemainSec) {
                 bookRemain = _pageStartBookRemainSec - pageSecNow;
             } else if (avgSec != null) {
-                bookRemain = Math.max(0, totalPages - (currentEpubPage + 1)) * avgSec;
+                // Include the current page in the estimate (currentEpubPage is 0-indexed).
+                bookRemain = Math.max(0, totalPages - currentEpubPage) * avgSec;
             }
 
             if (_pageStartChRemainSec != null && pageSecNow < _pageStartChRemainSec) {
@@ -2518,6 +2661,8 @@
             } else if (avgSec != null && chapterStarts && chapterStarts.length > 0) {
                 // Chapter remaining — mirrors the chapter-derivation logic in
                 // updateProgress(). Skipped when no chapter map is available.
+                // Include the current page so the last page of a chapter shows
+                // its full avg time rather than 0:00.
                 let idx = 0;
                 for (let i = 0; i < chapterStarts.length; i++) {
                     if (chapterStarts[i].page <= currentEpubPage) idx = i;
@@ -2525,7 +2670,7 @@
                 }
                 const next  = chapterStarts[idx + 1];
                 const chEnd = next ? next.page : totalPages;
-                chRemain = Math.max(0, chEnd - (currentEpubPage + 1)) * avgSec;
+                chRemain = Math.max(0, chEnd - currentEpubPage) * avgSec;
             }
 
             document.getElementById('metric-chapter-remain').textContent =
@@ -3339,7 +3484,7 @@
             try { localStorage.setItem(HYPHEN_KEY, on ? '1' : '0'); } catch (e) {}
             updateHyphenButtons();
             // Hyphenation changes line breaks → must re-paginate.
-            if (fontChangeAnchor == null) fontChangeAnchor = captureFirstVisibleAnchor();
+            if (fontChangeAnchor == null) fontChangeAnchor = captureFineAnchor() ?? captureFirstVisibleAnchor();
             applyReaderPrefs();
             scheduleFontReflow();
         }
@@ -3348,7 +3493,7 @@
             fontFamilyPref = value;
             try { localStorage.setItem(FFAMILY_KEY, value); } catch (e) {}
             // Font change definitely re-flows.
-            if (fontChangeAnchor == null) fontChangeAnchor = captureFirstVisibleAnchor();
+            if (fontChangeAnchor == null) fontChangeAnchor = captureFineAnchor() ?? captureFirstVisibleAnchor();
             applyReaderPrefs();
             scheduleFontReflow();
         }
@@ -3578,14 +3723,22 @@
                 // server-assigned one (the visual paint is unaffected).
                 const tmpRange = _hlRanges.get(tmpId);
                 if (tmpRange) {
+                    // Clear native ::selection BEFORE restoring the CSS Highlight
+                    // so the two don't stack on the same text. Both ::selection
+                    // and ::highlight() paint the same region but at slightly
+                    // different heights (different leading/metrics), producing
+                    // the janky "double band" the user sees.
+                    try { window.getSelection().removeAllRanges(); } catch (_) {}
                     _hlRanges.delete(tmpId);
                     _hlRanges.set(saved.id, tmpRange);
                     _rebuildCSSHL();
                 }
-                // Show the popup and custom drag handles over the saved
-                // highlight so the user can immediately drag endpoints.
+                // Show the popup + our custom drag-handle circles (the blue
+                // dots at start/end). The popup auto-dismisses after 2 s via
+                // _scheduleHLFade(), which also fades the handles.
                 if (_hlRanges.has(saved.id)) {
                     showHLPopup(saved.id);
+                    _showHLHandles(saved.id);
                 }
             } catch (e) {
                 unwrapHL(tmpId);
@@ -3631,15 +3784,16 @@
             _positionHLHandles(hlId);
             const hs = document.getElementById('hl-handle-start');
             const he = document.getElementById('hl-handle-end');
-            if (hs) hs.style.display = 'block';
-            if (he) he.style.display = 'block';
+            // Reset opacity so a previous fade-out doesn't leave them invisible.
+            if (hs) { hs.style.opacity = '1'; hs.style.display = 'block'; }
+            if (he) { he.style.opacity = '1'; he.style.display = 'block'; }
         }
 
         function _hideHLHandles() {
             const hs = document.getElementById('hl-handle-start');
             const he = document.getElementById('hl-handle-end');
-            if (hs) hs.style.display = 'none';
-            if (he) he.style.display = 'none';
+            if (hs) { hs.style.display = 'none'; hs.style.opacity = '1'; }
+            if (he) { he.style.display = 'none'; he.style.opacity = '1'; }
         }
 
         // Called by showHLPopup() and after a new highlight is saved.
@@ -3911,7 +4065,12 @@
             _hlPopupTimer = setTimeout(() => {
                 const popup = document.getElementById('hl-popup');
                 if (!popup) return;
+                // Fade popup and handles together over 0.4s.
                 popup.style.opacity = '0';
+                const hs = document.getElementById('hl-handle-start');
+                const he = document.getElementById('hl-handle-end');
+                if (hs) hs.style.opacity = '0';
+                if (he) he.style.opacity = '0';
                 // Wait for the CSS transition to finish before hiding.
                 setTimeout(() => {
                     if (popup.style.opacity === '0') hideHLPopup();
@@ -3947,13 +4106,11 @@
             // handleSelectionMaybe makes that re-selection replace this
             // highlight instead of duplicating it, regardless of timing.
             //
-            // NOTE: we deliberately do NOT clear window.getSelection() here.
-            // When this popup is shown immediately after a fresh highlight
-            // save, the native selection is still alive — leaving it intact
-            // keeps the OS-native handles + magnifier visible so the user
-            // can fine-tune the boundaries with the proper native lens.
-            // When the popup is shown by tapping an existing highlight, no
-            // native selection exists in the first place, so nothing to clear.
+            // From the fresh-save path, selection is already cleared before
+            // this call so ::selection doesn't stack with the CSS Highlight.
+            // From tap-existing, no selection exists. Either way, a clear here
+            // is a safe no-op guard against any stale native selection.
+            try { window.getSelection().removeAllRanges(); } catch (_) {}
             _editingHLId = hlId;
             _rebuildCSSHL();
         }
@@ -4422,13 +4579,19 @@
             // Toggle is a no-op when fold is closed — the button is also
             // visually disabled, but be defensive in case it's tapped via a11y.
             if (!isFoldOpen()) return;
+            // Capture BEFORE flipping the body class. The class toggle
+            // activates .dual-page-chapter-spacer { display:block } which
+            // reflows the DOM; capturing after would read element rects
+            // against a layout that no longer matches the columnStride we
+            // pair them with.
+            const preset = captureFineAnchor() ?? captureFirstVisibleAnchor();
             dualPagePref = !dualPagePref;
             isDualPage = dualPagePref; // fold is open, so effective == pref
             document.body.classList.toggle('dual-page', isDualPage);
             updateDualPageButton();
             try { localStorage.setItem(DUAL_PAGE_KEY, dualPagePref ? '1' : '0'); } catch (e) {}
             // Re-paginate: column geometry actually changed.
-            calculatePages(true);
+            calculatePages(true, preset);
         }
 
         // Recompute the effective dual-page state from (dualPagePref, isFoldOpen).
@@ -4450,13 +4613,29 @@
         // (posture change + final size) so we wait for things to settle.
         let _resizeTimer = null;
         function scheduleRepaginate() {
+            // Hide content immediately so the user doesn't see it sitting at
+            // translateX(-oldPage * oldStride) inside the already-reflowed
+            // viewport during the 200 ms debounce + 50 ms calculatePages
+            // setTimeout. Restored by renderEpubPage() once the new
+            // translateX is in effect. EPUB only — PDFs use a different
+            // element and never hit this path.
+            if (format.toLowerCase() === 'epub') {
+                const content = document.getElementById('epub-content');
+                if (content) content.style.visibility = 'hidden';
+            }
             clearTimeout(_resizeTimer);
             _resizeTimer = setTimeout(() => {
                 if (format.toLowerCase() !== 'epub') return;
                 checkDualPageMode();
                 // Always recalc: width may have changed even if dual-page state didn't.
                 if (document.getElementById('epub-content')) {
-                    calculatePages(true);
+                    // Pass the anchor we captured at the last render. By the
+                    // time this fires, the WebView has already reflowed to the
+                    // new viewport, so columnStride no longer matches the DOM —
+                    // captureFirstVisibleAnchor() called now would return a
+                    // wrong index. The stored value was captured when the two
+                    // were still consistent.
+                    calculatePages(true, _lastRenderedAnchor);
                 }
             }, 200);
         }

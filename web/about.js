@@ -135,8 +135,12 @@ Reject the sample if  |M| &gt; 3.5</div>
         <h3>Derived metrics</h3>
         <div class="formula">WPM           = 60000 / msPerWord
 avg sec/page  = msPerWord × words-per-page  (or raw mean ms)
-book remain   = (totalPages − currentPage) × avg
-chapter remain = (chapterEnd − currentPage) × avg</div>
+book remain   = (totalPages − pageIndex) × avg
+chapter remain = (chapterEnd − pageIndex) × avg</div>
+        <p><code>pageIndex</code> is 0-based, so both formulas count the
+        page you are currently reading plus every page that follows —
+        meaning the last page of a chapter still shows its full average
+        reading time rather than 0:00.</p>
         <p>The chapter / book countdowns are recomputed once per page
         turn (using the freshly-updated average) and then tick down in
         real time off the per-page timer, so the seconds you actually

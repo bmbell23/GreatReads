@@ -1177,9 +1177,46 @@
             closeSettings();
         }
         // Auto-save the toggle the instant it's flipped (no need to hit Save for that)
+        // and apply it immediately so the user sees the effect without having to
+        // open a book first.
         document.getElementById('setting-keep-awake').addEventListener('change', (e) => {
             localStorage.setItem(KEEP_AWAKE_KEY, e.target.checked ? '1' : '0');
+            applyWakeLock();
         });
+
+        // ---------- Screen wake lock ----------
+        // Mirrors the logic in reader.html so the library page also honours the
+        // "Keep screen awake" toggle — otherwise the screen sleeps while the
+        // user is browsing for their next book, even with the setting on. See
+        // reader.html for the longer comment on why the Android bridge is the
+        // only reliable path inside the WebView.
+        let _wakeLock = null;
+        async function applyWakeLock() {
+            const want = localStorage.getItem(KEEP_AWAKE_KEY) === '1';
+            if (!want) { releaseWakeLock(); return; }
+            if (window.Android && typeof window.Android.keepScreenOn === 'function') {
+                try { window.Android.keepScreenOn(true); return; } catch (_) {}
+            }
+            if ('wakeLock' in navigator) {
+                try {
+                    if (!_wakeLock || _wakeLock.released) {
+                        _wakeLock = await navigator.wakeLock.request('screen');
+                    }
+                } catch (_) {}
+            }
+        }
+        function releaseWakeLock() {
+            if (_wakeLock && !_wakeLock.released) { try { _wakeLock.release(); } catch (_) {} }
+            _wakeLock = null;
+            if (window.Android && typeof window.Android.keepScreenOn === 'function') {
+                try { window.Android.keepScreenOn(false); } catch (_) {}
+            }
+        }
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible') applyWakeLock();
+        });
+        document.addEventListener('touchstart', () => { applyWakeLock(); }, { passive: true });
+        applyWakeLock();
 
         // ---------- Highlights & Bookmarks open/close ----------
         // Two entry points drive the same overlay, grouped by book, searchable.
