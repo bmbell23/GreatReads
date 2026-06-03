@@ -537,6 +537,20 @@
             padding: 3px 6px;
             border-radius: 8px;
         }
+        /* Series sequence number on a book card (series detail overlay only).
+           bottom is set inline so it clears any progress bars below it. */
+        .book-seriesnum {
+            position: absolute;
+            left: 4px;
+            background: rgba(0,0,0,0.78);
+            color: #fff;
+            font-size: 12px;
+            font-weight: 700;
+            line-height: 1;
+            padding: 3px 7px;
+            border-radius: 8px;
+            pointer-events: none;
+        }
         .setting-section {
             font-size: 11px; font-weight: 700; letter-spacing: 1px;
             text-transform: uppercase; color: #888;
@@ -1090,7 +1104,9 @@
         const ICON_AUDIO = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#FF6600"/><path d="M1.8 7 A3.7 4.5 0 0 1 9.2 7" stroke="white" stroke-width="1.3" fill="none" stroke-linecap="round"/><rect x="1.2" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/><rect x="8.3" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/></svg>';
 
         // One book card. Reused by the main grid and the series detail overlay.
-        function bookCardHTML(book) {
+        // opts.showSeriesNum renders the series sequence number (series view).
+        function bookCardHTML(book, opts) {
+            opts = opts || {};
             const format = ((book.formats || [])[0] || 'epub').toLowerCase();
             const coverUrl = book.cover || book.thumbnail;
             const state = readingStateFor(book.id);
@@ -1114,6 +1130,14 @@
             // Format dots (top-right): one colored circle per available format,
             // side by side when dual — blue for ebook, orange for audio.
             const fmtDots = `<div class="book-fmt-dots">${hasEbook ? '<div class="book-fmt-dot ebook"></div>' : ''}${hasAudio ? '<div class="book-fmt-dot audio"></div>' : ''}</div>`;
+            // Series sequence number, bottom-left, lifted above any progress bars.
+            const sIdx = Number(book.series_index);
+            let seriesNum = '';
+            if (opts.showSeriesNum && sIdx > 0) {
+                const barH = barParts.length ? (barParts.length * 3 + (barParts.length - 1) * 2) : 0;
+                const bottom = barParts.length ? (4 + barH + 3) : 4;
+                seriesNum = `<div class="book-seriesnum" style="bottom:${bottom}px">#${String(sIdx)}</div>`;
+            }
             return `
                 <div class="book" data-book-id="${book.id}"
                      data-book-title="${escapeHTML(book.title)}"
@@ -1128,6 +1152,7 @@
                              onerror="this.style.background='linear-gradient(135deg, #667eea 0%, #764ba2 100%)'">
                         ${badges}
                         ${fmtDots}
+                        ${seriesNum}
                         ${progressBar}
                     </div>
                     <div class="book-title">${escapeHTML(book.title)}</div>
@@ -1151,7 +1176,7 @@
             }
 
             const sorted = applySort(applyFilter(books));
-            const booksHTML = sorted.map(bookCardHTML).join('');
+            const booksHTML = sorted.map(b => bookCardHTML(b)).join('');
 
             content.innerHTML = '<div class="books">' + booksHTML + '</div>' +
                 (!isComplete ? '<div class="loading-more">Loading more...</div>' : '');
@@ -1243,7 +1268,7 @@
             document.getElementById('series-detail-title').textContent = s.name;
             const books = applyFilter(s.books);
             document.getElementById('series-detail-list').innerHTML =
-                '<div class="books">' + books.map(bookCardHTML).join('') + '</div>';
+                '<div class="books">' + books.map(b => bookCardHTML(b, {showSeriesNum: true})).join('') + '</div>';
             document.getElementById('series-overlay').classList.add('open');
             document.querySelectorAll('#series-detail-list .book-cover[data-src]').forEach(loadCover);
         }

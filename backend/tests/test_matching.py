@@ -86,6 +86,95 @@ class TestNormalizeAbsItem(unittest.TestCase):
         n = server.normalize_abs_item(self._raw('(Unabridged)'))
         self.assertEqual(n['title'], '(Unabridged)')
 
+    def test_series_name_sequence_split(self):
+        # ABS bakes the sequence into seriesName; it must split into a clean
+        # base series + numeric series_index so books group correctly.
+        raw = {'id': 'x1', 'mediaType': 'book', 'media': {'metadata': {
+            'title': 'A Storm of Swords', 'authorName': 'A',
+            'seriesName': 'A Song of Ice and Fire #3'}}}
+        n = server.normalize_abs_item(raw)
+        self.assertEqual(n['series'], 'A Song of Ice and Fire')
+        self.assertEqual(n['series_index'], 3.0)
+
+    def test_series_decimal_sequence_split(self):
+        raw = {'id': 'x1', 'mediaType': 'book', 'media': {'metadata': {
+            'title': 'Last Call', 'authorName': 'A',
+            'seriesName': 'Dresden Files #10.4'}}}
+        n = server.normalize_abs_item(raw)
+        self.assertEqual(n['series'], 'Dresden Files')
+        self.assertEqual(n['series_index'], 10.4)
+
+
+class TestSplitAbsSeries(unittest.TestCase):
+    def test_strips_trailing_int_marker(self):
+        self.assertEqual(server._split_abs_series('Dungeon Crawler Carl #8'),
+                         ('Dungeon Crawler Carl', 8.0))
+
+    def test_strips_trailing_decimal_marker(self):
+        self.assertEqual(server._split_abs_series('Dresden Files #5.1'),
+                         ('Dresden Files', 5.1))
+
+    def test_no_marker_returns_name_and_none(self):
+        self.assertEqual(server._split_abs_series('Mistborn'), ('Mistborn', None))
+
+    def test_handles_none(self):
+        self.assertEqual(server._split_abs_series(None), ('', None))
+
+
+class TestSeriesSortKey(unittest.TestCase):
+    def test_unnumbered_sorts_before_zero_and_negatives(self):
+        books = [
+            {'series_index': 2, 'title': 'B'},
+            {'series_index': 0, 'title': 'Zero'},
+            {'series_index': None, 'title': 'Companion'},
+            {'series_index': -1, 'title': 'Prequel'},
+            {'series_index': 1, 'title': 'A'},
+        ]
+        ordered = [b['title'] for b in sorted(books, key=server._series_sort_key)]
+        self.assertEqual(ordered, ['Companion', 'Prequel', 'Zero', 'A', 'B'])
+
+    def test_title_tiebreak_within_same_index(self):
+        books = [{'series_index': 1, 'title': 'Beta'},
+                 {'series_index': 1, 'title': 'Alpha'}]
+        ordered = [b['title'] for b in sorted(books, key=server._series_sort_key)]
+        self.assertEqual(ordered, ['Alpha', 'Beta'])
+
+
+class TestApplySeriesOverride(unittest.TestCase):
+    def setUp(self):
+        self._orig = server._load_series_overrides
+
+    def tearDown(self):
+        server._load_series_overrides = self._orig
+
+    def _patch(self, mapping):
+        server._load_series_overrides = lambda: mapping
+
+    def test_null_marks_numberless(self):
+        self._patch({'681': {'series_index': None}})
+        b = server._apply_series_override({'id': '681', 'series_index': 1.0})
+        self.assertIsNone(b['series_index'])
+
+    def test_shorthand_null(self):
+        self._patch({'681': None})
+        b = server._apply_series_override({'id': '681', 'series_index': 1.0})
+        self.assertIsNone(b['series_index'])
+
+    def test_force_number(self):
+        self._patch({'9': 3})
+        b = server._apply_series_override({'id': '9', 'series_index': 1.0})
+        self.assertEqual(b['series_index'], 3)
+
+    def test_force_series_and_index(self):
+        self._patch({'9': {'series': 'X', 'series_index': 2}})
+        b = server._apply_series_override({'id': '9', 'series': 'Old', 'series_index': 1})
+        self.assertEqual((b['series'], b['series_index']), ('X', 2))
+
+    def test_absent_key_is_noop(self):
+        self._patch({'681': None})
+        b = server._apply_series_override({'id': '42', 'series_index': 5})
+        self.assertEqual(b['series_index'], 5)
+
 
 def _abs(absId='a1', title='T', isbn='', asin='', author='', authors=None):
     return {'absId': absId, 'title': title, 'isbn': isbn, 'asin': asin,

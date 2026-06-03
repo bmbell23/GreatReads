@@ -83,6 +83,20 @@ REQUEST_STATUSES = ('Backlog', 'Requested', 'In Progress', 'Done')
 LINKS_FILE = os.path.join(DATA_DIR, 'links.json')
 _links_lock = threading.Lock()
 
+# Per-book series overrides for cases Calibre/ABS can't express and we can't
+# write back to (read-only sources). Optional — absent file means "no
+# overrides". Keyed by bookId (Calibre numeric id as string, or "abs:<id>").
+# Value shapes:
+#   "681": {"series_index": null}      -> numberless: sorts first, no badge
+#   "681": {"series": "X", "series_index": 2}  -> force both
+#   "681": 2                            -> force just the index
+#   "681": null                         -> numberless (shorthand)
+# mtime-cached so a hand-edit is picked up without a restart, but we don't
+# re-read the file on every get_book_metadata call.
+SERIES_OVERRIDES_FILE = os.path.join(DATA_DIR, 'series_overrides.json')
+_series_overrides_lock = threading.Lock()
+_series_overrides_cache = {'mtime': None, 'data': {}}
+
 def _normalize_sections(raw):
     """Coerce a client-supplied `sections` value into the on-disk shape:
     list of {id, title, body}. Drops malformed entries silently rather than
@@ -288,7 +302,7 @@ def get_book_metadata(book_id):
         except (AttributeError, TypeError):
             pass
 
-        return {
+        return _apply_series_override({
             'id': str(book_id),
             'title': book.get('title', 'Unknown'),
             'authors': authors,
@@ -307,7 +321,7 @@ def get_book_metadata(book_id):
             'published': book.get('pubdate', ''),
             'rating': book.get('rating', 0),
             'wordCount': word_count,
-        }
+        })
     except Exception as e:
         print(f"Error fetching book {book_id}: {e}")
         return None
@@ -421,17 +435,24 @@ def normalize_abs_item(raw):
         if not authors:
             authors = ['Unknown']
 
-        # series: [{name,sequence}] (expanded) or seriesName (minified)
+        # series: [{name,sequence}] (expanded) or seriesName (minified). ABS
+        # commonly bakes the sequence into the name itself ("Dresden Files
+        # #10.4"); _split_abs_series peels it off so audio-only items group
+        # under the same base series as their Calibre ebook counterparts.
         series, series_index = '', 0
         if isinstance(meta.get('series'), list) and meta['series']:
             s0 = meta['series'][0]
-            series = s0.get('name', '') or ''
+            series, seq_from_name = _split_abs_series(s0.get('name', '') or '')
             try:
                 series_index = float(s0.get('sequence') or 0)
             except (TypeError, ValueError):
                 series_index = 0
+            if not series_index and seq_from_name is not None:
+                series_index = seq_from_name
         elif meta.get('seriesName'):
-            series = meta['seriesName']
+            series, seq_from_name = _split_abs_series(meta['seriesName'])
+            if seq_from_name is not None:
+                series_index = seq_from_name
 
         narrators = meta.get('narrators') or []
         if not narrators and meta.get('narratorName'):
@@ -444,7 +465,7 @@ def normalize_abs_item(raw):
         # multi-part sets whose part marker sits inside parentheses.
         clean_title = re.sub(r'\s+', ' ', _strip_edition(raw_title)).strip() or raw_title
 
-        return {
+        return _apply_series_override({
             'id': f'abs:{abs_id}',
             'absId': abs_id,
             'title': clean_title,
@@ -472,7 +493,7 @@ def normalize_abs_item(raw):
                 'duration': media.get('duration'),
                 'chapters': media.get('chapters') or [],
             },
-        }
+        })
     except Exception as e:
         print(f"⚠️  normalize_abs_item failed: {e}")
         return None
@@ -579,6 +600,28 @@ def _strip_edition(s):
     s = re.sub(r'^\s*\d+\s*[-.]\s+', '', s)
     return s
 
+# A trailing sequence baked into an ABS series name: "Dresden Files #10.4",
+# "A Song of Ice and Fire #3", "Dungeon Crawler Carl #8". ABS's minified
+# `seriesName` joins the series name and sequence into one string (with no
+# separate sequence number), which would otherwise make every book its own
+# one-book "series". Captures the numeric (int or decimal) sequence.
+_SERIES_SEQ_RE = re.compile(r'\s*#(\d+(?:\.\d+)?)\s*$')
+
+def _split_abs_series(name):
+    """Split an ABS series string into (base_name, sequence_or_None). Strips a
+    trailing '#N' / '#N.N' so audio-only items group under the same series as
+    their Calibre ebook counterparts. Returns (name, None) when no marker."""
+    name = (name or '').strip()
+    m = _SERIES_SEQ_RE.search(name)
+    if not m:
+        return name, None
+    base = name[:m.start()].strip()
+    try:
+        seq = float(m.group(1))
+    except (TypeError, ValueError):
+        seq = None
+    return (base or name), seq
+
 def _first_author(item):
     """First author, comma-split so an ABS comma-joined authorName
     ('Robert Jordan, Brandon Sanderson') reduces to the lead author. Calibre's
@@ -629,6 +672,42 @@ def _load_links():
     except Exception as e:
         print(f"⚠️  Could not load links: {e}")
         return {}
+
+def _load_series_overrides():
+    """Per-book series overrides from disk, mtime-cached. {} when absent."""
+    try:
+        mtime = os.stat(SERIES_OVERRIDES_FILE).st_mtime
+    except OSError:
+        _series_overrides_cache['mtime'], _series_overrides_cache['data'] = None, {}
+        return {}
+    if _series_overrides_cache['mtime'] != mtime:
+        try:
+            with _series_overrides_lock, open(SERIES_OVERRIDES_FILE) as f:
+                d = json.load(f)
+            _series_overrides_cache['data'] = d if isinstance(d, dict) else {}
+        except Exception as e:
+            print(f"⚠️  Could not load series overrides: {e}")
+            _series_overrides_cache['data'] = {}
+        _series_overrides_cache['mtime'] = mtime
+    return _series_overrides_cache['data']
+
+def _apply_series_override(book):
+    """Apply any per-book series override in place, then return the book. A
+    null/None series_index marks the book as 'in the series but unnumbered'
+    (sorts ahead of every numbered book and shows no badge)."""
+    overrides = _load_series_overrides()
+    key = str(book.get('id'))
+    if key not in overrides:
+        return book
+    ov = overrides[key]
+    if isinstance(ov, dict):
+        if 'series' in ov:
+            book['series'] = ov['series'] or ''
+        if 'series_index' in ov:
+            book['series_index'] = ov['series_index']
+    else:
+        book['series_index'] = ov
+    return book
 
 def _normalize_links(raw):
     """Coerce the three accepted on-disk shapes (str / list / {editions:[...]})
@@ -1046,6 +1125,13 @@ _SERIES_BOOK_FIELDS = ('id', 'title', 'author', 'authors', 'cover', 'thumbnail',
 def _series_book(b):
     return {k: b.get(k) for k in _SERIES_BOOK_FIELDS if k in b}
 
+def _series_sort_key(book):
+    """Order books within a series: unnumbered (series_index is None) first —
+    ahead of 0 and negatives — then by numeric index ascending, then title."""
+    idx = book.get('series_index')
+    numbered = idx is not None
+    return (numbered, idx if numbered else 0, book.get('title') or '')
+
 @app.route('/api/series', methods=['GET'])
 def api_series():
     """Group the full merged library into series. Reuses the full-library match
@@ -1071,8 +1157,7 @@ def api_series():
 
     out = []
     for g in groups.values():
-        books = sorted(g['books'],
-                       key=lambda x: (x.get('series_index') or 0, x.get('title') or ''))
+        books = sorted(g['books'], key=_series_sort_key)
         mts = set()
         for x in books:
             mts.update(x.get('mediaTypes') or [])
