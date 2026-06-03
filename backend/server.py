@@ -437,10 +437,18 @@ def normalize_abs_item(raw):
         if not narrators and meta.get('narratorName'):
             narrators = [meta['narratorName']]
 
+        raw_title = meta.get('title') or 'Unknown'
+        # Strip edition/format markers for display (Unabridged, Dramatized
+        # Adaptation, Part N of M, leading track numbers, etc.).  The raw
+        # title is preserved in _rawTitle so _group_editions can still detect
+        # multi-part sets whose part marker sits inside parentheses.
+        clean_title = re.sub(r'\s+', ' ', _strip_edition(raw_title)).strip() or raw_title
+
         return {
             'id': f'abs:{abs_id}',
             'absId': abs_id,
-            'title': meta.get('title') or 'Unknown',
+            'title': clean_title,
+            '_rawTitle': raw_title,
             'authors': authors,
             'author': ', '.join(authors),
             'publisher': meta.get('publisher') or '',
@@ -541,8 +549,24 @@ def _norm(s):
     return re.sub(r'\s+', ' ', s).strip()
 
 def _norm_author(name):
-    """Normalize an author name; collapses initials ('J.R.R.' -> 'jrr')."""
-    return _norm(re.sub(r'\.(?=\S)', '', name or ''))
+    """Normalize an author name so that spaced and unspaced initial formats
+    compare equal: 'J. R. R. Tolkien' and 'J.R.R. Tolkien' both → 'jrr tolkien';
+    'George R. R. Martin' and 'George R.R. Martin' both → 'george rr martin'."""
+    s = _norm(re.sub(r'\.(?=\S)', '', name or ''))
+    # Collapse consecutive single-letter words (spaced initials) into one token.
+    words = s.split()
+    out, buf = [], []
+    for w in words:
+        if len(w) == 1:
+            buf.append(w)
+        else:
+            if buf:
+                out.append(''.join(buf))
+                buf = []
+            out.append(w)
+    if buf:
+        out.append(''.join(buf))
+    return ' '.join(out)
 
 def _strip_edition(s):
     """Drop edition/format markers that differ between an ebook and its
@@ -687,9 +711,10 @@ def _group_editions(abs_items, links_norm):
     for a in abs_items:
         if a['absId'] in used:
             continue
-        idx, tot = _parse_part(a['title'])
+        raw_t = a.get('_rawTitle', a['title'])
+        idx, tot = _parse_part(raw_t)
         if idx and tot and tot > 1:
-            base = _norm(_strip_edition(_strip_part(a['title'].split(':')[0])))
+            base = _norm(_strip_edition(_strip_part(raw_t.split(':')[0])))
             key = (base, _norm_author(_first_author(a)), _kind_of(a), tot)
             groups[key].append((idx, a))
         else:

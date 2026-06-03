@@ -24,6 +24,19 @@ class TestNormalization(unittest.TestCase):
     def test_norm_author_collapses_initials(self):
         self.assertEqual(server._norm_author('J.R.R. Tolkien'), 'jrr tolkien')
 
+    def test_norm_author_spaced_initials_equal_unspaced(self):
+        # ABS stores "J. R. R. Tolkien"; Calibre stores "J.R.R. Tolkien".
+        # Both must normalise to the same key so the title+author match succeeds.
+        self.assertEqual(
+            server._norm_author('J. R. R. Tolkien'),
+            server._norm_author('J.R.R. Tolkien'),
+        )
+        # Same for "George R. R. Martin" (Calibre) vs "George R.R. Martin" (ABS).
+        self.assertEqual(
+            server._norm_author('George R. R. Martin'),
+            server._norm_author('George R.R. Martin'),
+        )
+
 
 class TestStripEdition(unittest.TestCase):
     CASES = [
@@ -55,6 +68,23 @@ class TestFirstAuthor(unittest.TestCase):
 
     def test_empty_item(self):
         self.assertEqual(server._first_author({}), '')
+
+
+class TestNormalizeAbsItem(unittest.TestCase):
+    @staticmethod
+    def _raw(title):
+        return {'id': 'x1', 'mediaType': 'book',
+                'media': {'metadata': {'title': title, 'authorName': 'A'}}}
+
+    def test_strips_unabridged_from_display_title(self):
+        n = server.normalize_abs_item(self._raw('A Storm of Swords (Unabridged)'))
+        self.assertEqual(n['title'], 'A Storm of Swords')
+        self.assertEqual(n['_rawTitle'], 'A Storm of Swords (Unabridged)')
+
+    def test_clean_title_never_empty(self):
+        # Pathological all-marker title falls back to the raw title.
+        n = server.normalize_abs_item(self._raw('(Unabridged)'))
+        self.assertEqual(n['title'], '(Unabridged)')
 
 
 def _abs(absId='a1', title='T', isbn='', asin='', author='', authors=None):
