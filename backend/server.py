@@ -324,6 +324,22 @@ def get_book_metadata(book_id):
 # runtime). Reset only on process restart.
 _abs_cache = {'library_id': None}
 
+# --- Full-library match cache -----------------------------------------------
+# /api/library used to run match_works() on a single Calibre page at a time,
+# which caused two problems: (1) audiobooks whose ebook was on a later page
+# appeared as bogus "audio-only" duplicates on page 0, and (2) audio-only items
+# (e.g. newly downloaded books with no Calibre ebook yet) were missed entirely
+# because the consumed set was built from the wrong slice.
+# Fix: run the full Calibre×ABS match once, cache the result, then serve each
+# page by looking up Calibre books in the pre-built enrichment map.
+_library_cache_lock = threading.Lock()
+_library_cache: dict = {
+    'enrich_map': None,   # {str(calibre_id): merged_item} for ebook items
+    'audio_only': None,   # [merged_item] for ABS items with no Calibre match
+    'ts': 0.0,
+}
+_LIBRARY_CACHE_TTL = 120  # seconds — rebuilt when new books are detected
+
 def _abs_headers():
     return {'Authorization': f'Bearer {ABS_TOKEN}'}
 
@@ -470,6 +486,49 @@ def get_abs_items(limit=None, offset=0):
         if n:
             out.append(n)
     return out
+
+def _get_library_cache():
+    """Return (enrich_map, audio_only) for the full Calibre×ABS merge.
+
+    enrich_map   — {str(calibre_id): merged_item} for every Calibre book that
+                   matched an ABS edition (mediaTypes includes 'ebook').
+    audio_only   — list of merged items that are ABS-only (no Calibre ebook).
+
+    The match runs against ALL Calibre books (not just one page), so the
+    consumed set is complete and no ebook-backed audiobook leaks into the
+    audio-only list.  Rebuilt at most every _LIBRARY_CACHE_TTL seconds.
+    """
+    with _library_cache_lock:
+        now = time.time()
+        if (_library_cache['enrich_map'] is not None
+                and now - _library_cache['ts'] < _LIBRARY_CACHE_TTL):
+            return _library_cache['enrich_map'], _library_cache['audio_only']
+
+        # Cache miss: fetch everything and run the full merge once.
+        all_books, _ = get_calibre_books(limit=0, offset=0)
+        abs_items = get_abs_items() if ABS_ENABLED else []
+        if abs_items:
+            merged = match_works(all_books, abs_items, include_audio_only=True)
+        else:
+            for b in all_books:
+                b.setdefault('mediaTypes', ['ebook'])
+            merged = all_books
+
+        enrich_map = {
+            str(m['id']): m
+            for m in merged
+            if 'ebook' in (m.get('mediaTypes') or [])
+        }
+        audio_only = [
+            m for m in merged
+            if (m.get('mediaTypes') or []) == ['audiobook']
+        ]
+
+        _library_cache.update(enrich_map=enrich_map, audio_only=audio_only, ts=now)
+        print(f"Library cache built: {len(enrich_map)} ebook works "
+              f"({sum(1 for m in enrich_map.values() if 'audiobook' in (m.get('mediaTypes') or []))} dual-format), "
+              f"{len(audio_only)} audio-only")
+        return enrich_map, audio_only
 
 # --- matching helpers -------------------------------------------------------
 
@@ -883,19 +942,37 @@ def unified_library():
     existing progress/highlight/cache keys still resolve); audio-only items use
     abs:{absId}. Degrades to the exact Calibre-only list when ABS is off or
     down. Audio-only items are appended only on the first page (offset 0) so
-    they aren't repeated across paginated requests."""
+    they aren't repeated across paginated requests.
+
+    For regular browsing (no query): matching is pre-computed against the full
+    Calibre library (_get_library_cache) so every dual-format work is correctly
+    identified regardless of which Calibre page its ebook lives on, and only
+    truly unmatched ABS items appear as audio-only.
+
+    For text searches (query param): Calibre paginates the filtered result set
+    and we run a one-shot match against that slice (no audio-only appended,
+    since text search doesn't cover ABS metadata)."""
     limit = request.args.get('limit', type=int)
     offset = request.args.get('offset', default=0, type=int)
     query = request.args.get('query')
 
     books, total = get_calibre_books(limit=limit, offset=offset, query=query)
 
-    abs_items = get_abs_items() if ABS_ENABLED else []
-    if abs_items:
-        # Only append unmatched audio-only items on the first page; a search
-        # query also restricts to the Calibre result set's matches for now.
-        include_audio_only = (offset == 0)
-        merged = match_works(books, abs_items, include_audio_only=include_audio_only)
+    if ABS_ENABLED:
+        if query:
+            # Text search: match the filtered Calibre slice against ABS (best-
+            # effort enrichment); don't append audio-only items because ABS
+            # metadata isn't covered by the Calibre full-text search.
+            abs_items = get_abs_items()
+            merged = match_works(books, abs_items, include_audio_only=False) if abs_items else books
+        else:
+            # Regular browse: use the pre-built full-library match cache so
+            # every Calibre book is enriched with its ABS data (dual-format)
+            # and only genuinely unmatched ABS items appear as audio-only.
+            enrich_map, audio_only = _get_library_cache()
+            merged = [enrich_map.get(str(b['id']), b) for b in books]
+            if offset == 0:
+                merged.extend(audio_only)
     else:
         merged = books
 

@@ -277,6 +277,15 @@
             cursor: pointer;
             transition: transform 0.2s;
             position: relative;
+            /* THE lockup fix: without this, a long-press on the title/author text
+               puts the Android WebView into text-selection mode, which then eats
+               every subsequent tap (books stop opening) until selection clears.
+               Disabling selection + the long-press callout keeps our own JS
+               long-press menu working and leaves normal taps unaffected. */
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+            -webkit-tap-highlight-color: transparent;
         }
         .book:active {
             transform: scale(0.95);
@@ -1109,6 +1118,13 @@
         // editions) -> the format action sheet. Looks the full book up in
         // allBooks so it can read its audioEditions list.
         function onBookOpen(el) {
+            // While the long-press menu is open, ignore taps on books — the menu
+            // owns the interaction.
+            if (bookCtxMenu.classList.contains('open')) return;
+            // Swallow the synthesized click that fires right after a dismiss-tap.
+            // _menuDismissedAt is 0 until a dismiss happens; after 300 ms it no
+            // longer gates anything so genuine follow-on taps are never blocked.
+            if (Date.now() - _menuDismissedAt < 300) return;
             const id = el.dataset.bookId;
             const book = allBooks.find(b => String(b.id) === String(id)) || {
                 id,
@@ -1288,7 +1304,14 @@
         let _ctxBookId = null;
         let _ctxBookTitle = null;
         let _longPressTimer = null;
-        let _longPressFired = false;
+        // Timestamp of the most recent menu dismiss.  onBookOpen ignores clicks
+        // that arrive within 300 ms — that's enough to swallow the synthesized
+        // click that the dismiss-tap itself generates (~50–150 ms) while being
+        // short enough to never block a genuinely separate, intentional tap.
+        // A boolean flag (_suppressNextClick) got permanently stuck true when
+        // the dismiss tap landed on the backdrop (display:none by the time the
+        // click fires), so the click never reached onBookOpen to clear the flag.
+        let _menuDismissedAt = 0;
         let _longPressStart = null;
 
         function showBookCtxMenu(x, y, bookEl) {
@@ -1314,18 +1337,25 @@
             // on a stale touch sequence after the user has dismissed it.
             clearTimeout(_longPressTimer);
             _longPressTimer = null;
-            _longPressFired = false;
             _longPressStart = null;
         }
-        // Backdrop click = dismiss (more reliable than document-level capture,
-        // which can be missed when other handlers stopPropagation).
-        bookCtxBackdrop.addEventListener('click', hideBookCtxMenu);
-        bookCtxBackdrop.addEventListener('touchstart', (e) => {
-            // Prevent the touch from also reaching elements behind the
-            // backdrop (e.g. starting a new long-press on a book).
-            e.preventDefault();
+        // Dismiss on any pointer-down outside the menu. Bound at the document
+        // level in the CAPTURE phase so it runs no matter which element is hit
+        // (independent of the backdrop's stacking) and before the book's own
+        // click. A pointer-down can never leave a full-screen element covering
+        // the grid, so — unlike the old backdrop click/touchstart juggling —
+        // this design cannot wedge the UI into a locked, non-clickable state.
+        document.addEventListener('pointerdown', (e) => {
+            if (!bookCtxMenu.classList.contains('open')) return;
+            if (bookCtxMenu.contains(e.target)) return; // tap inside the menu → let the button handle it
             hideBookCtxMenu();
-        }, { passive: false });
+            // Record when we dismissed so onBookOpen can ignore the synthesized
+            // click this same touch will generate (typically fires 50–150 ms
+            // later).  A timestamp can't get permanently stuck the way a boolean
+            // flag can — it naturally expires after 300 ms regardless of whether
+            // the click event fires or not.
+            _menuDismissedAt = Date.now();
+        }, true);
         document.addEventListener('keydown', (e) => {
             if (e.key === 'Escape') hideBookCtxMenu();
         });
@@ -1339,18 +1369,16 @@
             showBookCtxMenu(e.clientX, e.clientY, bookEl);
         });
 
-        // Long-press (touch). Cancel the upcoming `click` so we don't also
-        // open the book under the user's finger.
+        // Long-press (touch) opens the menu. The book-open click that the same
+        // touch synthesizes is ignored by onBookOpen while the menu is open.
         const contentEl = document.getElementById('content');
         contentEl.addEventListener('touchstart', (e) => {
             const bookEl = e.target.closest('.book');
             if (!bookEl) return;
-            _longPressFired = false;
             const t = e.touches[0];
             _longPressStart = { x: t.clientX, y: t.clientY };
             clearTimeout(_longPressTimer);
             _longPressTimer = setTimeout(() => {
-                _longPressFired = true;
                 showBookCtxMenu(_longPressStart.x, _longPressStart.y, bookEl);
             }, 500);
         }, { passive: true });
@@ -1371,15 +1399,6 @@
             _longPressTimer = null;
             _longPressStart = null;
         }, { passive: true });
-        // Swallow the `click` that follows a long-press so the book doesn't
-        // open underneath the menu we just popped up.
-        contentEl.addEventListener('click', (e) => {
-            if (_longPressFired) {
-                _longPressFired = false;
-                e.stopPropagation();
-                e.preventDefault();
-            }
-        }, true);
 
         // In-app confirmation modal. Returns a Promise<bool>. Replaces the
         // native confirm(): on the Android WebView a native JS dialog leaves
@@ -1388,6 +1407,7 @@
         function appConfirm(message, okLabel) {
             return new Promise((resolve) => {
                 const backdrop = document.getElementById('confirm-backdrop');
+                const confirmBox = backdrop.querySelector('.confirm-box');
                 const okBtn = document.getElementById('confirm-ok');
                 const cancelBtn = document.getElementById('confirm-cancel');
                 document.getElementById('confirm-msg').textContent = message;
@@ -1400,14 +1420,23 @@
                     okBtn.removeEventListener('click', onOk);
                     cancelBtn.removeEventListener('click', onCancel);
                     backdrop.removeEventListener('click', onBackdrop);
+                    backdrop.removeEventListener('touchstart', onBackdropTouch);
                     resolve(val);
                 };
                 const onOk = () => cleanup(true);
                 const onCancel = () => cleanup(false);
-                const onBackdrop = (ev) => { if (ev.target === backdrop) cleanup(false); };
+                // Use !contains instead of target===backdrop: on mobile a tap near
+                // the box edge can report a child element as the target even though
+                // the visual hit is outside the box, causing ev.target===backdrop to
+                // be false and the modal to get permanently stuck open.
+                const onBackdrop = (ev) => { if (!confirmBox.contains(ev.target)) cleanup(false); };
+                // touchstart fires before the 300ms click synthesis — use it for a
+                // fast, reliable dismiss on Android WebView.
+                const onBackdropTouch = (ev) => { if (!confirmBox.contains(ev.target)) cleanup(false); };
                 okBtn.addEventListener('click', onOk);
                 cancelBtn.addEventListener('click', onCancel);
                 backdrop.addEventListener('click', onBackdrop);
+                backdrop.addEventListener('touchstart', onBackdropTouch, { passive: true });
                 backdrop.classList.add('open');
             });
         }

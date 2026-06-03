@@ -331,7 +331,7 @@ audio.addEventListener('durationchange', updateUI);
 function reflectPlayState() {
     const playing = !audio.paused && !audio.ended;
     const img = $('play-img');
-    img.src = playing ? 'pause.png' : 'play.png';
+    img.src = playing ? 'assets/pause.png' : 'assets/play.png';
     img.alt = playing ? 'Pause' : 'Play';
     const mini = $('ro-mini');
     if (mini) mini.textContent = playing ? '🎧 playing' : '🎧 paused';
