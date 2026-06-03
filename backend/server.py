@@ -97,6 +97,13 @@ SERIES_OVERRIDES_FILE = os.path.join(DATA_DIR, 'series_overrides.json')
 _series_overrides_lock = threading.Lock()
 _series_overrides_cache = {'mtime': None, 'data': {}}
 
+# Per-book universe (saga) overrides — lets us assign books to a saga without
+# touching the read-only Calibre/ABS sources. Keyed by bookId (str or "abs:<id>"),
+# value is the saga name string (e.g. "Maasverse"). mtime-cached same as series_overrides.
+UNIVERSE_OVERRIDES_FILE = os.path.join(DATA_DIR, 'universe_overrides.json')
+_universe_overrides_lock = threading.Lock()
+_universe_overrides_cache = {'mtime': None, 'data': {}}
+
 def _normalize_sections(raw):
     """Coerce a client-supplied `sections` value into the on-disk shape:
     list of {id, title, body}. Drops malformed entries silently rather than
@@ -302,6 +309,16 @@ def get_book_metadata(book_id):
         except (AttributeError, TypeError):
             pass
 
+        # Optional Calibre custom column "#universe" (label "Universe") — the
+        # over-arching meta-collection a book belongs to (e.g. "The Cosmere",
+        # "Realm of the Elderlings"). Powers the Saga grouping. Read the same
+        # way as #asin; stays '' when the column is unset. ABS has no equivalent.
+        universe = None
+        try:
+            universe = book.get('user_metadata', {}).get('#universe', {}).get('#value#')
+        except (AttributeError, TypeError):
+            pass
+
         return _apply_series_override({
             'id': str(book_id),
             'title': book.get('title', 'Unknown'),
@@ -318,6 +335,7 @@ def get_book_metadata(book_id):
             'description': book.get('comments', ''),
             'isbn': book.get('isbn', ''),
             'asin': asin or '',
+            'universe': universe or '',
             'published': book.get('pubdate', ''),
             'rating': book.get('rating', 0),
             'wordCount': word_count,
@@ -691,22 +709,46 @@ def _load_series_overrides():
         _series_overrides_cache['mtime'] = mtime
     return _series_overrides_cache['data']
 
+def _load_universe_overrides():
+    """Per-book universe (saga) overrides from disk, mtime-cached. {} when absent."""
+    try:
+        mtime = os.stat(UNIVERSE_OVERRIDES_FILE).st_mtime
+    except OSError:
+        _universe_overrides_cache['mtime'], _universe_overrides_cache['data'] = None, {}
+        return {}
+    if _universe_overrides_cache['mtime'] != mtime:
+        try:
+            with _universe_overrides_lock, open(UNIVERSE_OVERRIDES_FILE) as f:
+                d = json.load(f)
+            _universe_overrides_cache['data'] = d if isinstance(d, dict) else {}
+        except Exception as e:
+            print(f"⚠️  Could not load universe overrides: {e}")
+            _universe_overrides_cache['data'] = {}
+        _universe_overrides_cache['mtime'] = mtime
+    return _universe_overrides_cache['data']
+
 def _apply_series_override(book):
-    """Apply any per-book series override in place, then return the book. A
-    null/None series_index marks the book as 'in the series but unnumbered'
-    (sorts ahead of every numbered book and shows no badge)."""
-    overrides = _load_series_overrides()
+    """Apply any per-book series/universe overrides in place, then return the book.
+    A null/None series_index marks the book as 'in the series but unnumbered'
+    (sorts ahead of every numbered book and shows no badge).
+    Universe overrides assign a book to a saga without touching read-only sources."""
     key = str(book.get('id'))
-    if key not in overrides:
-        return book
-    ov = overrides[key]
-    if isinstance(ov, dict):
-        if 'series' in ov:
-            book['series'] = ov['series'] or ''
-        if 'series_index' in ov:
-            book['series_index'] = ov['series_index']
-    else:
-        book['series_index'] = ov
+
+    overrides = _load_series_overrides()
+    if key in overrides:
+        ov = overrides[key]
+        if isinstance(ov, dict):
+            if 'series' in ov:
+                book['series'] = ov['series'] or ''
+            if 'series_index' in ov:
+                book['series_index'] = ov['series_index']
+        else:
+            book['series_index'] = ov
+
+    universe_overrides = _load_universe_overrides()
+    if key in universe_overrides:
+        book['universe'] = universe_overrides[key] or ''
+
     return book
 
 def _normalize_links(raw):
@@ -1120,11 +1162,11 @@ def unified_library_item(book_id):
     book.setdefault('mediaTypes', ['ebook'])
     return jsonify(book)
 
-# Fields the series view needs per book; drops heavy ones (description,
+# Fields the series/saga views need per book; drops heavy ones (description,
 # audiobook.chapters) so the grouped payload stays lean.
 _SERIES_BOOK_FIELDS = ('id', 'title', 'author', 'authors', 'cover', 'thumbnail',
                        'mediaTypes', 'absId', 'audioEditions', 'formats',
-                       'format', 'series', 'series_index')
+                       'format', 'series', 'series_index', 'universe')
 
 def _series_book(b):
     return {k: b.get(k) for k in _SERIES_BOOK_FIELDS if k in b}
@@ -1174,6 +1216,56 @@ def api_series():
         })
     out.sort(key=lambda s: s['name'].lower())
     return jsonify({'series': out, 'absEnabled': ABS_ENABLED})
+
+def _saga_sort_key(book):
+    """Order books within a saga: group by series name, then series_index
+    (unnumbered first within a series), then title. Books with no series sort
+    last (empty series name -> after named ones via the trailing tuple)."""
+    series = (book.get('series') or '').strip().lower()
+    idx = book.get('series_index')
+    numbered = idx is not None
+    return (series == '', series, numbered, idx if numbered else 0,
+            book.get('title') or '')
+
+@app.route('/api/saga', methods=['GET'])
+def api_saga():
+    """Group the library into sagas — the Calibre #universe custom column (e.g.
+    "The Cosmere"). Calibre-only: ABS has no equivalent field, so audio-only
+    items (which carry no 'universe') are naturally excluded. Books inside a
+    saga are sorted by series, then series_index, then title, so a saga reads
+    as its constituent series in order. Books with no universe are omitted.
+    Returns {sagas:[...], absEnabled}."""
+    if ABS_ENABLED:
+        enrich_map, audio_only = _get_library_cache()
+        merged = list(enrich_map.values()) + audio_only
+    else:
+        merged, _ = get_calibre_books(limit=0, offset=0)
+        for b in merged:
+            b.setdefault('mediaTypes', ['ebook'])
+
+    groups = {}
+    for b in merged:
+        name = (b.get('universe') or '').strip()
+        if not name:
+            continue
+        g = groups.setdefault(name.lower(), {'name': name, 'books': []})
+        g['books'].append(_series_book(b))
+
+    out = []
+    for g in groups.values():
+        books = sorted(g['books'], key=_saga_sort_key)
+        mts = set()
+        for x in books:
+            mts.update(x.get('mediaTypes') or [])
+        out.append({
+            'name': g['name'],
+            'count': len(books),
+            'mediaTypes': sorted(mts),
+            'cover': books[0].get('cover') or books[0].get('thumbnail'),
+            'books': books,
+        })
+    out.sort(key=lambda s: s['name'].lower())
+    return jsonify({'sagas': out, 'absEnabled': ABS_ENABLED})
 
 @app.route('/api/audiobooks/<abs_id>/cover', methods=['GET'])
 def get_audiobook_cover(abs_id):

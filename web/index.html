@@ -620,6 +620,7 @@
                 <button class="pill active" data-sort="author">Author</button>
                 <button class="pill" data-sort="title">Title</button>
                 <button class="pill" data-sort="series">Series</button>
+                <button class="pill" data-sort="saga">Saga</button>
             </div>
             <div class="pill-group" id="fmt-pills">
                 <button class="pill active" data-fmt="all">All</button>
@@ -812,12 +813,16 @@
         const BATCH_SIZE = 50;
         let isLoading = false;
         let searchQuery = '';
-        let sortMode = 'author';      // 'author' | 'title' | 'series'
+        let sortMode = 'author';      // 'author' | 'title' | 'series' | 'saga'
         let formatFilter = 'all';   // 'all' | 'ebook' | 'audiobook' | 'dual'
         // Series view: full grouped library, fetched once from /api/series and
         // cached. null until the user first switches to Series mode.
         let seriesData = null;
         let seriesLoading = false;
+        // Saga view: same shape as series, fetched from /api/saga (Calibre
+        // #universe grouping). null until the user first switches to Saga mode.
+        let sagaData = null;
+        let sagaLoading = false;
         // Snapshot of the non-search ("home") library + scroll position so we
         // can restore them when the user clears the search box. Without this,
         // clearing search would lose everything we'd lazily paged in.
@@ -1184,10 +1189,11 @@
         }
 
         function displayBooks(books, isComplete) {
-            // Series mode renders a grouped grid instead of the flat book list;
-            // every existing call site (loadBooks, reRender, search) routes here
-            // so this single guard keeps them all correct.
+            // Series/Saga mode renders a grouped grid instead of the flat book
+            // list; every existing call site (loadBooks, reRender, search)
+            // routes here so this single guard keeps them all correct.
             if (sortMode === 'series') { renderSeriesGrid(); return; }
+            if (sortMode === 'saga') { renderSagaGrid(); return; }
 
             const content = document.getElementById('content');
 
@@ -1272,13 +1278,15 @@
                 if (sortMode === 'series') renderSeriesGrid();
             }
         }
-        // Look a book up by id across the home/search set AND the series cache,
-        // so onBookOpen works for books rendered only inside the series view.
+        // Look a book up by id across the home/search set AND the series/saga
+        // caches, so onBookOpen works for books rendered only inside a grouped
+        // view.
         function findBookById(id) {
             let b = allBooks.find(x => String(x.id) === String(id));
             if (b) return b;
-            if (seriesData) {
-                for (const s of seriesData) {
+            for (const cache of [seriesData, sagaData]) {
+                if (!cache) continue;
+                for (const s of cache) {
                     const f = s.books.find(x => String(x.id) === String(id));
                     if (f) return f;
                 }
@@ -1297,6 +1305,74 @@
         }
         function closeSeriesDetail() {
             document.getElementById('series-overlay').classList.remove('open');
+        }
+
+        // ---------- Saga view ----------
+        // Sagas (Calibre #universe) reuse the series card + detail overlay; only
+        // the data source and click handler differ. A saga matches the format
+        // filter if any of its books do.
+        function sagaCardHTML(s) {
+            const first = s.books[0] || {};
+            const mts = s.mediaTypes || [];
+            const hasE = mts.includes('ebook'), hasA = mts.includes('audiobook');
+            const fmtDots = `<div class="book-fmt-dots">${hasE ? '<div class="book-fmt-dot ebook"></div>' : ''}${hasA ? '<div class="book-fmt-dot audio"></div>' : ''}</div>`;
+            return `
+                <div class="book series-card" data-book-id="${first.id}"
+                     data-saga="${escapeHTML(s.name)}"
+                     onclick="openSagaDetail(this.dataset.saga)">
+                    <div class="book-cover-wrap">
+                        <img data-src="${first.thumbnail || first.cover || ''}" class="book-cover"
+                             src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                             onerror="this.style.background='linear-gradient(135deg, #667eea 0%, #764ba2 100%)'">
+                        <div class="series-count">${s.count}</div>
+                        ${fmtDots}
+                    </div>
+                    <div class="book-title">${escapeHTML(s.name)}</div>
+                    <div class="book-author">${s.count} book${s.count === 1 ? '' : 's'}</div>
+                </div>`;
+        }
+        function renderSagaGrid() {
+            const content = document.getElementById('content');
+            if (sagaData === null) {
+                if (!sagaLoading) loadSaga();
+                content.innerHTML = '<div class="loading">Loading sagas…</div>';
+                return;
+            }
+            const q = (searchEl.value || '').trim().toLowerCase();
+            const list = sagaData
+                .filter(seriesMatchesFilter)
+                .filter(s => !q || s.name.toLowerCase().includes(q));
+            if (!list.length) {
+                content.innerHTML = '<div class="loading">No sagas found</div>';
+                return;
+            }
+            content.innerHTML = '<div class="books">' + list.map(sagaCardHTML).join('') + '</div>';
+            _lazyLoadCovers();
+        }
+        async function loadSaga() {
+            sagaLoading = true;
+            try {
+                const r = await fetch(`${API_URL}/saga`);
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const d = await r.json();
+                sagaData = Array.isArray(d.sagas) ? d.sagas : [];
+            } catch (e) {
+                console.error('saga load failed:', e);
+                sagaData = [];
+            } finally {
+                sagaLoading = false;
+                if (sortMode === 'saga') renderSagaGrid();
+            }
+        }
+        function openSagaDetail(name) {
+            const s = (sagaData || []).find(x => x.name === name);
+            if (!s) return;
+            document.getElementById('series-detail-title').textContent = s.name;
+            const books = applyFilter(s.books);
+            document.getElementById('series-detail-list').innerHTML =
+                '<div class="books">' + books.map(b => bookCardHTML(b)).join('') + '</div>';
+            document.getElementById('series-overlay').classList.add('open');
+            _lazyLoadCovers(document.getElementById('series-detail-list'));
         }
 
         let _sentinelObserver = null;
@@ -1507,6 +1583,8 @@
             clearTimeout(_searchDebounce);
             if (sortMode === 'series') {
                 renderSeriesGrid();
+            } else if (sortMode === 'saga') {
+                renderSagaGrid();
             } else {
                 allBooks = homeBooks;
                 currentOffset = homeOffset;
@@ -1545,6 +1623,9 @@
                 if (sortMode === 'series') {
                     // Series mode: filter the already-loaded series list client-side.
                     renderSeriesGrid();
+                } else if (sortMode === 'saga') {
+                    // Saga mode: filter the already-loaded saga list client-side.
+                    renderSagaGrid();
                 } else if (!v) {
                     // Restore the home (lazy-paged) view exactly as it was.
                     allBooks = homeBooks;
@@ -1581,7 +1662,7 @@
         try {
             const savedSort = localStorage.getItem('ereader.sortMode');
             // 'recent' was a valid value in an old version — treat it as 'author'.
-            if (savedSort === 'author' || savedSort === 'title' || savedSort === 'series') {
+            if (savedSort === 'author' || savedSort === 'title' || savedSort === 'series' || savedSort === 'saga') {
                 sortMode = savedSort;
                 document.querySelectorAll('#sort-pills .pill').forEach(p =>
                     p.classList.toggle('active', p.dataset.sort === sortMode));

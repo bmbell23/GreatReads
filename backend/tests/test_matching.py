@@ -176,6 +176,35 @@ class TestApplySeriesOverride(unittest.TestCase):
         self.assertEqual(b['series_index'], 5)
 
 
+class TestSagaSortKey(unittest.TestCase):
+    def test_groups_by_series_then_index(self):
+        # Within a saga, books cluster by series name, then series_index.
+        books = [
+            {'series': 'Stormlight', 'series_index': 2, 'title': 'WoR'},
+            {'series': 'Mistborn', 'series_index': 1, 'title': 'TFE'},
+            {'series': 'Stormlight', 'series_index': 1, 'title': 'WoK'},
+            {'series': 'Mistborn', 'series_index': 2, 'title': 'WoA'},
+        ]
+        ordered = [b['title'] for b in sorted(books, key=server._saga_sort_key)]
+        self.assertEqual(ordered, ['TFE', 'WoA', 'WoK', 'WoR'])
+
+    def test_seriesless_books_sort_last(self):
+        books = [
+            {'series': '', 'series_index': None, 'title': 'Standalone'},
+            {'series': 'A', 'series_index': 1, 'title': 'InSeries'},
+        ]
+        ordered = [b['title'] for b in sorted(books, key=server._saga_sort_key)]
+        self.assertEqual(ordered, ['InSeries', 'Standalone'])
+
+    def test_unnumbered_first_within_series(self):
+        books = [
+            {'series': 'A', 'series_index': 1, 'title': 'One'},
+            {'series': 'A', 'series_index': None, 'title': 'Companion'},
+        ]
+        ordered = [b['title'] for b in sorted(books, key=server._saga_sort_key)]
+        self.assertEqual(ordered, ['Companion', 'One'])
+
+
 def _abs(absId='a1', title='T', isbn='', asin='', author='', authors=None):
     return {'absId': absId, 'title': title, 'isbn': isbn, 'asin': asin,
             'author': author, 'authors': authors, 'audioCover': None,
