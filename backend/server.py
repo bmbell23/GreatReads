@@ -959,20 +959,27 @@ def unified_library():
     books, total = get_calibre_books(limit=limit, offset=offset, query=query)
 
     if ABS_ENABLED:
+        enrich_map, audio_only = _get_library_cache()
+        # Enrich the Calibre slice with its ABS data (dual-format badges/editions)
+        # via the pre-built full-library cache — same map used for browse + search.
+        merged = [enrich_map.get(str(b['id']), b) for b in books]
         if query:
-            # Text search: match the filtered Calibre slice against ABS (best-
-            # effort enrichment); don't append audio-only items because ABS
-            # metadata isn't covered by the Calibre full-text search.
-            abs_items = get_abs_items()
-            merged = match_works(books, abs_items, include_audio_only=False) if abs_items else books
-        else:
-            # Regular browse: use the pre-built full-library match cache so
-            # every Calibre book is enriched with its ABS data (dual-format)
-            # and only genuinely unmatched ABS items appear as audio-only.
-            enrich_map, audio_only = _get_library_cache()
-            merged = [enrich_map.get(str(b['id']), b) for b in books]
-            if offset == 0:
-                merged.extend(audio_only)
+            # Text search: Calibre's full-text search only covers ebooks, so it
+            # never surfaces ABS-only audiobooks. Filter the cached audio-only
+            # list by the raw search term (token AND-match on title+author) and
+            # append the hits so audiobooks show up in search results too.
+            raw = (request.args.get('q') or '').strip().lower()
+            terms = [t for t in raw.split() if t]
+            if terms:
+                for m in audio_only:
+                    hay = ((m.get('title') or '') + ' '
+                           + (m.get('author') or '')).lower()
+                    if all(t in hay for t in terms):
+                        merged.append(m)
+        elif offset == 0:
+            # Regular browse: only genuinely unmatched ABS items appear as
+            # audio-only, appended once on the first page.
+            merged.extend(audio_only)
     else:
         merged = books
 

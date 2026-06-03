@@ -30,13 +30,15 @@
             padding: 0;
             overflow-x: hidden;
             /* Reserve room for the fixed .status-bar so the first row of book
-               covers isn't clipped under it. 80px = bar's own height;
+               covers isn't clipped under it. 112px = bar's own height
+               (row1 24 + row2 ~53 + row3 ~35);
                env(safe-area-inset-top) accounts for the Android status bar. */
-            padding-top: calc(80px + env(safe-area-inset-top, 0px));
+            padding-top: calc(112px + env(safe-area-inset-top, 0px));
         }
         /* Top transparent status/toolbar.
            Row 1: clock (left) + version (right) — 24px tall
-           Row 2: search input + sort dropdown — 56px tall */
+           Row 2: search input + hamburger — ~53px tall
+           Row 3: sort pills (Author|Title) + format filter pills — ~32px tall */
         .status-bar {
             position: fixed;
             top: 0;
@@ -97,25 +99,65 @@
             padding: 6px 10px 10px 10px;
             align-items: center;
         }
-        .search {
+        .search-wrap {
             flex: 1;
-            padding: 10px 12px;
-            background: #2a2a2a;
-            border: none;
-            border-radius: 8px;
-            color: #fff;
-            font-size: 14px;
+            position: relative;
             min-width: 0;
         }
-        .sort-select {
+        .search {
+            width: 100%;
+            box-sizing: border-box;
+            padding: 10px 32px 10px 12px; /* right room for the X */
             background: #2a2a2a;
             border: none;
             border-radius: 8px;
             color: #fff;
             font-size: 14px;
-            padding: 10px 8px;
-            -webkit-appearance: none;
-            appearance: none;
+        }
+        .search-clear {
+            display: none;
+            position: absolute;
+            right: 0;
+            top: 0;
+            bottom: 0;
+            width: 32px;
+            align-items: center;
+            justify-content: center;
+            background: none;
+            border: none;
+            padding: 0;
+            cursor: pointer;
+            color: #666;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .search-wrap.has-text .search-clear { display: flex; }
+        .filter-bar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 10px 8px 10px;
+            gap: 8px;
+        }
+        .pill-group {
+            display: flex;
+            gap: 4px;
+        }
+        .pill {
+            background: #2a2a2a;
+            border: none;
+            border-radius: 20px;
+            color: #888;
+            font-size: 12px;
+            padding: 5px 11px;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+            outline: none;
+            white-space: nowrap;
+            transition: background 0.12s, color 0.12s;
+        }
+        .pill.active {
+            background: #4067EF;
+            color: #fff;
         }
         .icon-btn {
             background: #2a2a2a;
@@ -325,19 +367,23 @@
             height: 100%;
             border-radius: 2px;
         }
-        /* Cached ebook dot — blue to match the ebook format color. */
-        .book-cached-dot {
+        /* Format dots — top-right, one per available format (blue=ebook, orange=audio). */
+        .book-fmt-dots {
             position: absolute;
             top: 4px;
             right: 4px;
+            display: flex;
+            gap: 3px;
+        }
+        .book-fmt-dot {
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: var(--fmt-ebook);
             box-shadow: 0 0 4px rgba(0,0,0,0.6);
         }
-        /* Media-type badges — SVG icon tiles, top-left, audio-bearing only.
-           Pure ebooks stay unbadged to keep the grid clean. */
+        .book-fmt-dot.ebook { background: var(--fmt-ebook); }
+        .book-fmt-dot.audio { background: var(--fmt-audio); }
+        /* Media-type badges — SVG icon tiles, top-left, all books. */
         .book-badges {
             position: absolute;
             top: 4px;
@@ -530,13 +576,28 @@
             <span id="build-stamp"></span>
         </div>
         <div class="status-bar-row2">
-            <input type="text" class="search" id="search" placeholder="Search books…">
-            <select class="sort-select" id="sort-select" title="Sort">
-                <option value="author">Author</option>
-                <option value="title">Title</option>
-                <option value="recent">Recently read</option>
-            </select>
+            <div class="search-wrap" id="search-wrap">
+                <input type="text" class="search" id="search" placeholder="Search books…">
+                <button class="search-clear" id="search-clear" aria-label="Clear search" tabindex="-1">
+                    <svg width="14" height="14" viewBox="0 0 14 14" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <line x1="1" y1="1" x2="13" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                        <line x1="13" y1="1" x2="1" y2="13" stroke="currentColor" stroke-width="2" stroke-linecap="round"/>
+                    </svg>
+                </button>
+            </div>
             <button class="icon-btn" id="menu-btn" title="Menu" aria-label="Menu">☰</button>
+        </div>
+        <div class="filter-bar">
+            <div class="pill-group" id="sort-pills">
+                <button class="pill active" data-sort="author">Author</button>
+                <button class="pill" data-sort="title">Title</button>
+            </div>
+            <div class="pill-group" id="fmt-pills">
+                <button class="pill active" data-fmt="all">All</button>
+                <button class="pill" data-fmt="ebook">Ebook</button>
+                <button class="pill" data-fmt="audiobook">Audio</button>
+                <button class="pill" data-fmt="dual">Dual</button>
+            </div>
         </div>
     </div>
 
@@ -711,7 +772,8 @@
         const BATCH_SIZE = 50;
         let isLoading = false;
         let searchQuery = '';
-        let sortMode = 'author';  // 'author' | 'title' | 'recent'
+        let sortMode = 'author';      // 'author' | 'title'
+        let formatFilter = 'all';   // 'all' | 'ebook' | 'audiobook' | 'dual'
         // Snapshot of the non-search ("home") library + scroll position so we
         // can restore them when the user clears the search box. Without this,
         // clearing search would lose everything we'd lazily paged in.
@@ -790,7 +852,13 @@
             // keeps multi-word phrases intact and escapes the user input.
             const safe = q.replace(/"/g, '\\"');
             const calibreQuery = `title:"${safe}" or authors:"${safe}"`;
-            const url = `${API_URL}/books?limit=200&offset=0&query=${encodeURIComponent(calibreQuery)}`;
+            // Route through /api/library (not /api/books) so results keep their
+            // ABS enrichment (dual-format badges) AND so audio-only audiobooks
+            // can be matched: `query` drives the Calibre ebook search, `q` is
+            // the raw term the backend uses to filter the audio-only list.
+            const url = `${API_URL}/library?limit=200&offset=0`
+                + `&query=${encodeURIComponent(calibreQuery)}`
+                + `&q=${encodeURIComponent(q)}`;
 
             try {
                 const response = await fetch(url, { signal: searchAbortCtl.signal });
@@ -813,8 +881,8 @@
         }
 
         // bookId -> backend progress record (most importantly: `updated` ms).
-        // Populated by ensureProgressBooksLoaded(); enriches the "recent" sort
-        // so it works for ALL in-progress books — including ones the user
+        // Populated by ensureProgressBooksLoaded(); drives progress bars and
+        // the "prepend in-progress books" behaviour for ALL in-progress books — including ones the user
         // hasn't yet paged into view via infinite scroll, and ones whose
         // progress was set on another device (no localStorage entry here).
         const progressMap = new Map();
@@ -838,41 +906,57 @@
             return rec && typeof rec.progress === 'number' ? Math.round(rec.progress * 100) : 0;
         }
 
-        // Best-available "last read" timestamp for a book — backend mtime wins
-        // (cross-device + survives WebView storage wipes); localStorage `ts`
-        // as a fallback for books we've read here but the server hasn't seen.
+        function applyFilter(list) {
+            if (formatFilter === 'all') return list;
+            return list.filter(b => {
+                const types = b.mediaTypes || ['ebook'];
+                const hasE = types.includes('ebook');
+                const hasA = types.includes('audiobook');
+                if (formatFilter === 'ebook')     return  hasE && !hasA;
+                if (formatFilter === 'audiobook') return !hasE &&  hasA;
+                if (formatFilter === 'dual')      return  hasE &&  hasA;
+                return true;
+            });
+        }
+
+        // Best-available "last read" timestamp — backend mtime wins over
+        // localStorage; picks up audiobook listening on dual-format rows.
         function recentTsFor(book) {
-            const id = (book && typeof book === 'object') ? book.id : book;
-            let ts = 0;
-            const p = progressMap.get(String(id));
-            if (p && typeof p.updated === 'number') ts = p.updated;
-            // Dual-format rows: pick up audiobook listening keyed by absId.
-            const absId = rawAbsIdFor(book && typeof book === 'object' ? book : { id });
+            let t = 0;
+            const p = progressMap.get(String(book.id));
+            if (p && typeof p.updated === 'number') t = p.updated;
+            const absId = rawAbsIdFor(book);
             if (absId) {
                 const a = audioProgressByAbsId.get(absId);
-                if (a && typeof a.updated === 'number') ts = Math.max(ts, a.updated);
+                if (a && typeof a.updated === 'number') t = Math.max(t, a.updated);
             }
-            const s = readingStateFor(id);
-            if (s && typeof s.ts === 'number') ts = Math.max(ts, s.ts);
-            return ts;
+            return t;
         }
 
         function applySort(list) {
             const arr = list.slice();
             if (sortMode === 'title') {
-                arr.sort((a, b) => (a.title || '').localeCompare(b.title || ''));
-            } else if (sortMode === 'recent') {
-                arr.sort((a, b) => recentTsFor(b) - recentTsFor(a));
+                // Recently-read books float to the top (newest first); the rest
+                // sort alphabetically. Mirrors the author-sort behaviour where
+                // ensureProgressBooksLoaded() prepends in-progress books naturally.
+                arr.sort((a, b) => {
+                    const ta = recentTsFor(a), tb = recentTsFor(b);
+                    if (ta > 0 && tb > 0) return tb - ta;
+                    if (ta > 0) return -1;
+                    if (tb > 0) return 1;
+                    return (a.title || '').localeCompare(b.title || '');
+                });
             }
-            // 'author' is the backend's natural order; leave as-is.
+            // 'author' is the backend's natural order + prepended progress books;
+            // leave as-is so the natural sort is preserved.
             return arr;
         }
 
         // Pull the full per-book progress list, then make sure every
         // in-progress book is actually present in `homeBooks` — fetching
         // metadata for any that haven't been paged in yet. This is what
-        // makes "Recently read" land an actively-read book at the top
-        // WITHOUT scrolling the entire library. Backend already returns
+        // ensures in-progress books surface at the top of the grid
+        // WITHOUT needing to scroll the entire library. Backend already returns
         // records sorted newest-first; we just need their ids + mtimes.
         async function ensureProgressBooksLoaded() {
             try {
@@ -916,8 +1000,7 @@
                 }));
 
                 // Prepend the new ones so they're visible at the top of the
-                // recent-sorted view immediately; applySort will then order
-                // them by their backend `updated` timestamp.
+                // grid immediately; applySort will then order them correctly.
                 const merged = [];
                 for (const b of fetched) {
                     if (b && !have.has(String(b.id))) {
@@ -981,7 +1064,7 @@
                 return;
             }
 
-            const sorted = applySort(books);
+            const sorted = applySort(applyFilter(books));
 
             const booksHTML = sorted.map(book => {
                 const format = ((book.formats || [])[0] || 'epub').toLowerCase();
@@ -991,8 +1074,6 @@
                     ? Math.round(((state.page + 1) / state.total) * 100) : 0;
                 // Per-format progress bars: ebook (blue) at bottom, audio (orange) above.
                 const audioPct = audioPctFor(book);
-                const cachedDot = cachedBookIds.has(book.id)
-                    ? '<div class="book-cached-dot" title="Downloaded"></div>' : '';
                 const barParts = [];
                 if (audioPct > 0) barParts.push(
                     `<div class="book-pbar"><div class="book-pbar-fill" style="width:${audioPct}%;background:var(--fmt-audio)"></div></div>`);
@@ -1006,12 +1087,13 @@
                 const hasAudio = types.includes('audiobook');
                 const hasEbook = types.includes('ebook');
                 // SVG icon badges: blue tablet = ebook, orange headphones = audiobook.
-                // Only shown on audio-bearing rows; pure-ebook stays unbadged.
+                // Shown on every book so format is always visible at a glance.
                 const ICON_EBOOK = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#0066CC"/><rect x="2" y="2.5" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="4.9" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="7.3" width="5" height="1.2" rx="0.6" fill="white"/></svg>';
                 const ICON_AUDIO = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#FF6600"/><path d="M1.8 7 A3.7 4.5 0 0 1 9.2 7" stroke="white" stroke-width="1.3" fill="none" stroke-linecap="round"/><rect x="1.2" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/><rect x="8.3" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/></svg>';
-                const badges = hasAudio
-                    ? `<div class="book-badges">${hasEbook ? `<span class="book-badge" title="Ebook">${ICON_EBOOK}</span>` : ''}<span class="book-badge" title="Audiobook">${ICON_AUDIO}</span></div>`
-                    : '';
+                const badges = `<div class="book-badges">${hasEbook ? `<span class="book-badge" title="Ebook">${ICON_EBOOK}</span>` : ''}${hasAudio ? `<span class="book-badge" title="Audiobook">${ICON_AUDIO}</span>` : ''}</div>`;
+                // Format dots (top-right): one colored circle per available format,
+                // side by side when dual — blue for ebook, orange for audio.
+                const fmtDots = `<div class="book-fmt-dots">${hasEbook ? '<div class="book-fmt-dot ebook"></div>' : ''}${hasAudio ? '<div class="book-fmt-dot audio"></div>' : ''}</div>`;
                 return `
                 <div class="book" data-book-id="${book.id}"
                      data-book-title="${escapeHTML(book.title)}"
@@ -1025,7 +1107,7 @@
                              src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
                              onerror="this.style.background='linear-gradient(135deg, #667eea 0%, #764ba2 100%)'">
                         ${badges}
-                        ${cachedDot}
+                        ${fmtDots}
                         ${progressBar}
                     </div>
                     <div class="book-title">${escapeHTML(book.title)}</div>
@@ -1241,10 +1323,44 @@
             displayBooks(allBooks, !searchQuery ? homeIsComplete : true);
         }
 
+        const searchEl = document.getElementById('search');
+        const searchWrap = document.getElementById('search-wrap');
+
+        function clearSearch() {
+            searchEl.value = '';
+            searchWrap.classList.remove('has-text');
+            searchQuery = '';
+            clearTimeout(_searchDebounce);
+            allBooks = homeBooks;
+            currentOffset = homeOffset;
+            displayBooks(allBooks, homeIsComplete);
+        }
+
+        // X button — clear without stealing focus from the input.
+        document.getElementById('search-clear').addEventListener('mousedown', e => {
+            e.preventDefault(); // don't blur the input
+        });
+        document.getElementById('search-clear').addEventListener('click', () => {
+            clearSearch();
+            searchEl.focus();
+        });
+
+        // Tapping into the box after a previous search clears it so the user
+        // doesn't have to manually select-all before typing a new query.
+        searchEl.addEventListener('focus', () => {
+            if (searchEl.value.trim()) clearSearch();
+        });
+
+        // Pressing Enter dismisses the keyboard — never let focus advance.
+        searchEl.addEventListener('keydown', (e) => {
+            if (e.key === 'Enter') { e.preventDefault(); e.target.blur(); }
+        });
+
         // Debounce input so we don't fire a Calibre query on every keystroke.
         let _searchDebounce = null;
-        document.getElementById('search').addEventListener('input', (e) => {
+        searchEl.addEventListener('input', (e) => {
             const v = e.target.value.trim();
+            searchWrap.classList.toggle('has-text', v.length > 0);
             searchQuery = v.toLowerCase();
             clearTimeout(_searchDebounce);
             _searchDebounce = setTimeout(() => {
@@ -1258,21 +1374,42 @@
                 }
             }, 250);
         });
-        document.getElementById('sort-select').addEventListener('change', (e) => {
-            sortMode = e.target.value;
+        // Sort pills (Author | Title) — mutually exclusive.
+        document.getElementById('sort-pills').addEventListener('click', e => {
+            const btn = e.target.closest('.pill[data-sort]');
+            if (!btn) return;
+            sortMode = btn.dataset.sort;
+            document.querySelectorAll('#sort-pills .pill').forEach(p =>
+                p.classList.toggle('active', p === btn));
             try { localStorage.setItem('ereader.sortMode', sortMode); } catch (_) {}
             reRender();
-            // "Recently read" needs the full set of in-progress books, not
-            // just whatever infinite-scroll has paged in so far. The backend
-            // /api/progress endpoint already knows them — pull from there.
-            if (sortMode === 'recent') ensureProgressBooksLoaded();
         });
-        // Restore previously chosen sort
+
+        // Format filter pills (All | Ebook | Audio | Dual) — mutually exclusive.
+        document.getElementById('fmt-pills').addEventListener('click', e => {
+            const btn = e.target.closest('.pill[data-fmt]');
+            if (!btn) return;
+            formatFilter = btn.dataset.fmt;
+            document.querySelectorAll('#fmt-pills .pill').forEach(p =>
+                p.classList.toggle('active', p === btn));
+            try { localStorage.setItem('ereader.formatFilter', formatFilter); } catch (_) {}
+            reRender();
+        });
+
+        // Restore previously chosen sort + format filter on load.
         try {
             const savedSort = localStorage.getItem('ereader.sortMode');
-            if (savedSort) {
+            // 'recent' was a valid value in an old version — treat it as 'author'.
+            if (savedSort === 'author' || savedSort === 'title') {
                 sortMode = savedSort;
-                document.getElementById('sort-select').value = sortMode;
+                document.querySelectorAll('#sort-pills .pill').forEach(p =>
+                    p.classList.toggle('active', p.dataset.sort === sortMode));
+            }
+            const savedFmt = localStorage.getItem('ereader.formatFilter');
+            if (savedFmt && ['all','ebook','audiobook','dual'].includes(savedFmt)) {
+                formatFilter = savedFmt;
+                document.querySelectorAll('#fmt-pills .pill').forEach(p =>
+                    p.classList.toggle('active', p.dataset.fmt === formatFilter));
             }
         } catch (_) {}
         // When returning from the reader, the cached set and reading state may
@@ -1715,10 +1852,9 @@
 
         initDB();
         loadBooks();
-        // Pull /api/progress in parallel with the first page of books so the
-        // "Recently read" sort is correct from the very first paint — and so
-        // any in-progress book that wouldn't have been in the first page
-        // gets merged into the grid right away.
+        // Pull /api/progress in parallel with the first page of books so that
+        // any in-progress book that wouldn't be in the first page yet gets
+        // prepended to the grid (and progress bars update) right away.
         ensureProgressBooksLoaded();
     </script>
 </body>
