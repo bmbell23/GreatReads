@@ -324,6 +324,73 @@
            the phone is folded (or any narrow viewport) the button is greyed
            out and ignores taps. */
         .icon-btn.disabled { opacity: 0.35; pointer-events: none; }
+        /* Floating in-book search button (top-left corner). EPUB only — shown
+           by setupNavigation(). Semi-transparent so it doesn't fight the text;
+           solidifies on press. Sits above content but below all overlays. */
+        #search-btn {
+            position: fixed;
+            /* Just below the 24px .status-bar; above the 60px epub-content
+               padding-top where text begins. Left edge matches SIDE_PADDING
+               (40px) so the button sits in the text margin, never overlapping
+               actual book content. */
+            top: 26px;
+            left: 40px;
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: transparent;
+            border: none;
+            color: rgba(255, 255, 255, 0.45);
+            font-size: 15px;
+            line-height: 1;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            z-index: 11500;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #search-btn:active { color: rgba(255, 255, 255, 0.9); }
+        /* In-book search overlay rows. */
+        .search-section {
+            color: #7aa7d8;
+            font-size: 12px;
+            font-weight: 700;
+            letter-spacing: 0.6px;
+            text-transform: uppercase;
+            padding: 16px 4px 6px;
+        }
+        .search-row {
+            padding: 12px 10px;
+            border-bottom: 1px solid #2a2a2a;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .search-row:active { background: #2a2a2a; }
+        .search-row .ch {
+            font-size: 11px;
+            color: #6fae8a;
+            font-style: italic;
+            margin-bottom: 4px;
+        }
+        .search-snip { font-size: 14px; line-height: 1.5; color: #ddd; }
+        .search-snip .hit {
+            background: #b8860b;
+            color: #fff;
+            border-radius: 3px;
+            padding: 0 2px;
+        }
+        .search-hist-row {
+            padding: 11px 10px;
+            border-bottom: 1px solid #242424;
+            color: #bbb;
+            cursor: pointer;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            -webkit-tap-highlight-color: transparent;
+        }
+        .search-hist-row:active { background: #2a2a2a; }
         /* Setting block: label on the left, control on the right. */
         .setting-group {
             display: flex;
@@ -641,6 +708,12 @@
         ::highlight(ereader-hl) {
             background-color: rgba(255, 213, 79, 0.45);
         }
+        /* Temporary flash highlight shown when the user taps a search result.
+           Distinct orange so it's recognisably different from a saved highlight.
+           Fades out after ~2 s via JS (flashSearchHit). */
+        ::highlight(search-flash) {
+            background-color: rgba(255, 120, 0, 0.55);
+        }
 
         /* App-native selection color. Matches the saved-highlight yellow so
            the moment the user starts dragging they see the same band that
@@ -841,6 +914,10 @@
         <div class="page-info" id="page-info"></div>
     </div>
 
+    <!-- Floating in-book search button (top-left). Shown only for EPUB by
+         setupNavigation(); opens the full-screen search overlay below. -->
+    <button id="search-btn" title="Search this book" onclick="openSearch()">🔍</button>
+
     <div id="reader-container">
         <div class="loading">Loading book...</div>
         <canvas id="pdf-canvas" style="display:none;"></canvas>
@@ -1011,6 +1088,20 @@
                 <button onclick="toggleTOC()" style="background: #333; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; font-size: 18px; cursor: pointer;">✕ Close</button>
             </div>
             <div id="toc-list" style="background: #222; border-radius: 12px; padding: 20px;"></div>
+        </div>
+    </div>
+
+    <!-- Full-screen in-book search overlay. Opened by #search-btn. Shows the
+         recent-search history until a query is run, then exact + similar
+         (fuzzy) results, each tappable to jump to that spot in the book. -->
+    <div id="search-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.96);z-index:11000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 16px) 16px 24px 16px;">
+        <div style="max-width:760px;margin:0 auto;">
+            <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
+                <input id="search-input" type="search" placeholder="Search this book…" autocomplete="off" autocapitalize="off" autocorrect="off"
+                       style="flex:1;min-width:0;padding:12px 14px;border-radius:10px;border:1px solid #444;background:#1b1b1b;color:#fff;font-size:16px;">
+                <button onclick="closeSearch()" style="flex:0 0 auto;background:#333;color:#fff;border:none;padding:12px 14px;border-radius:10px;font-size:16px;cursor:pointer;">✕</button>
+            </div>
+            <div id="search-results"></div>
         </div>
     </div>
 
@@ -5055,6 +5146,297 @@
             currentEpubPage = Math.min(totalPages - 1, Math.max(0, page));
             renderEpubPage();
         }
+
+        // ---- In-book search ------------------------------------------------
+        // Corpus = one entry per leaf-most [data-anchor] block (a <blockquote>
+        // wrapping a <p> is skipped so its text isn't indexed twice). For each
+        // block we keep a whitespace-normalised string (`norm`, for matching +
+        // clean snippets) AND a `map` from each normalised char back to its raw
+        // textContent index — findPageForFineAnchor() counts RAW offsets, so we
+        // must hand it the raw index or jumps land off-position wherever the
+        // source collapsed newlines/runs of spaces. Rebuilt on each search
+        // because annotateAnchors() reassigns indices on every repagination.
+        function buildSearchCorpus() {
+            const content = document.getElementById('epub-content');
+            const corpus = [];
+            if (!content) return corpus;
+            content.querySelectorAll('[data-anchor]').forEach(el => {
+                if (el.querySelector('[data-anchor]')) return; // not leaf-most
+                const raw = el.textContent || '';
+                if (!raw.trim()) return;
+                let norm = '', map = [], prevSpace = false;
+                for (let i = 0; i < raw.length; i++) {
+                    const c = raw[i];
+                    if (c === ' ' || c === '\n' || c === '\t' || c === '\r' || c === '\f') {
+                        if (prevSpace) continue;
+                        norm += ' '; map.push(i); prevSpace = true;
+                    } else { norm += c; map.push(i); prevSpace = false; }
+                }
+                corpus.push({ anchor: parseInt(el.dataset.anchor, 10), norm, lc: norm.toLowerCase(), map });
+            });
+            return corpus;
+        }
+
+        // Deepest TOC title whose start anchor is <= the given anchor.
+        function chapterTitleForAnchor(anchor) {
+            const flat = [];
+            const walk = (nodes, depth) => {
+                for (const n of nodes || []) {
+                    if (typeof n.anchor === 'number') flat.push({ title: n.title, anchor: n.anchor, depth });
+                    if (n.children && n.children.length) walk(n.children, depth + 1);
+                }
+            };
+            if (tocTree && tocTree.length) walk(tocTree, 0);
+            else for (const it of tocItems) {
+                if (typeof it.anchor === 'number') flat.push({ title: it.title, anchor: it.anchor, depth: (it.level || 1) - 1 });
+            }
+            let best = null;
+            for (const f of flat) {
+                if (f.anchor > anchor) continue;
+                if (!best || f.anchor > best.anchor || (f.anchor === best.anchor && f.depth > best.depth)) best = f;
+            }
+            return best ? best.title : '';
+        }
+
+        // Classic Levenshtein edit distance (two-row, iterative).
+        function levenshtein(a, b) {
+            const m = a.length, n = b.length;
+            if (!m) return n; if (!n) return m;
+            let prev = new Array(n + 1);
+            for (let j = 0; j <= n; j++) prev[j] = j;
+            for (let i = 1; i <= m; i++) {
+                const cur = [i];
+                const ca = a.charCodeAt(i - 1);
+                for (let j = 1; j <= n; j++) {
+                    const cost = ca === b.charCodeAt(j - 1) ? 0 : 1;
+                    cur[j] = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+                }
+                prev = cur;
+            }
+            return prev[n];
+        }
+
+        // Tracks the most-recently searched query so history can be written
+        // when the user actually taps a result (not on every live keystroke).
+        let _lastSearchQuery = '';
+
+        // Run a search: exact substring matches first, then fuzzy (Levenshtein).
+        // Called live on each input event (debounced) — does NOT clear the field
+        // or add to history (those happen on result click).
+        function runSearch(rawQuery) {
+            const query = (rawQuery || '').trim();
+            if (query.length < 2) { loadSearchHistory(); return; }
+            _lastSearchQuery = query;
+            const corpus = buildSearchCorpus();
+            const q = query.toLowerCase();
+            const qWords = q.split(/\s+/).filter(Boolean);
+            const count = qWords.length;
+            const maxDist = query.length <= 4 ? 1 : query.length <= 7 ? 2 : 3;
+            const EXACT_CAP = 200, FUZZY_CAP = 60;
+            const exact = [], fuzzy = [];
+            for (const entry of corpus) {
+                // Exact substring hits (may be several per block).
+                if (exact.length < EXACT_CAP) {
+                    let from = 0, idx;
+                    while ((idx = entry.lc.indexOf(q, from)) !== -1) {
+                        // rawEnd: raw index one past the last matched character.
+                        const rawEnd = (entry.map[idx + q.length - 1] ?? entry.map[entry.map.length - 1]) + 1;
+                        exact.push({ anchor: entry.anchor, norm: entry.norm, s: idx, e: idx + q.length,
+                                     rawStart: entry.map[idx], rawEnd });
+                        from = idx + Math.max(1, q.length);
+                        if (exact.length >= EXACT_CAP) break;
+                    }
+                }
+                // Fuzzy: skip very short queries and blocks that already matched
+                // exactly. Slide a window of `count` words and compare to query.
+                if (query.length >= 3 && fuzzy.length < FUZZY_CAP && entry.lc.indexOf(q) === -1) {
+                    const words = [];
+                    const re = /[^\s]+/g; let m;
+                    while ((m = re.exec(entry.norm)) !== null) words.push({ i: m.index, len: m[0].length });
+                    for (let k = 0; k + count <= words.length; k++) {
+                        const start = words[k].i;
+                        const end = words[k + count - 1].i + words[k + count - 1].len;
+                        const win = entry.lc.slice(start, end);
+                        if (Math.abs(win.length - q.length) > maxDist) continue;
+                        if (levenshtein(win, q) <= maxDist) {
+                            const rawEnd = (entry.map[Math.min(end - 1, entry.map.length - 1)] ?? entry.map[entry.map.length - 1]) + 1;
+                            fuzzy.push({ anchor: entry.anchor, norm: entry.norm, s: start, e: end,
+                                         rawStart: entry.map[start], rawEnd });
+                            break; // one fuzzy hit per block is enough
+                        }
+                    }
+                }
+                if (exact.length >= EXACT_CAP && fuzzy.length >= FUZZY_CAP) break;
+            }
+            renderSearchResults(query, exact, fuzzy);
+        }
+
+        function renderSearchResults(query, exact, fuzzy) {
+            const el = document.getElementById('search-results');
+            if (!el) return;
+            if (!exact.length && !fuzzy.length) {
+                el.innerHTML = '<div style="color:#aaa;padding:24px;text-align:center;font-size:15px;">No matches for \u201c' + escapeHtml(query) + '\u201d</div>';
+                return;
+            }
+            let html = '';
+            const section = (label, arr) => {
+                if (!arr.length) return;
+                html += '<div class="search-section">' + label + ' (' + arr.length + ')</div>';
+                for (const r of arr) {
+                    const ch = chapterTitleForAnchor(r.anchor);
+                    // Pass rawEnd so jumpToSearchResult can flash-highlight the exact span.
+                    html += '<div class="search-row" onclick="jumpToSearchResult(' + r.anchor + ',' + r.rawStart + ',' + r.rawEnd + ')">';
+                    if (ch) html += '<div class="ch">' + escapeHtml(ch) + '</div>';
+                    html += '<div class="search-snip">' + buildSnippet(r) + '</div></div>';
+                }
+            };
+            section('Exact matches', exact);
+            section('Similar matches', fuzzy);
+            el.innerHTML = html;
+        }
+
+        // ~50 chars of context each side of the hit; hit wrapped in <span class="hit">.
+        function buildSnippet(r) {
+            const PAD = 50;
+            const s = Math.max(0, r.s - PAD);
+            const e = Math.min(r.norm.length, r.e + PAD);
+            const pre = (s > 0 ? '\u2026' : '') + r.norm.slice(s, r.s);
+            const hit = r.norm.slice(r.s, r.e);
+            const post = r.norm.slice(r.e, e) + (e < r.norm.length ? '\u2026' : '');
+            return escapeHtml(pre) + '<span class="hit">' + escapeHtml(hit) + '</span>' + escapeHtml(post);
+        }
+
+        // CSS Highlight registry used for the brief orange flash when a search
+        // result is tapped. Separate from ereader-hl so it never interferes with
+        // saved highlights and can be cleared independently.
+        let _searchFlashHL = null;
+        function _ensureSearchFlashHL() {
+            if (_searchFlashHL) return _searchFlashHL;
+            if (typeof Highlight === 'undefined' || !window.CSS || !CSS.highlights) return null;
+            _searchFlashHL = new Highlight();
+            CSS.highlights.set('search-flash', _searchFlashHL);
+            return _searchFlashHL;
+        }
+        // Walk text nodes inside `el` to find the node + local offset corresponding
+        // to raw character index `target` inside el.textContent.
+        function _rawPosInEl(el, target) {
+            const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT, null);
+            let seen = 0, cur;
+            while ((cur = walker.nextNode())) {
+                const len = cur.nodeValue.length;
+                if (seen + len > target) return { node: cur, offset: target - seen };
+                seen += len;
+            }
+            // Clamp to end of last text node.
+            if (cur) return { node: cur, offset: cur.nodeValue.length };
+            return null;
+        }
+        // Show a 2-second orange flash over the matched span, then clear it.
+        function flashSearchHit(anchor, rawStart, rawEnd) {
+            const hl = _ensureSearchFlashHL();
+            if (!hl) return;
+            const content = document.getElementById('epub-content');
+            if (!content) return;
+            const el = content.querySelector('[data-anchor="' + anchor + '"]');
+            if (!el) return;
+            const start = _rawPosInEl(el, rawStart);
+            const end   = _rawPosInEl(el, Math.max(rawStart + 1, rawEnd));
+            if (!start || !end) return;
+            const r = new Range();
+            try {
+                r.setStart(start.node, start.offset);
+                r.setEnd(end.node, end.offset);
+            } catch (_) { return; }
+            hl.clear();
+            try { hl.add(r); } catch (_) { return; }
+            if (window._searchFlashTimer) clearTimeout(window._searchFlashTimer);
+            window._searchFlashTimer = setTimeout(() => {
+                hl.clear();
+                window._searchFlashTimer = null;
+            }, 2000);
+        }
+
+        function jumpToSearchResult(anchor, rawStart, rawEnd) {
+            // Record the query in history when the user actually navigates to a result.
+            addToSearchHistory(_lastSearchQuery);
+            closeSearch();
+            const page = findPageForFineAnchor({ anchor: anchor, offset: rawStart });
+            const target = (page != null) ? page : findPageForAnchor(anchor);
+            if (target != null) {
+                jumpToPage(target);
+                // Flash after a brief delay so the page transition completes first.
+                setTimeout(() => flashSearchHit(anchor, rawStart, rawEnd ?? rawStart + 1), 80);
+            }
+        }
+
+        // ---- Search history (localStorage, most-recent 30) -----------------
+        const SEARCH_HISTORY_KEY = 'ereader.search.history';
+        function getSearchHistory() {
+            try { return JSON.parse(localStorage.getItem(SEARCH_HISTORY_KEY)) || []; }
+            catch (_) { return []; }
+        }
+        function addToSearchHistory(q) {
+            q = (q || '').trim();
+            if (!q) return;
+            let h = getSearchHistory().filter(x => x.toLowerCase() !== q.toLowerCase());
+            h.unshift(q);
+            if (h.length > 30) h = h.slice(0, 30);
+            try { localStorage.setItem(SEARCH_HISTORY_KEY, JSON.stringify(h)); } catch (_) {}
+        }
+        function loadSearchHistory() {
+            const el = document.getElementById('search-results');
+            if (!el) return;
+            const h = getSearchHistory();
+            el.innerHTML = '';
+            if (!h.length) {
+                el.innerHTML = '<div style="color:#777;padding:24px;text-align:center;font-size:14px;">Type a word or phrase to search this book.</div>';
+                return;
+            }
+            const hdr = document.createElement('div');
+            hdr.className = 'search-section';
+            hdr.textContent = 'Recent searches';
+            el.appendChild(hdr);
+            for (const q of h) {
+                const row = document.createElement('div');
+                row.className = 'search-hist-row';
+                const icon = document.createElement('span');
+                icon.style.opacity = '0.6';
+                icon.textContent = '\u21bb';
+                const span = document.createElement('span');
+                span.textContent = q;
+                row.appendChild(icon);
+                row.appendChild(span);
+                row.addEventListener('click', () => {
+                    const inp = document.getElementById('search-input');
+                    if (inp) inp.value = q;
+                    runSearch(q);
+                });
+                el.appendChild(row);
+            }
+        }
+
+        function openSearch() {
+            const ov = document.getElementById('search-overlay');
+            if (!ov) return;
+            closeAllMenus();
+            ov.style.display = 'block';
+            // Hide the floating button so it doesn't poke through the overlay.
+            const sbtn = document.getElementById('search-btn');
+            if (sbtn) sbtn.style.display = 'none';
+            // Drop out of immersive mode so the soft keyboard lays out correctly.
+            try { if (window.Android && window.Android.showSystemBars) window.Android.showSystemBars(); } catch (_) {}
+            loadSearchHistory();
+            const inp = document.getElementById('search-input');
+            if (inp) { inp.value = ''; setTimeout(() => inp.focus(), 50); }
+        }
+        function closeSearch() {
+            const ov = document.getElementById('search-overlay');
+            if (ov) ov.style.display = 'none';
+            // Restore the floating button.
+            const sbtn = document.getElementById('search-btn');
+            if (sbtn) sbtn.style.display = 'flex';
+            try { if (window.Android && window.Android.hideSystemBars) window.Android.hideSystemBars(); } catch (_) {}
+        }
         async function deleteBookmarkFromList(id) {
             try {
                 const r = await fetch(`${API_URL}/highlights/${encodeURIComponent(id)}`, { method: 'DELETE' });
@@ -5091,6 +5473,8 @@
             if (m) m.classList.remove('open');
             const toc = document.getElementById('toc-overlay');
             if (toc) toc.style.display = 'none';
+            const search = document.getElementById('search-overlay');
+            if (search) search.style.display = 'none';
         }
 
         function toggleTOC() {
@@ -5258,6 +5642,10 @@
 
             // Volume key navigation
             document.addEventListener('keydown', (e) => {
+                // Don't hijack arrow keys for page-turns while the user is
+                // typing in the search box (or any text field).
+                const tag = e.target && e.target.tagName;
+                if (e.target && (e.target.id === 'search-input' || tag === 'INPUT' || tag === 'TEXTAREA')) return;
                 console.log('Key pressed:', e.key);
                 if (e.key === 'ArrowUp' || e.key === 'VolumeUp') {
                     e.preventDefault();
@@ -5273,6 +5661,25 @@
                     nextPage();
                 }
             });
+
+            // Reveal the floating search button (EPUB only) and wire the
+            // input's Enter key to run the search.
+            const sbtn = document.getElementById('search-btn');
+            if (sbtn) sbtn.style.display = 'flex';
+            const sinp = document.getElementById('search-input');
+            if (sinp && !sinp._wired) {
+                sinp._wired = true;
+                // Live search: results update as the user types (debounced 150 ms).
+                let _searchDebounce = null;
+                sinp.addEventListener('input', () => {
+                    clearTimeout(_searchDebounce);
+                    _searchDebounce = setTimeout(() => runSearch(sinp.value), 150);
+                });
+                // Enter also triggers immediately (useful with a hardware keyboard).
+                sinp.addEventListener('keydown', (e) => {
+                    if (e.key === 'Enter') { e.preventDefault(); clearTimeout(_searchDebounce); runSearch(sinp.value); }
+                });
+            }
 
             checkDualPageMode();
         }
