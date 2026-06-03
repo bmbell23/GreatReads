@@ -324,17 +324,38 @@
            the phone is folded (or any narrow viewport) the button is greyed
            out and ignores taps. */
         .icon-btn.disabled { opacity: 0.35; pointer-events: none; }
-        /* Floating in-book search button (top-left corner). EPUB only — shown
-           by setupNavigation(). Semi-transparent so it doesn't fight the text;
-           solidifies on press. Sits above content but below all overlays. */
-        #search-btn {
+        /* Floating hamburger menu button (top-left corner). Always visible.
+           Semi-transparent to avoid fighting the text; solidifies on press.
+           Sits above content but below all overlays. */
+        #menu-btn {
             position: fixed;
-            /* Just below the 24px .status-bar; above the 60px epub-content
-               padding-top where text begins. Left edge matches SIDE_PADDING
-               (40px) so the button sits in the text margin, never overlapping
-               actual book content. */
             top: 26px;
             left: 40px;
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: transparent;
+            border: none;
+            color: rgba(160, 160, 160, 0.6);
+            font-size: 18px;
+            line-height: 1;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 11500;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #menu-btn:active { color: rgba(200, 200, 200, 0.9); }
+        /* Floating in-book search button (top-left corner, right of menu btn).
+           EPUB only — shown by setupNavigation(). Semi-transparent so it
+           doesn't fight the text; solidifies on press. Sits above content
+           but below all overlays. */
+        #search-btn {
+            position: fixed;
+            /* Same row as #menu-btn; offset right by btn width (28px) + gap (10px). */
+            top: 26px;
+            left: 78px;
             width: 28px;
             height: 28px;
             border-radius: 6px;
@@ -914,7 +935,10 @@
         <div class="page-info" id="page-info"></div>
     </div>
 
-    <!-- Floating in-book search button (top-left). Shown only for EPUB by
+    <!-- Hamburger button (top-left). Always visible; opens Reading Options. -->
+    <button id="menu-btn" title="Reading options" onclick="toggleMenu()">☰</button>
+
+    <!-- Floating in-book search button (right of menu btn). Shown only for EPUB by
          setupNavigation(); opens the full-screen search overlay below. -->
     <button id="search-btn" title="Search this book" onclick="openSearch()">🔍</button>
 
@@ -5420,9 +5444,11 @@
             if (!ov) return;
             closeAllMenus();
             ov.style.display = 'block';
-            // Hide the floating button so it doesn't poke through the overlay.
+            // Hide the floating buttons so they don't poke through the overlay.
             const sbtn = document.getElementById('search-btn');
             if (sbtn) sbtn.style.display = 'none';
+            const mbtn = document.getElementById('menu-btn');
+            if (mbtn) mbtn.style.display = 'none';
             // Drop out of immersive mode so the soft keyboard lays out correctly.
             try { if (window.Android && window.Android.showSystemBars) window.Android.showSystemBars(); } catch (_) {}
             loadSearchHistory();
@@ -5432,9 +5458,11 @@
         function closeSearch() {
             const ov = document.getElementById('search-overlay');
             if (ov) ov.style.display = 'none';
-            // Restore the floating button.
+            // Restore the floating buttons.
             const sbtn = document.getElementById('search-btn');
             if (sbtn) sbtn.style.display = 'flex';
+            const mbtn = document.getElementById('menu-btn');
+            if (mbtn) mbtn.style.display = 'flex';
             try { if (window.Android && window.Android.hideSystemBars) window.Android.hideSystemBars(); } catch (_) {}
         }
         async function deleteBookmarkFromList(id) {
@@ -5633,9 +5661,7 @@
                         console.log('Next page (tap right)');
                         nextPage();
                     } else {
-                        // Tap center - toggle menu
-                        console.log('Toggle menu');
-                        toggleMenu();
+                        // Tap center - no action (use hamburger button for menu)
                     }
                 }
             }
