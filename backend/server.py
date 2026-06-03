@@ -907,6 +907,26 @@ def unified_library():
         'absEnabled': ABS_ENABLED,
     })
 
+@app.route('/api/library/<book_id>', methods=['GET'])
+def unified_library_item(book_id):
+    """Merged single book: the Calibre work plus any matched ABS editions, in
+    the exact shape /api/library rows use. The frontend uses this to (re)load
+    in-progress books WITHOUT losing their audiobook side — fetching the
+    Calibre-only /api/books/<id> here would strip mediaTypes/absId/audioEditions
+    and make a dual-format work look ebook-only. Degrades to the plain Calibre
+    metadata when ABS is off. 404 when the Calibre book is gone."""
+    book = get_book_metadata(book_id)
+    if not book:
+        return jsonify({'error': 'Book not found'}), 404
+    if ABS_ENABLED:
+        abs_items = get_abs_items()
+        if abs_items:
+            merged = match_works([book], abs_items, include_audio_only=False)
+            if merged:
+                return jsonify(merged[0])
+    book.setdefault('mediaTypes', ['ebook'])
+    return jsonify(book)
+
 @app.route('/api/audiobooks/<abs_id>/cover', methods=['GET'])
 def get_audiobook_cover(abs_id):
     """Proxy an Audiobookshelf item cover. Mirrors /api/books/<id>/cover:

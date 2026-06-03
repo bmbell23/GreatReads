@@ -224,6 +224,9 @@ function applyPendingSeek() {
         try { audio.currentTime = pendingSeek; } catch (_) {}
         pendingSeek = 0;
     }
+    // Paint the trail immediately so the scrubber shows the correct filled
+    // region before the first timeupdate fires.
+    updateUI();
 }
 audio.addEventListener('loadedmetadata', applyPendingSeek);
 audio.addEventListener('canplay', applyPendingSeek);

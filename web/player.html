@@ -94,13 +94,12 @@
             /* PNGs are dark glyphs; invert to white so they read on the gradient. */
             filter: invert(1) brightness(1.6); }
         .play-btn:active { transform: scale(0.95); }
-        .skip-label { font-size: 10px; color: #888; display: block; margin-top: -4px; }
+        .skip-label { font-size: 12px; color: #bbb; display: block; margin-top: 2px; font-weight: 600; }
 
         /* ---- Bottom bar: speed slider ---- */
         .bottom-bar { display: flex; align-items: center; gap: 14px;
             padding: 12px 20px calc(14px + env(safe-area-inset-bottom, 0px)); }
         .speed-wrap { flex: 1; display: flex; align-items: center; gap: 10px; }
-        .speed-wrap .spd-ico { font-size: 13px; color: #888; flex-shrink: 0; }
         .speed-pill { flex-shrink: 0; min-width: 52px; text-align: center; font-size: 13px;
             font-weight: 700; color: #fff; background: rgba(134,64,192,0.28);
             border: 1px solid rgba(201,64,176,0.4); border-radius: 99px; padding: 4px 8px; }
@@ -194,9 +193,7 @@
 
     <div class="bottom-bar">
         <div class="speed-wrap">
-            <span class="spd-ico">🐢</span>
             <input type="range" id="speed" min="1" max="3" step="0.1" value="1">
-            <span class="spd-ico">🐇</span>
             <span class="speed-pill" id="speed-pill">1.0×</span>
         </div>
         <button class="text-btn" id="chapters-btn2">Chapters</button>

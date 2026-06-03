@@ -12,6 +12,12 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
     <link rel="apple-touch-icon" href="/icon-192.png">
     <style>
+        /* GreatReads format palette */
+        :root {
+            --fmt-ebook: #0066CC;
+            --fmt-audio: #FF6600;
+            --fmt-physical: #6B4BA3;
+        }
         * {
             margin: 0;
             padding: 0;
@@ -288,21 +294,29 @@
             box-shadow: 0 4px 8px rgba(0,0,0,0.3);
             display: block;
         }
-        /* Reading-progress bar over the bottom of a book cover */
-        .book-progress {
+        /* Per-format progress bars stacked at the bottom of the cover.
+           Ebook (blue) sits at the very bottom; audio (orange) sits above it.
+           Only bars with progress > 0 are rendered. */
+        .book-progress-wrap {
             position: absolute;
             left: 4px;
             right: 4px;
             bottom: 4px;
-            height: 4px;
-            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+        .book-pbar {
+            height: 3px;
+            background: rgba(0, 0, 0, 0.4);
             border-radius: 2px;
             overflow: hidden;
         }
-        .book-progress-fill {
+        .book-pbar-fill {
             height: 100%;
-            background: #4caf50;
+            border-radius: 2px;
         }
+        /* Cached ebook dot — blue to match the ebook format color. */
         .book-cached-dot {
             position: absolute;
             top: 4px;
@@ -310,26 +324,23 @@
             width: 8px;
             height: 8px;
             border-radius: 50%;
-            background: #4caf50;
+            background: var(--fmt-ebook);
             box-shadow: 0 0 4px rgba(0,0,0,0.6);
         }
-        /* Media-type badges (top-left of a cover). Only shown when an item has
-           an audiobook — pure ebooks (the common case) stay unbadged to keep
-           the grid clean. Dual-format shows 📖🎧, audio-only shows 🎧. */
+        /* Media-type badges — SVG icon tiles, top-left, audio-bearing only.
+           Pure ebooks stay unbadged to keep the grid clean. */
         .book-badges {
             position: absolute;
             top: 4px;
             left: 4px;
             display: flex;
             gap: 3px;
-            font-size: 12px;
-            line-height: 1;
+            line-height: 0;
         }
         .book-badge {
-            background: rgba(0, 0, 0, 0.6);
-            border-radius: 6px;
-            padding: 3px 4px;
-            backdrop-filter: blur(2px);
+            border-radius: 2px;
+            overflow: hidden;
+            display: flex;
         }
         /* Read/Listen action sheet for dual-format works. */
         .sheet-backdrop {
@@ -825,9 +836,12 @@
                 // books with progress, not the whole library). Tolerate
                 // individual failures (book may have been removed from
                 // Calibre since progress was last written).
+                // Use the MERGED single-book endpoint (not Calibre-only
+                // /api/books/<id>) so a dual-format work that floats up here via
+                // its ebook progress keeps its audiobook editions/badges.
                 const fetched = await Promise.all(missing.map(async id => {
                     try {
-                        const r = await fetch(`${API_URL}/books/${encodeURIComponent(id)}`);
+                        const r = await fetch(`${API_URL}/library/${encodeURIComponent(id)}`);
                         if (!r.ok) return null;
                         const b = await r.json();
                         return (b && b.id != null) ? b : null;
@@ -908,21 +922,28 @@
                 const state = readingStateFor(book.id);
                 const readPct = state && state.progress != null
                     ? Math.round(((state.page + 1) / state.total) * 100) : 0;
-                // Audiobook listening (from the backend) shows on the same bar.
-                const progressPct = Math.max(readPct, audioPctFor(book));
+                // Per-format progress bars: ebook (blue) at bottom, audio (orange) above.
+                const audioPct = audioPctFor(book);
                 const cachedDot = cachedBookIds.has(book.id)
                     ? '<div class="book-cached-dot" title="Downloaded"></div>' : '';
-                const progressBar = progressPct > 0 ? `
-                    <div class="book-progress" title="${progressPct}% complete">
-                        <div class="book-progress-fill" style="width: ${progressPct}%"></div>
-                    </div>` : '';
+                const barParts = [];
+                if (audioPct > 0) barParts.push(
+                    `<div class="book-pbar"><div class="book-pbar-fill" style="width:${audioPct}%;background:var(--fmt-audio)"></div></div>`);
+                if (readPct > 0) barParts.push(
+                    `<div class="book-pbar"><div class="book-pbar-fill" style="width:${readPct}%;background:var(--fmt-ebook)"></div></div>`);
+                const progressBar = barParts.length
+                    ? `<div class="book-progress-wrap" title="Ebook ${readPct}% · Audio ${audioPct}%">${barParts.join('')}</div>` : '';
                 // mediaTypes drives the format badges + tap routing. Default to
                 // ebook for plain Calibre rows that predate the unified library.
                 const types = book.mediaTypes || ['ebook'];
                 const hasAudio = types.includes('audiobook');
                 const hasEbook = types.includes('ebook');
+                // SVG icon badges: blue tablet = ebook, orange headphones = audiobook.
+                // Only shown on audio-bearing rows; pure-ebook stays unbadged.
+                const ICON_EBOOK = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#0066CC"/><rect x="2" y="2.5" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="4.9" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="7.3" width="5" height="1.2" rx="0.6" fill="white"/></svg>';
+                const ICON_AUDIO = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#FF6600"/><path d="M1.8 7 A3.7 4.5 0 0 1 9.2 7" stroke="white" stroke-width="1.3" fill="none" stroke-linecap="round"/><rect x="1.2" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/><rect x="8.3" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/></svg>';
                 const badges = hasAudio
-                    ? `<div class="book-badges">${hasEbook ? '<span class="book-badge" title="Ebook">📖</span>' : ''}<span class="book-badge" title="Audiobook">🎧</span></div>`
+                    ? `<div class="book-badges">${hasEbook ? `<span class="book-badge" title="Ebook">${ICON_EBOOK}</span>` : ''}<span class="book-badge" title="Audiobook">${ICON_AUDIO}</span></div>`
                     : '';
                 return `
                 <div class="book" data-book-id="${book.id}"
