@@ -2926,6 +2926,10 @@
         // outlive the page.
         function _flushOnExit() {
             if (_pendingState) flushReadingState(true);
+            // Trigger GreatReads sync on exit so the tracker stays fresh.
+            // We don't wait for it to finish, and use keepalive so it
+            // survives the tab being closed.
+            fetch(API_URL + '/greatreads/sync', { method: 'POST', keepalive: true }).catch(() => {});
         }
         window.addEventListener('pagehide', _flushOnExit);
         window.addEventListener('beforeunload', _flushOnExit);

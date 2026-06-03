@@ -955,6 +955,24 @@
             const rec = audioProgressByAbsId.get(rawAbsIdFor(book));
             return rec && typeof rec.progress === 'number' ? Math.round(rec.progress * 100) : 0;
         }
+        // Backend ebook-progress fraction (0..100) for a row. The backend store
+        // is the cross-device source of truth (shared between phone/PC, survives
+        // APK reinstalls that wipe WebView localStorage), so we prefer it and
+        // only fall back to THIS device's localStorage for a book whose progress
+        // hasn't been pushed/pulled yet. This is what keeps the ebook bar in
+        // sync across devices and lets a dual-format work (e.g. Iron Gold) show
+        // its ebook bar even on a device that only ever listened to the audio.
+        function ebookPctFor(book) {
+            const p = progressMap.get(String(book.id));
+            if (p && p.mediaType !== 'audiobook' && typeof p.progress === 'number') {
+                return Math.round(p.progress * 100);
+            }
+            const state = readingStateFor(book.id);
+            if (state && state.progress != null && state.total) {
+                return Math.round(((state.page + 1) / state.total) * 100);
+            }
+            return 0;
+        }
 
         function applyFilter(list) {
             if (formatFilter === 'all') return list;
@@ -1137,9 +1155,7 @@
             // Grid uses the lightweight thumbnail; the full cover is reserved
             // for the reader/player where it's shown large.
             const coverUrl = book.thumbnail || book.cover;
-            const state = readingStateFor(book.id);
-            const readPct = state && state.progress != null
-                ? Math.round(((state.page + 1) / state.total) * 100) : 0;
+            const readPct = ebookPctFor(book);
             // Per-format progress bars: ebook (blue) at bottom, audio (orange) above.
             const audioPct = audioPctFor(book);
             const barParts = [];

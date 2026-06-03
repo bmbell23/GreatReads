@@ -43,6 +43,15 @@ if not ABS_PUBLIC_URL and ABS_URL:
 # URLs and the HLS-proxy URLs we hand back in playback sessions.
 PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '100.69.184.113:8091')
 
+# GreatReads reading-tracker integration (optional). When asked to (an explicit
+# POST /api/greatreads/sync — never automatically), we mirror our in-progress
+# reading percentages into the GreatReads tracker. The push RESPECTS the format
+# GreatReads already tracks per book (its reading `media`): an "Audio" reading
+# is updated from our audiobook percentage, an "Ebook" reading from our ebook
+# percentage. We only ever update the percentage of existing in-progress
+# readings — we never create, finish, or re-format anything.
+GREATREADS_URL = os.environ.get('GREATREADS_URL', 'http://100.69.184.113:8007').rstrip('/')
+
 # Persisted user data (highlights + bookmarks). Single JSON file on disk —
 # trivial to back up, trivial to grep. Guarded by a lock because Flask is
 # multi-threaded in debug mode.
@@ -1702,6 +1711,124 @@ def delete_progress(book_id):
         del data[str(book_id)]
         _save_progress(data)
     return jsonify({'deleted': str(book_id)})
+
+# ---------- GreatReads tracker push ----------
+# Mirror our in-progress reading percentages into the external GreatReads
+# reading tracker (see GREATREADS_URL). We match our progress records to
+# GreatReads readings by normalized title AND format: a GreatReads "Audio"
+# reading is fed our audiobook percentage; an "Ebook" reading is fed our ebook
+# percentage. Only the percentage of an already-in-progress reading is updated
+# (via GreatReads' own PUT /api/readings/{id}/progress) — we never create,
+# finish, or re-format a reading. POST-only; pass {"dryRun": true} (or
+# ?dry_run=1) to preview the matches without writing.
+
+def _gr_media_kind(media):
+    """Bucket a GreatReads `media` string into the format whose progress we feed
+    it: 'audio' or 'ebook'. Physical (and anything else) has no digital progress
+    source on our side, so it maps to None and is skipped."""
+    m = (media or '').strip().lower()
+    if m in ('audio', 'audiobook'):
+        return 'audio'
+    if m in ('ebook', 'kindle', 'e-book'):
+        return 'ebook'
+    return None
+
+def _our_progress_by_title():
+    """Index our in-progress percentages by (normalized title, kind), where kind
+    is 'audio' for audiobook records (mediaType == 'audiobook') and 'ebook'
+    otherwise. Keeps the newest-updated record per key. Returns
+    { (norm_title, kind): {title, percent, updated} }."""
+    with _progress_lock:
+        data = _load_progress()
+    out = {}
+    for rec in data.values():
+        try:
+            frac = float(rec.get('progress') or 0)
+        except (TypeError, ValueError):
+            frac = 0.0
+        if frac <= 0:
+            continue
+        title = rec.get('bookTitle') or ''
+        norm = _norm(_strip_edition(title))
+        if not norm:
+            continue
+        kind = 'audio' if rec.get('mediaType') == 'audiobook' else 'ebook'
+        key = (norm, kind)
+        upd = rec.get('updated') or 0
+        prev = out.get(key)
+        if not prev or upd > prev['updated']:
+            out[key] = {'title': title, 'percent': round(frac * 100, 1), 'updated': upd}
+    return out
+
+@app.route('/api/greatreads/sync', methods=['POST'])
+def greatreads_sync():
+    """Push our in-progress percentages to the GreatReads tracker, respecting
+    the format GreatReads tracks per book. Idempotent and non-destructive."""
+    body = request.get_json(silent=True) or {}
+    dry_run = (bool(body.get('dryRun'))
+               or request.args.get('dry_run') in ('1', 'true', 'yes'))
+
+    # GreatReads tells us which book + which format it's tracking for each
+    # in-progress reading.
+    try:
+        r = requests.get(GREATREADS_URL + '/api/readings/',
+                         params={'status': 'in_progress'}, timeout=15)
+        r.raise_for_status()
+        readings = r.json()
+    except Exception as e:
+        return jsonify({'error': 'greatreads unreachable', 'detail': str(e)}), 502
+
+    ours = _our_progress_by_title()
+    synced, skipped = [], []
+
+    for rd in (readings or []):
+        rid = rd.get('id')
+        title = (rd.get('book') or {}).get('title') or ''
+        media = rd.get('media')
+        kind = _gr_media_kind(media)
+        norm = _norm(_strip_edition(title))
+        if kind is None:
+            skipped.append({'readingId': rid, 'title': title, 'media': media,
+                            'reason': 'no progress source for this format'})
+            continue
+        match = ours.get((norm, kind))
+        if not match:
+            skipped.append({'readingId': rid, 'title': title, 'media': media,
+                            'reason': 'no matching %s progress on our side' % kind})
+            continue
+        pct = match['percent']
+        if pct <= 0 or pct >= 100:
+            skipped.append({'readingId': rid, 'title': title, 'media': media,
+                            'reason': 'percent out of range (%.1f)' % pct})
+            continue
+        # No-op guard: GreatReads already at (about) this percentage.
+        try:
+            cur = rd.get('current_percent')
+            cur = float(cur) if cur is not None else None
+        except (TypeError, ValueError):
+            cur = None
+        if cur is not None and abs(cur - pct) < 0.5:
+            skipped.append({'readingId': rid, 'title': title, 'media': media,
+                            'reason': 'already at %.1f%%' % cur})
+            continue
+
+        entry = {'readingId': rid, 'title': title, 'media': media,
+                 'percent': pct, 'previous': cur}
+        if dry_run:
+            synced.append({**entry, 'dryRun': True})
+            continue
+        try:
+            pr = requests.put(GREATREADS_URL + '/api/readings/%s/progress' % rid,
+                             params={'current_percent': pct}, timeout=15)
+            pr.raise_for_status()
+            synced.append(entry)
+        except Exception as e:
+            skipped.append({'readingId': rid, 'title': title, 'media': media,
+                            'reason': 'push failed: %s' % e})
+
+    return jsonify({'dryRun': dry_run, 'greatReadsUrl': GREATREADS_URL,
+                    'synced': synced, 'syncedCount': len(synced),
+                    'skipped': skipped})
 
 # ---------- Feature requests / TODO list ----------
 # Backing store for the in-app "Requests" page (web/requests.html). One JSON
