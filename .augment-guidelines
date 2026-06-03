@@ -98,6 +98,8 @@ All endpoints are JSON unless noted. CORS is permissive.
   - `GET    /api/progress/<bookId>`
   - `PUT    /api/progress/<bookId>` — upsert; last-writer-wins on `updated` timestamp. Body may include `recentPages` (rolling buffer of `{ms, words}` page-turn samples, see "Highlight & Bookmark Model" → progress record)
   - `DELETE /api/progress/<bookId>`
+- **Series**
+  - `GET  /api/series` — groups the full merged library (Calibre + ABS) into series. Reuses the full-library cache so grouping spans all Calibre pages and audio-only items. Returns `{series:[{name, count, mediaTypes, cover, books:[…]}, …], absEnabled}`. Books with no series are omitted; books within each group are sorted by `series_index`. Series cards are sorted alphabetically. Used by the frontend Series sort pill.
 - **Feature requests / TODO list** (see "Requests Workflow" below)
   - `GET    /api/requests?status=` — list, newest-updated first; optional status filter
   - `POST   /api/requests` — create (`title` required; defaults to `Backlog`)

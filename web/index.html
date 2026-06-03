@@ -521,8 +521,22 @@
             margin: 20px;
             border-radius: 8px;
         }
-        /* Settings overlay — single-row header, so less top padding than hl overlay */
-        .overlay.settings-overlay { padding-top: 60px; }
+        /* Single-row-header overlays (settings, series detail) need less top pad. */
+        .overlay.settings-overlay,
+        #series-overlay { padding-top: 60px; }
+        /* Series card: book-count chip bottom-left of the cover. */
+        .series-count {
+            position: absolute;
+            bottom: 4px;
+            left: 4px;
+            background: rgba(0,0,0,0.7);
+            color: #fff;
+            font-size: 11px;
+            font-weight: 600;
+            line-height: 1;
+            padding: 3px 6px;
+            border-radius: 8px;
+        }
         .setting-section {
             font-size: 11px; font-weight: 700; letter-spacing: 1px;
             text-transform: uppercase; color: #888;
@@ -591,6 +605,7 @@
             <div class="pill-group" id="sort-pills">
                 <button class="pill active" data-sort="author">Author</button>
                 <button class="pill" data-sort="title">Title</button>
+                <button class="pill" data-sort="series">Series</button>
             </div>
             <div class="pill-group" id="fmt-pills">
                 <button class="pill active" data-fmt="all">All</button>
@@ -712,6 +727,17 @@
         </div>
     </div>
 
+    <!-- Series detail overlay — lists every book in a tapped series, in order. -->
+    <div class="overlay" id="series-overlay">
+        <div class="overlay-header">
+            <div class="overlay-header-row">
+                <button class="icon-btn" onclick="closeSeriesDetail()" title="Back">←</button>
+                <div class="overlay-title" id="series-detail-title">Series</div>
+            </div>
+        </div>
+        <div class="overlay-list" id="series-detail-list"></div>
+    </div>
+
     <div id="content">
         <div class="loading">Loading your library...</div>
     </div>
@@ -772,8 +798,12 @@
         const BATCH_SIZE = 50;
         let isLoading = false;
         let searchQuery = '';
-        let sortMode = 'author';      // 'author' | 'title'
+        let sortMode = 'author';      // 'author' | 'title' | 'series'
         let formatFilter = 'all';   // 'all' | 'ebook' | 'audiobook' | 'dual'
+        // Series view: full grouped library, fetched once from /api/series and
+        // cached. null until the user first switches to Series mode.
+        let seriesData = null;
+        let seriesLoading = false;
         // Snapshot of the non-search ("home") library + scroll position so we
         // can restore them when the user clears the search box. Without this,
         // clearing search would lose everything we'd lazily paged in.
@@ -848,10 +878,11 @@
             if (searchAbortCtl) searchAbortCtl.abort();
             searchAbortCtl = new AbortController();
 
-            // Calibre query language: `title:"foo" or author:"foo"`. Quoting
-            // keeps multi-word phrases intact and escapes the user input.
+            // Calibre query language: `title:"foo" or author:"foo" or series:"foo"`.
+            // Quoting keeps multi-word phrases intact and escapes user input.
+            // Including series lets users find all books in a series by name.
             const safe = q.replace(/"/g, '\\"');
-            const calibreQuery = `title:"${safe}" or authors:"${safe}"`;
+            const calibreQuery = `title:"${safe}" or authors:"${safe}" or series:"${safe}"`;
             // Route through /api/library (not /api/books) so results keep their
             // ABS enrichment (dual-format badges) AND so audio-only audiobooks
             // can be matched: `query` drives the Calibre ebook search, `q` is
@@ -1054,47 +1085,36 @@
             }
         }
 
-        function displayBooks(books, isComplete) {
-            const content = document.getElementById('content');
+        // SVG format badges, shared by the grid and the series detail view.
+        const ICON_EBOOK = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#0066CC"/><rect x="2" y="2.5" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="4.9" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="7.3" width="5" height="1.2" rx="0.6" fill="white"/></svg>';
+        const ICON_AUDIO = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#FF6600"/><path d="M1.8 7 A3.7 4.5 0 0 1 9.2 7" stroke="white" stroke-width="1.3" fill="none" stroke-linecap="round"/><rect x="1.2" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/><rect x="8.3" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/></svg>';
 
-            console.log('Displaying books:', books.length, 'isComplete:', isComplete);
-
-            if (books.length === 0 && currentOffset === 0) {
-                content.innerHTML = '<div class="loading">No books found</div>';
-                return;
-            }
-
-            const sorted = applySort(applyFilter(books));
-
-            const booksHTML = sorted.map(book => {
-                const format = ((book.formats || [])[0] || 'epub').toLowerCase();
-                const coverUrl = book.cover || book.thumbnail;
-                const state = readingStateFor(book.id);
-                const readPct = state && state.progress != null
-                    ? Math.round(((state.page + 1) / state.total) * 100) : 0;
-                // Per-format progress bars: ebook (blue) at bottom, audio (orange) above.
-                const audioPct = audioPctFor(book);
-                const barParts = [];
-                if (audioPct > 0) barParts.push(
-                    `<div class="book-pbar"><div class="book-pbar-fill" style="width:${audioPct}%;background:var(--fmt-audio)"></div></div>`);
-                if (readPct > 0) barParts.push(
-                    `<div class="book-pbar"><div class="book-pbar-fill" style="width:${readPct}%;background:var(--fmt-ebook)"></div></div>`);
-                const progressBar = barParts.length
-                    ? `<div class="book-progress-wrap" title="Ebook ${readPct}% · Audio ${audioPct}%">${barParts.join('')}</div>` : '';
-                // mediaTypes drives the format badges + tap routing. Default to
-                // ebook for plain Calibre rows that predate the unified library.
-                const types = book.mediaTypes || ['ebook'];
-                const hasAudio = types.includes('audiobook');
-                const hasEbook = types.includes('ebook');
-                // SVG icon badges: blue tablet = ebook, orange headphones = audiobook.
-                // Shown on every book so format is always visible at a glance.
-                const ICON_EBOOK = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#0066CC"/><rect x="2" y="2.5" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="4.9" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="7.3" width="5" height="1.2" rx="0.6" fill="white"/></svg>';
-                const ICON_AUDIO = '<svg width="11" height="11" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#FF6600"/><path d="M1.8 7 A3.7 4.5 0 0 1 9.2 7" stroke="white" stroke-width="1.3" fill="none" stroke-linecap="round"/><rect x="1.2" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/><rect x="8.3" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/></svg>';
-                const badges = `<div class="book-badges">${hasEbook ? `<span class="book-badge" title="Ebook">${ICON_EBOOK}</span>` : ''}${hasAudio ? `<span class="book-badge" title="Audiobook">${ICON_AUDIO}</span>` : ''}</div>`;
-                // Format dots (top-right): one colored circle per available format,
-                // side by side when dual — blue for ebook, orange for audio.
-                const fmtDots = `<div class="book-fmt-dots">${hasEbook ? '<div class="book-fmt-dot ebook"></div>' : ''}${hasAudio ? '<div class="book-fmt-dot audio"></div>' : ''}</div>`;
-                return `
+        // One book card. Reused by the main grid and the series detail overlay.
+        function bookCardHTML(book) {
+            const format = ((book.formats || [])[0] || 'epub').toLowerCase();
+            const coverUrl = book.cover || book.thumbnail;
+            const state = readingStateFor(book.id);
+            const readPct = state && state.progress != null
+                ? Math.round(((state.page + 1) / state.total) * 100) : 0;
+            // Per-format progress bars: ebook (blue) at bottom, audio (orange) above.
+            const audioPct = audioPctFor(book);
+            const barParts = [];
+            if (audioPct > 0) barParts.push(
+                `<div class="book-pbar"><div class="book-pbar-fill" style="width:${audioPct}%;background:var(--fmt-audio)"></div></div>`);
+            if (readPct > 0) barParts.push(
+                `<div class="book-pbar"><div class="book-pbar-fill" style="width:${readPct}%;background:var(--fmt-ebook)"></div></div>`);
+            const progressBar = barParts.length
+                ? `<div class="book-progress-wrap" title="Ebook ${readPct}% · Audio ${audioPct}%">${barParts.join('')}</div>` : '';
+            // mediaTypes drives the format badges + tap routing. Default to
+            // ebook for plain Calibre rows that predate the unified library.
+            const types = book.mediaTypes || ['ebook'];
+            const hasAudio = types.includes('audiobook');
+            const hasEbook = types.includes('ebook');
+            const badges = `<div class="book-badges">${hasEbook ? `<span class="book-badge" title="Ebook">${ICON_EBOOK}</span>` : ''}${hasAudio ? `<span class="book-badge" title="Audiobook">${ICON_AUDIO}</span>` : ''}</div>`;
+            // Format dots (top-right): one colored circle per available format,
+            // side by side when dual — blue for ebook, orange for audio.
+            const fmtDots = `<div class="book-fmt-dots">${hasEbook ? '<div class="book-fmt-dot ebook"></div>' : ''}${hasAudio ? '<div class="book-fmt-dot audio"></div>' : ''}</div>`;
+            return `
                 <div class="book" data-book-id="${book.id}"
                      data-book-title="${escapeHTML(book.title)}"
                      data-book-author="${escapeHTML(book.author || '')}"
@@ -1112,8 +1132,26 @@
                     </div>
                     <div class="book-title">${escapeHTML(book.title)}</div>
                     <div class="book-author">${escapeHTML(book.author)}</div>
-                </div>
-            `;}).join('');
+                </div>`;
+        }
+
+        function displayBooks(books, isComplete) {
+            // Series mode renders a grouped grid instead of the flat book list;
+            // every existing call site (loadBooks, reRender, search) routes here
+            // so this single guard keeps them all correct.
+            if (sortMode === 'series') { renderSeriesGrid(); return; }
+
+            const content = document.getElementById('content');
+
+            console.log('Displaying books:', books.length, 'isComplete:', isComplete);
+
+            if (books.length === 0 && currentOffset === 0) {
+                content.innerHTML = '<div class="loading">No books found</div>';
+                return;
+            }
+
+            const sorted = applySort(applyFilter(books));
+            const booksHTML = sorted.map(bookCardHTML).join('');
 
             content.innerHTML = '<div class="books">' + booksHTML + '</div>' +
                 (!isComplete ? '<div class="loading-more">Loading more...</div>' : '');
@@ -1125,6 +1163,92 @@
             // loads the moment it scrolls into view — works on desktop and mobile
             // regardless of how the scrollable container is set up.
             _observeSentinel();
+        }
+
+        // ---------- Series view ----------
+        // A series matches the current format filter if any of its books do.
+        function seriesMatchesFilter(s) {
+            return applyFilter(s.books).length > 0;
+        }
+        // One series card: cover of the first book, name, book count, format dots.
+        function seriesCardHTML(s) {
+            const first = s.books[0] || {};
+            const mts = s.mediaTypes || [];
+            const hasE = mts.includes('ebook'), hasA = mts.includes('audiobook');
+            const fmtDots = `<div class="book-fmt-dots">${hasE ? '<div class="book-fmt-dot ebook"></div>' : ''}${hasA ? '<div class="book-fmt-dot audio"></div>' : ''}</div>`;
+            return `
+                <div class="book series-card" data-book-id="${first.id}"
+                     data-series="${escapeHTML(s.name)}"
+                     onclick="openSeriesDetail(this.dataset.series)">
+                    <div class="book-cover-wrap">
+                        <img data-src="${first.cover || first.thumbnail || ''}" class="book-cover"
+                             src="data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7"
+                             onerror="this.style.background='linear-gradient(135deg, #667eea 0%, #764ba2 100%)'">
+                        <div class="series-count">${s.count}</div>
+                        ${fmtDots}
+                    </div>
+                    <div class="book-title">${escapeHTML(s.name)}</div>
+                    <div class="book-author">${s.count} book${s.count === 1 ? '' : 's'}</div>
+                </div>`;
+        }
+        function renderSeriesGrid() {
+            const content = document.getElementById('content');
+            if (seriesData === null) {
+                if (!seriesLoading) loadSeries();
+                content.innerHTML = '<div class="loading">Loading series…</div>';
+                return;
+            }
+            const q = (searchEl.value || '').trim().toLowerCase();
+            const list = seriesData
+                .filter(seriesMatchesFilter)
+                .filter(s => !q || s.name.toLowerCase().includes(q));
+            if (!list.length) {
+                content.innerHTML = '<div class="loading">No series found</div>';
+                return;
+            }
+            content.innerHTML = '<div class="books">' + list.map(seriesCardHTML).join('') + '</div>';
+            document.querySelectorAll('.book-cover[data-src]').forEach(loadCover);
+        }
+        async function loadSeries() {
+            seriesLoading = true;
+            try {
+                const r = await fetch(`${API_URL}/series`);
+                if (!r.ok) throw new Error('HTTP ' + r.status);
+                const d = await r.json();
+                seriesData = Array.isArray(d.series) ? d.series : [];
+            } catch (e) {
+                console.error('series load failed:', e);
+                seriesData = [];
+            } finally {
+                seriesLoading = false;
+                if (sortMode === 'series') renderSeriesGrid();
+            }
+        }
+        // Look a book up by id across the home/search set AND the series cache,
+        // so onBookOpen works for books rendered only inside the series view.
+        function findBookById(id) {
+            let b = allBooks.find(x => String(x.id) === String(id));
+            if (b) return b;
+            if (seriesData) {
+                for (const s of seriesData) {
+                    const f = s.books.find(x => String(x.id) === String(id));
+                    if (f) return f;
+                }
+            }
+            return null;
+        }
+        function openSeriesDetail(name) {
+            const s = (seriesData || []).find(x => x.name === name);
+            if (!s) return;
+            document.getElementById('series-detail-title').textContent = s.name;
+            const books = applyFilter(s.books);
+            document.getElementById('series-detail-list').innerHTML =
+                '<div class="books">' + books.map(bookCardHTML).join('') + '</div>';
+            document.getElementById('series-overlay').classList.add('open');
+            document.querySelectorAll('#series-detail-list .book-cover[data-src]').forEach(loadCover);
+        }
+        function closeSeriesDetail() {
+            document.getElementById('series-overlay').classList.remove('open');
         }
 
         let _sentinelObserver = null;
@@ -1208,7 +1332,9 @@
             // longer gates anything so genuine follow-on taps are never blocked.
             if (Date.now() - _menuDismissedAt < 300) return;
             const id = el.dataset.bookId;
-            const book = allBooks.find(b => String(b.id) === String(id)) || {
+            // findBookById also searches the series cache so books shown only
+            // in the series view keep their audioEditions (format sheet) on tap.
+            const book = findBookById(id) || {
                 id,
                 title: el.dataset.bookTitle || '',
                 author: el.dataset.bookAuthor || '',
@@ -1331,9 +1457,13 @@
             searchWrap.classList.remove('has-text');
             searchQuery = '';
             clearTimeout(_searchDebounce);
-            allBooks = homeBooks;
-            currentOffset = homeOffset;
-            displayBooks(allBooks, homeIsComplete);
+            if (sortMode === 'series') {
+                renderSeriesGrid();
+            } else {
+                allBooks = homeBooks;
+                currentOffset = homeOffset;
+                displayBooks(allBooks, homeIsComplete);
+            }
         }
 
         // X button — clear without stealing focus from the input.
@@ -1364,7 +1494,10 @@
             searchQuery = v.toLowerCase();
             clearTimeout(_searchDebounce);
             _searchDebounce = setTimeout(() => {
-                if (!v) {
+                if (sortMode === 'series') {
+                    // Series mode: filter the already-loaded series list client-side.
+                    renderSeriesGrid();
+                } else if (!v) {
                     // Restore the home (lazy-paged) view exactly as it was.
                     allBooks = homeBooks;
                     currentOffset = homeOffset;
@@ -1400,7 +1533,7 @@
         try {
             const savedSort = localStorage.getItem('ereader.sortMode');
             // 'recent' was a valid value in an old version — treat it as 'author'.
-            if (savedSort === 'author' || savedSort === 'title') {
+            if (savedSort === 'author' || savedSort === 'title' || savedSort === 'series') {
                 sortMode = savedSort;
                 document.querySelectorAll('#sort-pills .pill').forEach(p =>
                     p.classList.toggle('active', p.dataset.sort === sortMode));

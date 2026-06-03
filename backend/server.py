@@ -998,7 +998,8 @@ def unified_library():
             if terms:
                 for m in audio_only:
                     hay = ((m.get('title') or '') + ' '
-                           + (m.get('author') or '')).lower()
+                           + (m.get('author') or '') + ' '
+                           + (m.get('series') or '')).lower()
                     if all(t in hay for t in terms):
                         merged.append(m)
         elif offset == 0:
@@ -1035,6 +1036,55 @@ def unified_library_item(book_id):
                 return jsonify(merged[0])
     book.setdefault('mediaTypes', ['ebook'])
     return jsonify(book)
+
+# Fields the series view needs per book; drops heavy ones (description,
+# audiobook.chapters) so the grouped payload stays lean.
+_SERIES_BOOK_FIELDS = ('id', 'title', 'author', 'authors', 'cover', 'thumbnail',
+                       'mediaTypes', 'absId', 'audioEditions', 'formats',
+                       'format', 'series', 'series_index')
+
+def _series_book(b):
+    return {k: b.get(k) for k in _SERIES_BOOK_FIELDS if k in b}
+
+@app.route('/api/series', methods=['GET'])
+def api_series():
+    """Group the full merged library into series. Reuses the full-library match
+    cache so grouping spans every Calibre page AND ABS audio-only items. Each
+    group carries its books (sorted by series_index) so the frontend renders
+    both the series grid and a series' detail view from one fetch. Books with
+    no series are omitted. Returns {series:[...], absEnabled}."""
+    if ABS_ENABLED:
+        enrich_map, audio_only = _get_library_cache()
+        merged = list(enrich_map.values()) + audio_only
+    else:
+        merged, _ = get_calibre_books(limit=0, offset=0)
+        for b in merged:
+            b.setdefault('mediaTypes', ['ebook'])
+
+    groups = {}
+    for b in merged:
+        name = (b.get('series') or '').strip()
+        if not name:
+            continue
+        g = groups.setdefault(name.lower(), {'name': name, 'books': []})
+        g['books'].append(_series_book(b))
+
+    out = []
+    for g in groups.values():
+        books = sorted(g['books'],
+                       key=lambda x: (x.get('series_index') or 0, x.get('title') or ''))
+        mts = set()
+        for x in books:
+            mts.update(x.get('mediaTypes') or [])
+        out.append({
+            'name': g['name'],
+            'count': len(books),
+            'mediaTypes': sorted(mts),
+            'cover': books[0].get('cover') or books[0].get('thumbnail'),
+            'books': books,
+        })
+    out.sort(key=lambda s: s['name'].lower())
+    return jsonify({'series': out, 'absEnabled': ABS_ENABLED})
 
 @app.route('/api/audiobooks/<abs_id>/cover', methods=['GET'])
 def get_audiobook_cover(abs_id):
