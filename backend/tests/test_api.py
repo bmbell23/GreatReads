@@ -110,6 +110,89 @@ class TestProgressCrud(unittest.TestCase):
         finally:
             self.assertIn(b.delete(f'/progress/{bid}').status_code, (200, 204))
 
+    def test_updated_timestamp_on_ebook(self):
+        # The library's ebookPctFor() compares rec.updated against
+        # localStorage.ts to decide which is fresher.  The field must be a
+        # positive epoch-ms integer so that comparison works correctly.
+        import time
+        bid = '__test_ts_ebook__'
+        before_ms = int(time.time() * 1000)
+        self.assertEqual(b.put(f'/progress/{bid}',
+                               {'progress': 0.25, 'anchor': 1, 'fontSize': 18}).status_code, 200)
+        try:
+            j = b.get(f'/progress/{bid}').json()
+            updated = j.get('updated')
+            self.assertIsNotNone(updated, 'updated field must be present on ebook record')
+            self.assertIsInstance(updated, (int, float))
+            # Must be epoch-ms (>> epoch-s; current year ~1.78e12)
+            self.assertGreater(updated, before_ms - 5000,
+                               'updated must be a recent epoch-ms timestamp')
+        finally:
+            self.assertIn(b.delete(f'/progress/{bid}').status_code, (200, 204))
+
+    def test_updated_timestamp_on_audiobook(self):
+        # Same freshness check applies on the audio side (audioPctFor compares
+        # rec.updated against the localStorage snapshot ts).
+        import time
+        bid = 'abs:__test_ts_audio__'
+        before_ms = int(time.time() * 1000)
+        self.assertEqual(b.put(f'/progress/{bid}', {
+            'mediaType': 'audiobook', 'absId': '__test_ts_audio__',
+            'position': 500, 'duration': 2000, 'progress': 0.25,
+            'bookTitle': 'T', 'bookAuthor': 'A',
+        }).status_code, 200)
+        try:
+            j = b.get(f'/progress/{bid}').json()
+            updated = j.get('updated')
+            self.assertIsNotNone(updated, 'updated field must be present on audiobook record')
+            self.assertIsInstance(updated, (int, float))
+            self.assertGreater(updated, before_ms - 5000,
+                               'updated must be a recent epoch-ms timestamp')
+        finally:
+            self.assertIn(b.delete(f'/progress/{bid}').status_code, (200, 204))
+
+    def test_audiobook_absid_in_bulk_list(self):
+        # The library's ensureProgressBooksLoaded() populates audioProgressByAbsId
+        # keyed by absId from the bulk GET /api/progress response.  If absId is
+        # absent from the bulk list, audioPctFor() can never resolve the record
+        # and the audio progress bar never renders.
+        bid = 'abs:__test_bulk_audio__'
+        abs_id = '__test_bulk_audio__'
+        self.assertEqual(b.put(f'/progress/{bid}', {
+            'mediaType': 'audiobook', 'absId': abs_id,
+            'position': 100, 'duration': 1000, 'progress': 0.10,
+            'bookTitle': 'T', 'bookAuthor': 'A',
+        }).status_code, 200)
+        try:
+            data = b.get('/progress').json()
+            items = data.get('items', [])
+            match = next((it for it in items if it.get('bookId') == bid), None)
+            self.assertIsNotNone(match, 'audiobook progress must appear in bulk /api/progress list')
+            self.assertEqual(match.get('absId'), abs_id,
+                             'absId must be preserved in bulk list so audioProgressByAbsId resolves')
+            self.assertIsInstance(match.get('updated'), (int, float),
+                                  'updated must be present in bulk list for freshness comparison')
+        finally:
+            self.assertIn(b.delete(f'/progress/{bid}').status_code, (200, 204))
+
+    def test_last_writer_wins_advances_updated(self):
+        # Two sequential PUTs — the second must increase `updated` so that a
+        # stale localStorage snapshot (ts < second updated) will correctly lose
+        # the freshness check and the backend value is preferred.
+        import time
+        bid = '__test_lww__'
+        b.put(f'/progress/{bid}', {'progress': 0.1, 'anchor': 0, 'fontSize': 18})
+        try:
+            first_updated = b.get(f'/progress/{bid}').json().get('updated', 0)
+            time.sleep(0.05)   # ensure clock advances even on fast machines
+            b.put(f'/progress/{bid}', {'progress': 0.2, 'anchor': 1, 'fontSize': 18})
+            j = b.get(f'/progress/{bid}').json()
+            self.assertAlmostEqual(j.get('progress'), 0.2)
+            self.assertGreaterEqual(j.get('updated', 0), first_updated,
+                                    'updated must not go backwards on re-PUT')
+        finally:
+            self.assertIn(b.delete(f'/progress/{bid}').status_code, (200, 204))
+
 
 class TestRequestsCrud(unittest.TestCase):
     def test_roundtrip(self):

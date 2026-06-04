@@ -663,10 +663,27 @@ $('bm-list-btn').addEventListener('click', openBookmarks);
 $('bm-backdrop').addEventListener('click', (e) => { if (e.target === $('bm-backdrop')) closeBookmarks(); });
 
 // ---------- Progress sync ----------
-// Persist book-global resume position to OUR backend (keyed by abs:<id>) so
-// it survives across sessions/devices and shows up in the library list.
+// Persist book-global resume position to localStorage (for instant library
+// updates) AND our backend (keyed by abs:<id>) so it survives across
+// sessions/devices and shows up in the "Continue reading" list.
+function saveReadingState() {
+    if (!PROGRESS_KEY) return;
+    const pos = globalTime();
+    const total = bookTotal();
+    try {
+        localStorage.setItem('ereader.state.' + PROGRESS_KEY, JSON.stringify({
+            position: pos,
+            duration: total,
+            progress: total ? Math.min(1, pos / total) : 0,
+            mediaType: 'audiobook',
+            ts: Date.now()
+        }));
+    } catch (_) {}
+}
+
 function saveProgress() {
     if (!PROGRESS_KEY) return;
+    saveReadingState();
     const pos = globalTime();
     const total = bookTotal();
     fetch(`${API_URL}/progress/${encodeURIComponent(PROGRESS_KEY)}`, {
@@ -765,11 +782,12 @@ const NativeMedia = (() => {
         // force=true pushes immediately (play/pause change); otherwise throttled
         // so timeupdate (~4x/s) doesn't spam the service with position updates.
         state(force) {
-            if (!has) return;
-            if (!started) this.start();
             const now = Date.now();
             if (!force && now - lastPush < 2000) return;
             lastPush = now;
+            saveReadingState();
+            if (!has) return;
+            if (!started) this.start();
             try {
                 Android.mediaState(!audio.paused && !audio.ended,
                     globalTime(), bookTotal(), chosenRate);

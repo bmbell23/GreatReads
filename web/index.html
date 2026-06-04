@@ -950,28 +950,31 @@
             const id = String((book && book.id) != null ? book.id : book || '');
             return id.startsWith('abs:') ? id.slice(4) : '';
         }
-        // Backend audio-progress fraction (0..100) for a row, if any.
+        // Backend audio-progress fraction (0..100) for a row, if any. Prefers
+        // the backend-synced record (cross-device) but falls back to
+        // localStorage for an instant local-only update after leaving the player.
         function audioPctFor(book) {
             const rec = audioProgressByAbsId.get(rawAbsIdFor(book));
-            return rec && typeof rec.progress === 'number' ? Math.round(rec.progress * 100) : 0;
+            let pct = (rec && typeof rec.progress === 'number') ? Math.round(rec.progress * 100) : 0;
+            const absId = rawAbsIdFor(book);
+            if (absId) {
+                const local = readingStateFor('abs:' + absId);
+                if (local && typeof local.progress === 'number' && (!rec || (local.ts || 0) > (rec.updated || 0))) {
+                    pct = Math.round(local.progress * 100);
+                }
+            }
+            return pct;
         }
-        // Backend ebook-progress fraction (0..100) for a row. The backend store
-        // is the cross-device source of truth (shared between phone/PC, survives
-        // APK reinstalls that wipe WebView localStorage), so we prefer it and
-        // only fall back to THIS device's localStorage for a book whose progress
-        // hasn't been pushed/pulled yet. This is what keeps the ebook bar in
-        // sync across devices and lets a dual-format work (e.g. Iron Gold) show
-        // its ebook bar even on a device that only ever listened to the audio.
+        // Backend ebook-progress fraction (0..100) for a row. Prefers the
+        // backend store but falls back to localStorage for instant local updates.
         function ebookPctFor(book) {
-            const p = progressMap.get(String(book.id));
-            if (p && p.mediaType !== 'audiobook' && typeof p.progress === 'number') {
-                return Math.round(p.progress * 100);
+            const rec = progressMap.get(String(book.id));
+            let pct = (rec && rec.mediaType !== 'audiobook' && typeof rec.progress === 'number') ? Math.round(rec.progress * 100) : 0;
+            const local = readingStateFor(book.id);
+            if (local && typeof local.progress === 'number' && (!rec || (local.ts || 0) > (rec.updated || 0))) {
+                pct = Math.round(local.progress * 100);
             }
-            const state = readingStateFor(book.id);
-            if (state && state.progress != null && state.total) {
-                return Math.round(((state.page + 1) / state.total) * 100);
-            }
-            return 0;
+            return pct;
         }
 
         function applyFilter(list) {
@@ -993,10 +996,15 @@
             let t = 0;
             const p = progressMap.get(String(book.id));
             if (p && typeof p.updated === 'number') t = p.updated;
+            const localE = readingStateFor(book.id);
+            if (localE && typeof localE.ts === 'number') t = Math.max(t, localE.ts);
+
             const absId = rawAbsIdFor(book);
             if (absId) {
                 const a = audioProgressByAbsId.get(absId);
                 if (a && typeof a.updated === 'number') t = Math.max(t, a.updated);
+                const localA = readingStateFor('abs:' + absId);
+                if (localA && typeof localA.ts === 'number') t = Math.max(t, localA.ts);
             }
             return t;
         }
