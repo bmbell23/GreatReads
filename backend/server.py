@@ -330,6 +330,15 @@ def get_book_metadata(book_id):
         except (AttributeError, TypeError):
             pass
 
+        # Cache-bust token: Calibre bumps `last_modified` whenever a book (or its
+        # cover) is edited. Folding it into the cover URL means the frontend's
+        # per-URL IndexedDB blob cache + the 30-day HTTP cache self-invalidate
+        # when you replace cover art in Calibre — otherwise the old cover would
+        # be served indefinitely. Just the digits, e.g. "20260326155759".
+        cover_v = ''.join(c for c in (book.get('last_modified') or '') if c.isdigit())
+        thumb_q = f'?type=thumb&v={cover_v}' if cover_v else '?type=thumb'
+        cover_q = f'?v={cover_v}' if cover_v else ''
+
         return _apply_series_override({
             'id': str(book_id),
             'title': book.get('title', 'Unknown'),
@@ -341,8 +350,8 @@ def get_book_metadata(book_id):
             'tags': book.get('tags', []),
             'series': book.get('series', ''),
             'series_index': book.get('series_index', 0),
-            'thumbnail': f'http://{host}/api/books/{book_id}/cover?type=thumb',
-            'cover': f'http://{host}/api/books/{book_id}/cover',
+            'thumbnail': f'http://{host}/api/books/{book_id}/cover{thumb_q}',
+            'cover': f'http://{host}/api/books/{book_id}/cover{cover_q}',
             'description': book.get('comments', ''),
             'isbn': book.get('isbn', ''),
             'asin': asin or '',
@@ -494,6 +503,13 @@ def normalize_abs_item(raw):
         # multi-part sets whose part marker sits inside parentheses.
         clean_title = re.sub(r'\s+', ' ', _strip_edition(raw_title)).strip() or raw_title
 
+        # Cache-bust token: ABS bumps `updatedAt` (epoch ms) when an item or its
+        # cover changes. Same rationale as the Calibre cover token above — keeps
+        # the frontend IndexedDB/HTTP cover caches from pinning a stale cover.
+        cover_v = ''.join(c for c in str(raw.get('updatedAt') or '') if c.isdigit())
+        thumb_q = f'?type=thumb&v={cover_v}' if cover_v else '?type=thumb'
+        cover_q = f'?v={cover_v}' if cover_v else ''
+
         return _apply_series_override({
             'id': f'abs:{abs_id}',
             'absId': abs_id,
@@ -507,9 +523,9 @@ def normalize_abs_item(raw):
             'tags': meta.get('genres', []) or [],
             'series': series,
             'series_index': series_index,
-            'thumbnail': f'http://{host}/api/audiobooks/{abs_id}/cover?type=thumb',
-            'cover': f'http://{host}/api/audiobooks/{abs_id}/cover',
-            'audioCover': f'http://{host}/api/audiobooks/{abs_id}/cover',
+            'thumbnail': f'http://{host}/api/audiobooks/{abs_id}/cover{thumb_q}',
+            'cover': f'http://{host}/api/audiobooks/{abs_id}/cover{cover_q}',
+            'audioCover': f'http://{host}/api/audiobooks/{abs_id}/cover{cover_q}',
             'description': meta.get('description') or '',
             'isbn': meta.get('isbn') or '',
             'asin': meta.get('asin') or '',
