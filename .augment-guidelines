@@ -10,20 +10,22 @@ description: Ereader agent guidelines — extends shared server guidelines
 
 ---
 
-## � Session Start Checklist (Do This First, Every Session)
+## 🚨 Session Start Checklist (Do This First, Every Session)
 
 **CRITICAL: Run this checklist at the start of EVERY conversation turn, not just the first message. Services can crash mid-session.**
 
 1. **Health-check both services:**
    - Backend: `curl -s --max-time 3 http://localhost:8091/api/health`
    - Static server: `ss -ltnp | grep :8090`
-2. **If either is down, restart it immediately** (see "Restarting Services") — do not ask the user first, just fix it and report what you did.
+2. **If either is down, restart it immediately** (see "Restarting Services" below) — do not ask the user first, just fix it and report what you did.
 3. **Verify backend API responses aren't throwing errors:**
-   - `curl -s http://localhost:8091/api/books?limit=3` should return JSON, not HTML error pages
+   - `curl -s http://localhost:8091/api/library?limit=3` should return JSON, not HTML error pages
    - If you see HTML or OSError, restart the backend
 4. **Check the Requested queue:** `curl -s http://localhost:8091/api/requests?status=Requested`
    - If items exist, present them to the user and offer to start on one (or pick the first if the user says "work on the next feature").
    - If empty, tell the user the queue is empty and list the Backlog items so they can promote one.
+
+**If the user reports nothing loading / black screen / broken app: See `RECOVERY.md` in the repo root.**
 
 ---
 
@@ -235,11 +237,21 @@ Both the backend (Flask on 8091) and the web static server (8090) are bare proce
 
 ```bash
 # Backend
-kill $(cat /home/brandon/projects/Ereader/server.pid) 2>/dev/null
+kill $(cat /home/brandon/projects/Ereader/server.pid) 2>/dev/null || true
 cd /home/brandon/projects/Ereader/backend && ./run.sh &
+sleep 2
+curl -s http://localhost:8091/api/health
+
+# Static server (MUST run from web/ directory!)
+ps aux | grep "python3 serve.py" | grep -v grep | awk '{print $2}' | xargs -r kill
+cd /home/brandon/projects/Ereader/web && python3 serve.py &
+sleep 1
+ss -ltnp | grep :8090
 ```
 
-For the static web server (port 8090), check `ps aux | grep 8090` for the actual command — varies (often `python3 -m http.server 8090 --directory web`).
+**CRITICAL**: After ANY frontend code change, the user must **force-close the app** (swipe away from recent apps) and reopen. The Android WebView aggressively caches HTML/JS — navigating back to the library is NOT enough.
+
+**Full recovery procedure**: See `RECOVERY.md` in the repo root for the complete checklist when things break.
 
 ## Testing
 
@@ -271,6 +283,28 @@ Debug builds are pulled over HTTP and installed in-place — never via `adb inst
 3. Android treats it as an upgrade (same debug keystore as the previous build) — no uninstall, no data loss.
 
 **Never run `./build-app.sh` or push a new APK without explicit user permission.** The user runs builds themselves so they control device install timing.
+
+## Development Best Practices
+
+### Safe Workflow (ALWAYS Follow This)
+1. **Make ONE change at a time** - Test immediately after each change
+2. **Never edit both backend and frontend simultaneously** - Change one, test, then the other
+3. **Test syntax before deploying** - `node -e "require('fs').readFileSync('web/index.html')"` catches errors
+4. **Commit working states frequently** - So you can `git checkout .` to escape
+5. **Read the logs** - Backend: `backend/server.log`, Static server: terminal output
+6. **Remind user to force-close app** - After ANY frontend change (WebView cache is sticky)
+
+### Common Mistakes That Break Everything
+- JavaScript syntax errors → entire page goes black (no visible error to user)
+- Calling functions before they're defined → black screen
+- Using unsupported APIs (`AbortSignal.timeout()`) → breaks in older WebViews
+- Not force-closing the app → serves stale cached JS forever
+- Making 10 changes and testing once → impossible to debug which one broke it
+
+**When stuck for >5 minutes:** `git checkout .` and start over with a smaller change. See `RECOVERY.md`.
+
+### Offline Support Implementation
+**DO NOT implement offline support without following `OFFLINE_PLAN.md` in the repo root.** The phased approach is mandatory - attempting to do it all at once will break the app.
 
 ## Agent Behavior Rules
 
