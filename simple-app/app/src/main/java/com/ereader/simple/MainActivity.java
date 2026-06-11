@@ -85,20 +85,32 @@ public class MainActivity extends Activity {
                 new String[]{ android.Manifest.permission.POST_NOTIFICATIONS }, 1);
         }
 
-        // AGGRESSIVE fullscreen setup
+        // Hide the STATUS bar (clock / battery / notifications) only — the
+        // navigation bar (gesture pill) is left visible so the standard Android
+        // gestures (swipe-up home, edge-swipe back) work without the user first
+        // having to swipe up to summon the pill. We deliberately do NOT set
+        // HIDE_NAVIGATION / IMMERSIVE_STICKY here.
         getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
-            | View.SYSTEM_UI_FLAG_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
+            View.SYSTEM_UI_FLAG_FULLSCREEN
             | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
         );
 
         // Clear all window flags that might add padding
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         getWindow().addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+
+        // Navigation bar: fully transparent with NO contrast scrim, so only the
+        // gesture pill itself shows — not the semi-transparent bar the system
+        // otherwise draws behind it for edge-to-edge content.
+        getWindow().setNavigationBarColor(Color.TRANSPARENT);
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
+            getWindow().setNavigationBarDividerColor(Color.TRANSPARENT);
+        }
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+            getWindow().setNavigationBarContrastEnforced(false);
+        }
 
         // Cutout mode
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
@@ -207,6 +219,9 @@ public class MainActivity extends Activity {
     }
 
     private void applyImmersive() {
+        // Hide the STATUS bar only; keep the navigation bar (gesture pill)
+        // visible at all times so Android system gestures (swipe-up home,
+        // edge-swipe back) are always available without summoning the pill.
         // Re-add the legacy fullscreen window flag so the status bar stays
         // hidden on older surfaces, then drive the modern InsetsController
         // on API 30+ (Pixel foldables run well past this).
@@ -214,18 +229,17 @@ public class MainActivity extends Activity {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
             WindowInsetsController c = getWindow().getInsetsController();
             if (c != null) {
-                c.hide(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
+                c.hide(WindowInsets.Type.statusBars());
+                c.show(WindowInsets.Type.navigationBars());
+                // Status bar can still be pulled down transiently by a swipe.
                 c.setSystemBarsBehavior(
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
             }
         }
         getWindow().getDecorView().setSystemUiVisibility(
             View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
             | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_HIDE_NAVIGATION
             | View.SYSTEM_UI_FLAG_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_IMMERSIVE_STICKY
         );
     }
 
