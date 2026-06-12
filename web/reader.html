@@ -886,7 +886,7 @@
            (external / namespaced) lose their link colour so they don't look
            clickable when they aren't. */
         .clean-reader-content a.cr-wikilink { cursor: pointer; text-decoration: underline; text-decoration-color: rgba(64,103,239,0.45); }
-        .clean-reader-content a.cr-deadlink { color: inherit; text-decoration: none; }
+        .clean-reader-content a.cr-deadlink { color: inherit; text-decoration: none; cursor: default; }
         .clean-reader-content img {
             max-width: 100%; height: auto; border-radius: 6px; display: block;
             margin: 10px auto;
@@ -1479,6 +1479,8 @@
          scroll jank). Built by openCleanReader() / renderWiki() / renderDict(). -->
     <div id="reader-overlay" style="display:none;position:fixed;inset:0;z-index:10001;background:#f8f9fa;flex-direction:column;">
         <div style="flex:0 0 auto;display:flex;align-items:center;gap:10px;padding:calc(env(safe-area-inset-top,0px) + 12px) 14px 12px 14px;background:#fff;border-bottom:1px solid #e9ecef;">
+            <!-- Step back through in-article wiki links. Shown only once the user
+                 has followed at least one link (managed by _updateWikiBackButton). -->
             <button id="reader-overlay-back" onclick="wikiBack()" title="Back" style="display:none;flex:0 0 auto;align-items:center;justify-content:center;background:#f1f3f5;color:#495057;border:1px solid #e9ecef;padding:9px 13px;border-radius:8px;font-size:16px;cursor:pointer;">‹</button>
             <span id="reader-kind-badge" style="flex:0 0 auto;font-size:18px;">🌐</span>
             <div id="reader-overlay-title" style="flex:1;min-width:0;color:#212529;font-size:17px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Loading…</div>
@@ -5076,6 +5078,9 @@
             const content = document.getElementById('reader-overlay-content');
             const scroll  = document.getElementById('reader-overlay-scroll');
             _lastLookup = { kind, text };
+            // NOTE: history (_wikiCurrent/_wikiHistory) is managed by the callers
+            // — openCleanReader resets it, navigateWikiTo/wikiBack step it. We must
+            // NOT touch it here or in-article back-stepping would break.
             badge.textContent = kind === 'dict' ? '📖' : '🌐';
             titleEl.textContent = text;
             content.innerHTML = '<div class="cr-loading">Loading…</div>';
@@ -5221,18 +5226,26 @@
             return r.json();
         }
 
+        // Entry path (from a highlight lookup): resolve the best-matching page
+        // title via search, then render it.
         async function loadWikiInto(text, token) {
             const api = _wikiApiBase();
             if (!api) throw new Error('no wiki API base');
-            // 1) Resolve the best-matching page title.
             const sUrl = api + '?action=query&format=json&redirects=1&list=search'
                        + '&srlimit=1&srsearch=' + encodeURIComponent(text);
             const sData = await _proxyJSON(sUrl);
             const hits = (sData.query && sData.query.search) || [];
             if (token !== _cleanReaderToken) return;
             if (!hits.length) { _renderEmpty('No wiki article found for “' + text + '”.'); return; }
-            const pageTitle = hits[0].title;
-            // 2) Fetch the parsed (ad-free) article HTML.
+            await loadWikiTitleInto(hits[0].title, token);
+        }
+
+        // Render an EXACT wiki article by title. Used by the search resolution
+        // above AND, via _renderCleanReader, by in-article link taps
+        // (navigateWikiTo / wikiBack). Does not touch history — callers manage it.
+        async function loadWikiTitleInto(pageTitle, token) {
+            const api = _wikiApiBase();
+            if (!api) throw new Error('no wiki API base');
             const pUrl = api + '?action=parse&format=json&redirects=1&disabletoc=1'
                        + '&disableeditsection=1&prop=text%7Cdisplaytitle&page='
                        + encodeURIComponent(pageTitle);
@@ -5244,6 +5257,9 @@
             const origin = (() => { try { return new URL(api).origin; } catch (_) { return ''; } })();
             const cleaned = cleanWikiHTML(rawHtml, origin);
             const dispTitle = stripTags(parse.displaytitle || pageTitle) || pageTitle;
+            // Keep the in-overlay nav state in sync with what we just rendered.
+            // _wikiCurrent is a plain title string (see navigateWikiTo / wikiBack).
+            _wikiCurrent = pageTitle;
             document.getElementById('reader-overlay-title').textContent = dispTitle;
             const content = document.getElementById('reader-overlay-content');
             content.innerHTML = '<h1>' + escHtml(dispTitle) + '</h1>';
@@ -5251,6 +5267,8 @@
             // <body> node itself — a nested <body> is invalid and can confuse
             // layout). cleaned is the DOMParser body wrapper.
             while (cleaned.firstChild) content.appendChild(cleaned.firstChild);
+            const _crScroll = document.getElementById('reader-overlay-scroll');
+            if (_crScroll) _crScroll.scrollTop = 0;
         }
 
         function _renderEmpty(msg) {
