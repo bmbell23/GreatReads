@@ -85,25 +85,29 @@ public class MainActivity extends Activity {
                 new String[]{ android.Manifest.permission.POST_NOTIFICATIONS }, 1);
         }
 
-        // Hide the STATUS bar (clock / battery / notifications) only — the
-        // navigation bar (gesture pill) is left visible so the standard Android
-        // gestures (swipe-up home, edge-swipe back) work without the user first
-        // having to swipe up to summon the pill. We deliberately do NOT set
-        // HIDE_NAVIGATION / IMMERSIVE_STICKY here.
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-        );
-
-        // Clear all window flags that might add padding
+        // System bars: hide the STATUS bar (clock / battery / wifi) entirely,
+        // but keep the NAVIGATION bar (gesture pill) visible so Android's
+        // swipe-up-home / edge-swipe-back gestures work without first summoning
+        // it. applyImmersive() (also re-run on focus / config changes) is the
+        // single place that drives this.
         getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FORCE_NOT_FULLSCREEN);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
 
-        // Navigation bar: fully transparent with NO contrast scrim, so only the
-        // gesture pill itself shows — not the semi-transparent bar the system
-        // otherwise draws behind it for edge-to-edge content.
+        // Edge-to-edge. On API 30+ we use setDecorFitsSystemWindows(false)
+        // instead of FLAG_LAYOUT_NO_LIMITS: NO_LIMITS pins the status bar into a
+        // transparent-but-PRESENT state that the InsetsController can't hide
+        // (the clock/battery icons stay drawn). setDecorFitsSystemWindows gives
+        // the same edge-to-edge layout while still letting us hide it outright.
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(false);
+        } else {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_LAYOUT_NO_LIMITS);
+        }
+
+        // Make both bars chrome-less: transparent, no contrast scrim, no divider
+        // — so the visible nav bar shows only the gesture pill, and the status
+        // bar (on the rare transient swipe-reveal) carries no background.
+        getWindow().setStatusBarColor(Color.TRANSPARENT);
         getWindow().setNavigationBarColor(Color.TRANSPARENT);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
             getWindow().setNavigationBarDividerColor(Color.TRANSPARENT);
@@ -111,6 +115,11 @@ public class MainActivity extends Activity {
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
             getWindow().setNavigationBarContrastEnforced(false);
         }
+
+        // Resize the content for the soft keyboard so the in-book search box
+        // stays above it (releaseImmersive() re-fits the decor to make this work
+        // under edge-to-edge).
+        getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
 
         // Cutout mode
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.P) {
@@ -222,50 +231,55 @@ public class MainActivity extends Activity {
         // Hide the STATUS bar only; keep the navigation bar (gesture pill)
         // visible at all times so Android system gestures (swipe-up home,
         // edge-swipe back) are always available without summoning the pill.
-        // Re-add the legacy fullscreen window flag so the status bar stays
-        // hidden on older surfaces, then drive the modern InsetsController
-        // on API 30+ (Pixel foldables run well past this).
-        getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            // Controller ONLY on API 30+. Mixing the deprecated
+            // setSystemUiVisibility() flags here resets the controller's state
+            // and lets the status bar slip back in (transparent but present).
+            // Restore edge-to-edge in case releaseImmersive() turned it off.
+            getWindow().setDecorFitsSystemWindows(false);
             WindowInsetsController c = getWindow().getInsetsController();
             if (c != null) {
-                c.hide(WindowInsets.Type.statusBars());
-                c.show(WindowInsets.Type.navigationBars());
                 // Status bar can still be pulled down transiently by a swipe.
                 c.setSystemBarsBehavior(
                     WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                c.hide(WindowInsets.Type.statusBars());
+                c.show(WindowInsets.Type.navigationBars());
             }
+        } else {
+            // Legacy (< API 30): FLAG_FULLSCREEN + SYSTEM_UI_FLAG_FULLSCREEN
+            // hide the status bar; we deliberately leave navigation visible.
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+                | View.SYSTEM_UI_FLAG_FULLSCREEN
+            );
         }
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-            | View.SYSTEM_UI_FLAG_FULLSCREEN
-        );
     }
 
     private void releaseImmersive() {
-        // Make the system bars visible again so the user can use Android
-        // system gestures (swipe-up home, swipe-down notifications, swipe
-        // from edge for back). On modern Android the InsetsController is
-        // the only thing that actually makes them reappear once
-        // FLAG_FULLSCREEN has been set; the legacy SystemUiVisibility flags
-        // are ignored. We also clear FLAG_FULLSCREEN itself so the status
-        // bar isn't kept hidden by the window-level flag.
-        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+        // Called while the web UI needs the soft keyboard (in-book search). We
+        // let the decor fit system windows again so the IME resizes the content
+        // (the search box stays above the keyboard), but we KEEP the status bar
+        // hidden — the user never wants the clock/battery back — and keep the
+        // nav pill visible. hideSystemBars()/applyImmersive() restores
+        // edge-to-edge afterwards.
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.R) {
+            getWindow().setDecorFitsSystemWindows(true);
             WindowInsetsController c = getWindow().getInsetsController();
             if (c != null) {
-                c.show(WindowInsets.Type.statusBars() | WindowInsets.Type.navigationBars());
-                c.setSystemBarsBehavior(WindowInsetsController.BEHAVIOR_DEFAULT);
+                c.setSystemBarsBehavior(
+                    WindowInsetsController.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE);
+                c.hide(WindowInsets.Type.statusBars());
+                c.show(WindowInsets.Type.navigationBars());
             }
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_FULLSCREEN);
+            getWindow().getDecorView().setSystemUiVisibility(
+                View.SYSTEM_UI_FLAG_LAYOUT_STABLE
+                | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
+            );
         }
-        // Keep LAYOUT_* flags so the content position doesn't jump when the
-        // bars come in/out.
-        getWindow().getDecorView().setSystemUiVisibility(
-            View.SYSTEM_UI_FLAG_LAYOUT_STABLE
-            | View.SYSTEM_UI_FLAG_LAYOUT_HIDE_NAVIGATION
-            | View.SYSTEM_UI_FLAG_LAYOUT_FULLSCREEN
-        );
     }
 
     // Wrap a WebView-supplied ActionMode.Callback so that the floating
