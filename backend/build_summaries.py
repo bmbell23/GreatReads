@@ -65,8 +65,13 @@ def strip_tags_keep(html):
     """
     # Remove script/style wholesale.
     html = re.sub(r"<(script|style)[^>]*>.*?</\1>", "", html, flags=re.S | re.I)
-    # Drop "Back to top" navigation links entirely (text included).
-    html = re.sub(r"<a\b[^>]*>\s*Back to top\s*</a>", "", html, flags=re.I)
+    # Drop "Back to top" navigation links entirely (text included). The source
+    # wraps the label in inner markup, so match any <a> whose content contains
+    # the phrase rather than requiring it to be the anchor's only text.
+    html = re.sub(r"<a\b[^>]*>.*?</a>",
+                  lambda m: "" if re.search(r"back to top", m.group(0), re.I)
+                  else m.group(0),
+                  html, flags=re.S | re.I)
 
     def repl(m):
         closing = m.group(1) == "/"
@@ -80,6 +85,11 @@ def strip_tags_keep(html):
         return ""  # unwrap: keep inner text, drop the tag
 
     html = re.sub(r"<(/?)([a-zA-Z0-9]+)\b[^>]*>", repl, html)
+    # Belt-and-suspenders: if the "Back to top" label survived as bare text
+    # (anchor inner markup the rule above didn't see), strip it wherever it
+    # trails a block. Never touches it mid-prose.
+    html = re.sub(r"[ \t\n]*Back to top[ \t\n]*(</(?:p|li|blockquote|ul|ol)>|$)",
+                  r"\1", html, flags=re.I)
     # Collapse whitespace, drop empty paragraphs.
     html = re.sub(r"<p>\s*</p>", "", html)
     html = re.sub(r"[ \t]*\n[ \t]*", "\n", html)
