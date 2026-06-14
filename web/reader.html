@@ -36,6 +36,25 @@
             position: fixed;
             top: 0;
             left: 0;
+            /* Selection is OFF by default everywhere — the chrome (clock,
+               battery, progress bar, menus) must never be selectable. Only
+               the book text and the lookup overlays opt back in below. This
+               also stops a drag that runs off the page edge from grabbing
+               UI text. */
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-touch-callout: none;
+        }
+        /* Form controls still need their own selection/editing behaviour. */
+        input, textarea {
+            -webkit-user-select: text;
+            user-select: text;
+        }
+        /* Lookup overlays (wiki / dictionary / chapter-summary) opt back into
+           selection so the user can highlight a word inside them to look it up. */
+        #summary-body, .clean-reader-content {
+            -webkit-user-select: text;
+            user-select: text;
         }
         /* Support safe area insets on notched devices */
         @supports (padding: max(0px)) {
@@ -1192,7 +1211,7 @@
     </div>
 
     <!-- Full-screen TOC overlay -->
-    <div id="toc-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.95); z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
+    <div id="toc-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #0c0c0c; z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
         <div style="max-width: 800px; margin: 0 auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <h2 style="color: #fff; margin: 0;">Table of Contents</h2>
@@ -1207,7 +1226,7 @@
          for a single reached chapter, with prev/next within reached chapters and
          a "Story so far" mode that concatenates every chapter up to the current
          one. Content + navigation are built by openSummary() / renderSummary(). -->
-    <div id="summary-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: rgba(0,0,0,0.96); z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px calc(env(safe-area-inset-bottom, 0px) + 24px) 20px;">
+    <div id="summary-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #0c0c0c; z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px calc(env(safe-area-inset-bottom, 0px) + 24px) 20px;">
         <div style="max-width: 760px; margin: 0 auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px;">
                 <div style="min-width:0;">
@@ -1237,7 +1256,7 @@
     <!-- Full-screen in-book search overlay. Opened by #search-btn. Shows the
          recent-search history until a query is run, then exact + similar
          (fuzzy) results, each tappable to jump to that spot in the book. -->
-    <div id="search-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.96);z-index:11000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 16px) 16px 24px 16px;">
+    <div id="search-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0c0c0c;z-index:11000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 16px) 16px 24px 16px;">
         <div style="max-width:760px;margin:0 auto;">
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
                 <input id="search-input" type="search" placeholder="Search this book…" autocomplete="off" autocapitalize="off" autocorrect="off"
@@ -1250,7 +1269,7 @@
 
     <!-- Bookmarks / highlights navigation overlay. Same shell for both;
          the title and list contents are swapped in by JS. -->
-    <div id="navlist-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(0,0,0,0.95);z-index:10000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
+    <div id="navlist-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0c0c0c;z-index:10000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
         <div style="max-width:800px;margin:0 auto;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
                 <h2 id="navlist-title" style="color:#fff;margin:0;">Bookmarks</h2>
@@ -3540,6 +3559,9 @@
             const container = document.getElementById('line-bookmark-flags');
             if (!container) return;
             container.innerHTML = '';
+            // In-line (line) bookmarks are disabled — never paint flags, even
+            // for any that were saved by older builds. See touchstart handler.
+            return;
             if (!columnStride || !pageWidth) return;
             const content = document.getElementById('epub-content');
             if (!content) return;
@@ -4877,16 +4899,23 @@
             content.innerHTML = '<div class="cr-loading">Loading…</div>';
             scroll.scrollTop = 0;
             overlay.style.display = 'flex';
+            armOverlayBack();
             const token = ++_cleanReaderToken;
             const job = (kind === 'dict') ? loadDictInto(text, token)
                                           : loadWikiInto(text, token);
             job.catch(err => {
                 if (token !== _cleanReaderToken) return;
-                console.warn('clean reader failed, falling back to browser:', err);
-                // Fall back to the live page in the WebView.
+                console.warn('clean reader failed:', err);
+                // Do NOT navigate the WebView away to the live page — that's
+                // what made the overlay vanish with no way back. Stay in our
+                // overlay (✕/back still work) and show an inline error with an
+                // explicit, user-initiated link to the live page as a fallback.
                 const url = getLookupURL(kind).replace('{word}', encodeURIComponent(text));
-                closeCleanReader();
-                window.open(url, '_blank');
+                document.getElementById('reader-overlay-content').innerHTML =
+                    '<div class="cr-empty">Couldn’t load this ' +
+                    (kind === 'dict' ? 'definition' : 'article') + '.<br><br>' +
+                    '<a href="' + url.replace(/"/g, '&quot;') + '" target="_blank" rel="noopener" ' +
+                    'style="color:#7aa2f7;">Open in browser ↗</a></div>';
             });
         }
 
@@ -4894,7 +4923,73 @@
             _cleanReaderToken++;  // cancel any in-flight render
             document.getElementById('reader-overlay').style.display = 'none';
             document.getElementById('reader-overlay-content').innerHTML = '';
+            consumeOverlayBack();
         }
+
+        // ===================== Overlay back-button handling =====================
+        // The Android hardware back button / edge-swipe-back gesture fires the
+        // browser's history `popstate`. Without intervention that would navigate
+        // the WebView away from the book (back to the library / main page).
+        // Instead we trap it: opening any overlay (dictionary, wiki, chapter
+        // summary, TOC, search, bookmark/highlight lists) pushes one sentinel
+        // history entry; a back gesture pops it and we close the TOP-MOST open
+        // overlay, returning the user to the BOOK rather than leaving it.
+        // On-screen ✕/Cancel buttons call consumeOverlayBack() to keep history
+        // balanced. Overlays are listed top-of-stack first.
+        const _OVERLAY_BACK_ORDER = [
+            { id: 'hl-settings',     open: el => el.classList.contains('open'),       close: () => closeLookupSettings() },
+            { id: 'reader-overlay',  open: el => el.style.display === 'flex',          close: () => closeCleanReader() },
+            { id: 'search-overlay',  open: el => el.style.display === 'block',         close: () => closeSearch() },
+            { id: 'summary-overlay', open: el => el.style.display === 'block',         close: () => closeSummary() },
+            { id: 'navlist-overlay', open: el => el.style.display === 'block',         close: () => closeNavList() },
+            { id: 'toc-overlay',     open: el => el.style.display === 'block',         close: () => { document.getElementById('toc-overlay').style.display = 'none'; consumeOverlayBack(); } },
+        ];
+        let _handlingPop = false;
+        function _topOpenOverlay() {
+            for (const o of _OVERLAY_BACK_ORDER) {
+                const el = document.getElementById(o.id);
+                if (el && o.open(el)) return o;
+            }
+            return null;
+        }
+        // Clear any live book-text selection + its handles/popup so the native
+        // selection bars don't draw on top of (through) the overlay we're about
+        // to show. This is the fix for "I can still see the highlight cursor
+        // bars through the dictionary/summary/wiki layer."
+        function _clearBookSelectionUI() {
+            try { window.getSelection().removeAllRanges(); } catch (_) {}
+            if (typeof hideHLPopup === 'function') hideHLPopup();
+        }
+        // Call right after showing an overlay. Idempotent: only one sentinel
+        // exists at a time no matter how many overlays stack.
+        function armOverlayBack() {
+            _clearBookSelectionUI();
+            if (!(history.state && history.state.ereaderOverlay)) {
+                try { history.pushState({ ereaderOverlay: true }, ''); } catch (_) {}
+            }
+        }
+        // Call from an on-screen close control. Removes the sentinel only when
+        // no overlay remains open and we're not already inside a popstate.
+        function consumeOverlayBack() {
+            if (_handlingPop) return;
+            if (_topOpenOverlay()) return;
+            if (history.state && history.state.ereaderOverlay) {
+                try { history.back(); } catch (_) {}
+            }
+        }
+        window.addEventListener('popstate', () => {
+            _handlingPop = true;
+            try {
+                const top = _topOpenOverlay();
+                if (top) {
+                    top.close();
+                    // Something still open underneath → keep trapping back.
+                    if (_topOpenOverlay()) {
+                        try { history.pushState({ ereaderOverlay: true }, ''); } catch (_) {}
+                    }
+                }
+            } finally { _handlingPop = false; }
+        });
 
         async function _proxyJSON(url) {
             const r = await fetch(_proxied(url));
@@ -4961,11 +5056,16 @@
             KILL.forEach(sel => { try { root.querySelectorAll(sel).forEach(n => n.remove()); } catch (_) {} });
             // Neutralize links (no navigating away → no ads/jank); keep text.
             root.querySelectorAll('a').forEach(a => { a.removeAttribute('href'); a.removeAttribute('target'); });
-            // Absolutize images; drop tracking/lazy noise.
+            // Absolutize images, then route them through OUR proxy. Loading the
+            // live CDN directly fails a lot: Fandom/wikia hotlink-protect images,
+            // and the app is served over http so https-only CDNs can trip mixed
+            // -content/referrer blocks in the WebView. The proxy fetches them
+            // server-side with a real UA, so they actually render.
             root.querySelectorAll('img').forEach(img => {
                 let src = img.getAttribute('data-src') || img.getAttribute('src') || '';
                 if (src.startsWith('//')) src = 'https:' + src;
                 else if (src.startsWith('/') && origin) src = origin + src;
+                if (/^https?:\/\//i.test(src)) src = _proxied(src);
                 img.setAttribute('src', src);
                 img.removeAttribute('srcset'); img.removeAttribute('data-src');
                 img.removeAttribute('loading'); img.removeAttribute('width'); img.removeAttribute('height');
@@ -5102,9 +5202,11 @@
             document.getElementById('dict-url').value = getLookupURL('dict');
             document.getElementById('wiki-url').value = getLookupURL('wiki');
             document.getElementById('hl-settings').classList.add('open');
+            armOverlayBack();
         }
         function closeLookupSettings() {
             document.getElementById('hl-settings').classList.remove('open');
+            consumeOverlayBack();
         }
         function saveLookupSettings() {
             const d = document.getElementById('dict-url').value.trim() || HL_DICT_DEFAULT;
@@ -5682,6 +5784,7 @@
                 }
             }
             document.getElementById('navlist-overlay').style.display = 'block';
+            armOverlayBack();
         }
         function openHighlightsList() {
             closeAllMenus();
@@ -5704,9 +5807,11 @@
                 }
             }
             document.getElementById('navlist-overlay').style.display = 'block';
+            armOverlayBack();
         }
         function closeNavList() {
             document.getElementById('navlist-overlay').style.display = 'none';
+            consumeOverlayBack();
         }
         function buildNavRow({ primary, secondary, onOpen, onDelete }) {
             const row = document.createElement('div');
@@ -6006,6 +6111,7 @@
             if (!ov) return;
             closeAllMenus();
             ov.style.display = 'block';
+            armOverlayBack();
             // Hide the floating buttons so they don't poke through the overlay.
             const sbtn = document.getElementById('search-btn');
             if (sbtn) sbtn.style.display = 'none';
@@ -6026,6 +6132,7 @@
             const mbtn = document.getElementById('menu-btn');
             if (mbtn) mbtn.style.display = 'flex';
             try { if (window.Android && window.Android.hideSystemBars) window.Android.hideSystemBars(); } catch (_) {}
+            consumeOverlayBack();
         }
         async function deleteBookmarkFromList(id) {
             try {
@@ -6159,11 +6266,13 @@
             _summaryMode = 'chapter';
             document.getElementById('summary-set').textContent = bookSummaries.setTitle || '';
             document.getElementById('summary-overlay').style.display = 'block';
+            armOverlayBack();
             renderSummary();
         }
 
         function closeSummary() {
             document.getElementById('summary-overlay').style.display = 'none';
+            consumeOverlayBack();
         }
 
         function setSummaryMode(mode) {
@@ -6238,8 +6347,10 @@
                     renderTocTree(tocTree, tocList, 0);
                 }
                 tocOverlay.style.display = 'block';
+                armOverlayBack();
             } else {
                 tocOverlay.style.display = 'none';
+                consumeOverlayBack();
             }
         }
 
@@ -6297,21 +6408,11 @@
                 _lpTimer = null;
                 const t = e.changedTouches[0];
                 _lpStartX = t.clientX; _lpStartY = t.clientY;
-                if (_isMarginTouch(t.clientX)) {
-                    let cy = t.clientY;
-                    let cx = t.clientX;
-                    // Transform coordinates when flipped 180°
-                    if (flip180Pref) {
-                        cx = pageWidth - cx;
-                        cy = window.innerHeight - cy;
-                    }
-                    _lpTimer = setTimeout(() => {
-                        _lpFired = true;
-                        if (navigator.vibrate) navigator.vibrate(30);
-                        const anchor = findAnchorAtY(cy, cx);
-                        if (anchor != null) toggleLineBookmark(anchor);
-                    }, LONG_PRESS_MS);
-                }
+                // In-line (margin long-press) bookmarks are intentionally
+                // disabled — they were too easy to trigger and too finicky.
+                // The long-press machinery below is left inert; the top-right
+                // corner ribbon remains the only way to bookmark a page.
+                void _isMarginTouch;  // kept to avoid an unused-fn warning
             }, { passive: true });
 
             // Cancel the long-press timer only if the finger moves more than the
