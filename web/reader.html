@@ -1135,6 +1135,19 @@
             text-overflow: ellipsis;
             white-space: nowrap;
         }
+        /* Inline "Scene N →" jump-link placed at the end of a scene's summary
+           paragraph (used when the chapter's paragraphs align 1:1 with its
+           detected scenes — the Malazan compendium writes one para per scene). */
+        .summary-scene-link {
+            display: inline;
+            margin-left: 8px;
+            color: #4a90d9;
+            font-weight: 600;
+            font-size: 0.82em;
+            white-space: nowrap;
+            cursor: pointer;
+        }
+        .summary-scene-link:active { color: #6fb0ec; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -6773,13 +6786,17 @@
                     const sec = document.createElement('div');
                     sec.innerHTML = c.html;
                     body.appendChild(sec);
-                    appendSceneJumpList(body, c.title);
+                    // Inline per-paragraph scene links when they align 1:1;
+                    // otherwise a grouped jump-list beneath this chapter.
+                    if (!attachSceneLinksToSummary(sec, c.title)) appendSceneJumpList(sec, c.title);
                 });
             } else {
                 const cur = _summaryChapters[_summaryIndex];
                 heading.textContent = cur.title;
                 body.innerHTML = cur.html;
-                appendSceneJumpList(body, cur.title);
+                // Inline per-paragraph scene links when they align 1:1;
+                // otherwise a grouped jump-list at the end.
+                if (!attachSceneLinksToSummary(body, cur.title)) appendSceneJumpList(body, cur.title);
                 const prev = document.getElementById('summary-prev');
                 const next = document.getElementById('summary-next');
                 prev.style.visibility = _summaryIndex > 0 ? 'visible' : 'hidden';
@@ -6814,6 +6831,35 @@
                 }
             })(tocTree);
             return (found && found.length >= 2) ? found : null;
+        }
+
+        // Place a "Scene N →" jump-link at the END of each scene-summary
+        // paragraph. The Malazan compendium writes one paragraph per scene, so
+        // when a chapter's top-level paragraphs line up 1:1 with its detected
+        // scenes we can link each paragraph to its scene in the book. A leading
+        // "Setting: …" metadata paragraph (carried by some books, e.g. Gardens
+        // of the Moon, but not Midnight Tides) is skipped when doing so makes
+        // the counts align. Returns true if links were placed; false (no scenes
+        // / count mismatch) so the caller can fall back to a bottom list.
+        function attachSceneLinksToSummary(container, chapterTitle) {
+            const scenes = scenesForChapterTitle(chapterTitle);
+            if (!scenes) return false;
+            const text = el => (el.textContent || '').replace(/\s+/g, ' ').trim();
+            let paras = Array.from(container.children).filter(el => el.tagName === 'P');
+            if (paras.length === scenes.length + 1 && /^setting\b/i.test(text(paras[0]))) {
+                paras = paras.slice(1);  // drop the "Setting: …" line
+            }
+            if (!paras.length || paras.length !== scenes.length) return false;
+            paras.forEach((p, i) => {
+                const s = scenes[i];
+                const link = document.createElement('span');
+                link.className = 'summary-scene-link';
+                link.textContent = s.title + ' →';   // "Scene N →"
+                link.addEventListener('click', () => jumpToSceneFromSummary(s.anchor));
+                p.appendChild(document.createTextNode(' '));
+                p.appendChild(link);
+            });
+            return true;
         }
 
         // Append a tap-to-jump scene list to a summary body. Each row references
