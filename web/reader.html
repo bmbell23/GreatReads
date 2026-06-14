@@ -1087,6 +1087,54 @@
         .toc-row.toc-current .toc-label { color: #fff; font-weight: 600; }
         .toc-row.toc-current .toc-scene-count,
         .toc-row.toc-current .toc-scene-preview { color: #9bc2e6; }
+
+        /* Scene jump-list appended to a chapter summary: the detected
+           scene/POV breaks for that chapter, each a tap-to-jump link into the
+           book. Mirrors the TOC scene data (Scene 1 = chapter start). */
+        .summary-scenes {
+            margin-top: 22px;
+            padding-top: 16px;
+            border-top: 1px solid #333;
+        }
+        .summary-scenes-title {
+            color: #8a8a8a;
+            font-size: 12px;
+            letter-spacing: .04em;
+            text-transform: uppercase;
+            margin-bottom: 10px;
+        }
+        .summary-scene-row {
+            display: flex;
+            align-items: baseline;
+            gap: 10px;
+            width: 100%;
+            text-align: left;
+            background: #242424;
+            border: none;
+            border-radius: 8px;
+            padding: 11px 14px;
+            margin-bottom: 8px;
+            color: #e6e6e6;
+            font-size: 15px;
+            line-height: 1.4;
+            cursor: pointer;
+        }
+        .summary-scene-row:active { background: #2f2f2f; }
+        .summary-scene-num {
+            flex: 0 0 auto;
+            color: #4a90d9;
+            font-weight: 600;
+            white-space: nowrap;
+        }
+        .summary-scene-num::after { content: " →"; color: #4a90d9; }
+        .summary-scene-preview {
+            flex: 1 1 auto;
+            color: #b8b8b8;
+            font-style: italic;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -6711,17 +6759,27 @@
             nav.style.display = recap ? 'none' : 'flex';
 
             if (recap) {
-                // Concatenate every reached chapter, oldest → current.
+                // Concatenate every reached chapter, oldest → current. Each
+                // chapter section gets its own scene jump-list beneath it.
                 heading.textContent = 'Story so far — through ' +
                     _summaryChapters[_summaryChapters.length - 1].title;
-                body.innerHTML = _summaryChapters.map(c =>
-                    `<h3 style="color:#fff;margin:18px 0 8px 0;font-size:17px;border-bottom:1px solid #333;padding-bottom:6px;">${escHtml(c.title)}</h3>${c.html}`
-                ).join('');
-                body.firstElementChild && (body.firstElementChild.style.marginTop = '0');
+                body.innerHTML = '';
+                _summaryChapters.forEach((c, i) => {
+                    const h = document.createElement('h3');
+                    h.style.cssText = 'color:#fff;margin:18px 0 8px 0;font-size:17px;border-bottom:1px solid #333;padding-bottom:6px;';
+                    if (i === 0) h.style.marginTop = '0';
+                    h.textContent = c.title;
+                    body.appendChild(h);
+                    const sec = document.createElement('div');
+                    sec.innerHTML = c.html;
+                    body.appendChild(sec);
+                    appendSceneJumpList(body, c.title);
+                });
             } else {
                 const cur = _summaryChapters[_summaryIndex];
                 heading.textContent = cur.title;
                 body.innerHTML = cur.html;
+                appendSceneJumpList(body, cur.title);
                 const prev = document.getElementById('summary-prev');
                 const next = document.getElementById('summary-next');
                 prev.style.visibility = _summaryIndex > 0 ? 'visible' : 'hidden';
@@ -6734,6 +6792,76 @@
         function escHtml(s) {
             return (s || '').replace(/[&<>"]/g, c =>
                 ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        }
+
+        // The detected scenes for a chapter title, or null. Scenes were attached
+        // to leaf tocTree nodes by attachScenesToTocTree(); we match the summary
+        // chapter to its tocTree node the same way summaries match reader
+        // chapters — by normalized title. Returns node.scenes ([{title, anchor,
+        // preview}], Scene 1 = chapter start) only when the chapter actually has
+        // multiple scenes.
+        function scenesForChapterTitle(title) {
+            if (!tocTree || !title) return null;
+            const k = _summaryNorm(title);
+            let found = null;
+            (function walk(nodes) {
+                for (const n of nodes) {
+                    if (found) return;
+                    if (n.scenes && n.scenes.length && _summaryNorm(n.title) === k) {
+                        found = n.scenes; return;
+                    }
+                    if (n.children && n.children.length) walk(n.children);
+                }
+            })(tocTree);
+            return (found && found.length >= 2) ? found : null;
+        }
+
+        // Append a tap-to-jump scene list to a summary body. Each row references
+        // the scene number and, on tap, closes the summary (and menu) and jumps
+        // to that scene's position in the book.
+        function appendSceneJumpList(container, chapterTitle) {
+            const scenes = scenesForChapterTitle(chapterTitle);
+            if (!scenes) return;
+
+            const wrap = document.createElement('div');
+            wrap.className = 'summary-scenes';
+            const hd = document.createElement('div');
+            hd.className = 'summary-scenes-title';
+            hd.textContent = 'Scenes in this chapter';
+            wrap.appendChild(hd);
+
+            scenes.forEach(s => {
+                const row = document.createElement('button');
+                row.type = 'button';
+                row.className = 'summary-scene-row';
+                const num = document.createElement('span');
+                num.className = 'summary-scene-num';
+                num.textContent = s.title;            // "Scene N"
+                row.appendChild(num);
+                if (s.preview) {
+                    const pv = document.createElement('span');
+                    pv.className = 'summary-scene-preview';
+                    pv.textContent = s.preview;
+                    row.appendChild(pv);
+                }
+                row.addEventListener('click', () => jumpToSceneFromSummary(s.anchor));
+                wrap.appendChild(row);
+            });
+            container.appendChild(wrap);
+        }
+
+        // Jump from the summary overlay to a scene anchor: resolve its page,
+        // tear down the summary overlay (and the reading-options menu if it's
+        // open behind it), and render that page.
+        function jumpToSceneFromSummary(anchor) {
+            if (typeof anchor !== 'number' || isNaN(anchor)) return;
+            const page = findPageForAnchor(anchor);
+            if (page == null) return;
+            currentEpubPage = Math.min(totalPages - 1, Math.max(0, page));
+            closeSummary();
+            const controls = document.getElementById('reader-controls');
+            if (controls && controls.classList.contains('visible')) toggleMenu();
+            renderEpubPage();
         }
 
         // Show/hide the floating end-of-chapter nudge. Called from updateProgress
