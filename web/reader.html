@@ -167,6 +167,20 @@
             margin-top: 0.6em;
             margin-bottom: 1em;
         }
+        /* Scene / POV break where the EPUB carries NO empty spacer at all —
+           the new scene's first paragraph is simply given a flush-left
+           (different) paragraph class instead of the indented body class,
+           with no extra margin. We strip publisher CSS, so neither the indent
+           nor any gap survives and the scenes run together. Tagged on the
+           opening paragraph itself by the class-pattern pass in
+           renderEpubContent. padding-top (not margin alone) so the gap can't
+           margin-collapse into the preceding paragraph and vanish. */
+        #epub-content p.epub-scene-break-before,
+        #epub-content blockquote.epub-scene-break-before,
+        #epub-content div.epub-scene-break-before {
+            padding-top: 1em;
+            margin-top: 0.8em;
+        }
         #epub-content h1, #epub-content h2, #epub-content h3 {
             margin-top: 1.5em;
             margin-bottom: 0.5em;
@@ -1321,7 +1335,7 @@
             <div id="reader-overlay-title" style="flex:1;min-width:0;color:#fff;font-size:17px;font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">Loading…</div>
             <button onclick="closeCleanReader()" title="Close" style="flex:0 0 auto;background:#333;color:#fff;border:none;padding:9px 15px;border-radius:8px;font-size:16px;cursor:pointer;">✕</button>
         </div>
-        <div id="reader-overlay-scroll" style="flex:1 1 auto;overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;">
+        <div id="reader-overlay-scroll" style="flex:1 1 auto;min-height:0;overflow-x:hidden;overflow-y:auto;-webkit-overflow-scrolling:touch;">
             <div id="reader-overlay-content" class="clean-reader-content"></div>
         </div>
     </div>
@@ -1927,6 +1941,85 @@
                 if (hasNonBrChild) return;
                 el.classList.add('epub-scene-break');
             });
+
+            // Scene / POV break preservation — flush-left opener variant.
+            //
+            // A second encoding the empty-paragraph loop above can't see: some
+            // EPUBs (notably the Calibre-converted Malazan books) drop the print
+            // blank line entirely and mark a scene change ONLY by styling the new
+            // scene's first paragraph flush-left — i.e. a DIFFERENT paragraph
+            // class from the indented body text — with no spacer and no extra
+            // margin. (Midnight Tides, Ch.6, ~67%: "…ah, Errant—" then
+            // "'Errant save us, what have you done?'" — the second line opens a
+            // new scene.) Because we inject only <body> innerHTML and never the
+            // publisher stylesheet, the indent itself never reaches the DOM; the
+            // class name is the only surviving signal of the author's intent.
+            //
+            // Heuristic: the body paragraph is whatever leaf-block class
+            // DOMINATES the merged document. A scene opener is a NON-dominant
+            // leaf block sandwiched between dominant body paragraphs — prev AND
+            // next are body — and not sitting at a chapter/heading boundary. The
+            // sandwich is what keeps this tight: it excludes epigraphs, verse and
+            // pull-quotes (clustered at chapter tops, never between two body
+            // paragraphs) and the common "no-indent first line after an
+            // image/blockquote" class reuse (whose previous block is the
+            // image/quote, not a body paragraph). The heading/spine guard
+            // excludes each chapter's own first paragraph (frequently a drop-cap
+            // / no-indent class) from being read as a mid-chapter scene break.
+            const sceneCandidates = [];
+            const candSet = new Set();
+            const INLINE_OK = /^(BR|SPAN|A|EM|I|B|STRONG|U|SUB|SUP|SMALL|BIG|FONT|Q|CITE|ABBR|MARK|TIME|CODE|S|DEL|INS)$/;
+            epubContent.querySelectorAll('p, div, blockquote').forEach(el => {
+                if (SCENE_BREAK_SKIP.test(el.className || '')) return;
+                if (el.classList.contains('epub-scene-break')) return;
+                if ((el.textContent || '').trim() === '') return;
+                if (el.querySelector('img, svg, image, picture, video, audio, table, figure, hr')) return;
+                // Leaf only: inline children are fine; any block-level child means
+                // this is a wrapper, not a paragraph.
+                const hasBlockChild = Array.from(el.children).some(c => !INLINE_OK.test(c.tagName));
+                if (hasBlockChild) return;
+                sceneCandidates.push(el);
+                candSet.add(el);
+            });
+            // Need a reasonable population before "dominant class" means anything.
+            if (sceneCandidates.length >= 12) {
+                const classOf = el => (el.className || '').trim();
+                // Find the dominant (body) leaf-block class.
+                const freq = {};
+                sceneCandidates.forEach(el => { const k = classOf(el); freq[k] = (freq[k] || 0) + 1; });
+                let dominant = null, domCount = 0;
+                for (const k in freq) { if (freq[k] > domCount) { domCount = freq[k]; dominant = k; } }
+                // Only engage when one class genuinely carries the body text;
+                // heavily per-paragraph-styled books make the signal meaningless.
+                if (dominant !== null && domCount / sceneCandidates.length >= 0.5) {
+                    // Walk all blocks in document order to mark, per candidate,
+                    // whether a heading or spine-item (chapter file) boundary
+                    // intervened since the previous candidate. Those candidates
+                    // open a chapter/section, not a mid-chapter scene.
+                    const headingBefore = new Set();
+                    let pendingBoundary = true; // start-of-document counts as a boundary
+                    epubContent
+                        .querySelectorAll('.epub-spine-item, h1, h2, h3, h4, h5, h6, p, div, blockquote')
+                        .forEach(node => {
+                            if (node.classList && node.classList.contains('epub-spine-item')) {
+                                pendingBoundary = true; return;
+                            }
+                            if (/^H[1-6]$/.test(node.tagName)) { pendingBoundary = true; return; }
+                            if (!candSet.has(node)) return;
+                            if (pendingBoundary) headingBefore.add(node);
+                            pendingBoundary = false;
+                        });
+                    for (let i = 1; i < sceneCandidates.length - 1; i++) {
+                        const el = sceneCandidates[i];
+                        if (classOf(el) === dominant) continue;                          // body text
+                        if (classOf(sceneCandidates[i - 1]) !== dominant) continue;      // prev not body
+                        if (classOf(sceneCandidates[i + 1]) !== dominant) continue;      // next not body
+                        if (headingBefore.has(el)) continue;                             // chapter/section opener
+                        if (el.getElementsByTagName('br').length >= 2) continue;         // verse / stanza
+                        el.classList.add('epub-scene-break-before');
+                    }
+                }
+            }
 
             // Tag every leaf block element with a stable data-anchor="N".
             // Done on the live DOM (not the parsed tree) so the queries below
@@ -5077,7 +5170,10 @@
             document.getElementById('reader-overlay-title').textContent = dispTitle;
             const content = document.getElementById('reader-overlay-content');
             content.innerHTML = '<h1>' + escHtml(dispTitle) + '</h1>';
-            content.appendChild(cleaned);
+            // Move the cleaned article's children in (don't append the parsed
+            // <body> node itself — a nested <body> is invalid and can confuse
+            // layout). cleaned is the DOMParser body wrapper.
+            while (cleaned.firstChild) content.appendChild(cleaned.firstChild);
         }
 
         function _renderEmpty(msg) {
