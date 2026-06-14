@@ -72,7 +72,17 @@ def main():
     # Allow rebinding to the same port quickly after a restart.
     socketserver.TCPServer.allow_reuse_address = True
 
-    with socketserver.TCPServer((args.bind, args.port), handler) as httpd:
+    # Threaded so one slow/stalled client (e.g. a phone that opened a request
+    # and went away mid-transfer) can't block every other request. A single
+    # blocking client on the old single-threaded TCPServer would hang the whole
+    # server: the port stayed LISTENing but nothing ever responded, and the
+    # port-only watchdog never noticed. daemon_threads => stuck workers don't
+    # keep the process alive on shutdown.
+    class ThreadingServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
+        daemon_threads = True
+        allow_reuse_address = True
+
+    with ThreadingServer((args.bind, args.port), handler) as httpd:
         print(f"Ereader web server: http://{args.bind}:{args.port}  (no-cache)",
               file=sys.stderr, flush=True)
         try:

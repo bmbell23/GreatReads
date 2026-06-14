@@ -63,9 +63,18 @@ while true; do
     fi
     pull_count=$((pull_count - 1))
 
-    # Check if server is running on port 8090
-    if ! ss -ltn | grep -q ":8090 "; then
-        echo "[$(date)] Server not found on port 8090, starting..."
+    # Health check. A port-listening check alone is not enough: a single-threaded
+    # server stuck on a stalled client keeps the port LISTENing forever while
+    # serving nothing. So require BOTH that the port is up AND that an actual
+    # HTTP request returns within a short timeout. Either failing => restart.
+    healthy=1
+    ss -ltn | grep -q ":8090 " || healthy=0
+    if [ "$healthy" -eq 1 ]; then
+        curl -s -o /dev/null --max-time 4 "http://127.0.0.1:8090/index.html" || healthy=0
+    fi
+
+    if [ "$healthy" -eq 0 ]; then
+        echo "[$(date)] Server unhealthy (port or HTTP check failed), (re)starting..."
 
         # Clean up any stale processes
         pkill -f "python3 serve.py" 2>/dev/null
