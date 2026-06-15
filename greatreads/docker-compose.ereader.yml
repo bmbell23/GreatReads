@@ -29,7 +29,7 @@ services:
       - TZ=America/Denver
       - DATABASE_URL=sqlite:////app/data/greatreads.db
       - APP_PATH=/greatreads          # matches the reverse-proxy prefix added in Story 1
-      - ENABLE_SCHEDULERS=false        # Story 0–1: no background sync/recalc. Flip true in Story 2.
+      - ENABLE_SCHEDULERS=true         # Story 2: this is now canonical prod — sole writer (old :8007 stopped).
       - SECRET_KEY=local-ereader-not-secret
       - ALGORITHM=HS256
       - ACCESS_TOKEN_EXPIRE_MINUTES=43200

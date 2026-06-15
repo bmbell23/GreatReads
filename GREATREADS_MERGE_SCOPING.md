@@ -248,7 +248,12 @@ with **no APK change**. Back navigation uses the WebView's existing history hand
 
 ---
 
-## Story 2 — Cross-link + retire remote :8007
+## Story 2 — Cross-link + retire remote :8007  ·  ✅ DONE (2026-06-15)
+
+> Implemented: `GREATREADS_URL` default changed to `http://127.0.0.1:8092` and the dual-write
+> mirror (`GREATREADS_MIRROR_URLS` / `_gr_mirror`) removed; `greatreads_app` (:8007) stopped (data
+> kept); schedulers enabled on :8092 (`ENABLE_SCHEDULERS=true`); daily DB backups via
+> `greatreads/scripts/backup-db.sh` (cron). Cross-side deep links remain a follow-up.
 
 ### 2a. Repoint Ereader → local service (near-trivial)
 `backend/server.py:53`:

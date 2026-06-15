@@ -194,7 +194,16 @@ Button ships; GreatReads usable inside the app from this repo's code+data; Eread
 ---
 
 ## Story 2 — Cross-link the two sides; retire the remote `:8007` dependency
-**Size:** L · **User-visible:** yes · **Depends on:** Story 1
+**Size:** L · **User-visible:** yes · **Depends on:** Story 1 · **STATUS: ✅ DONE (2026-06-15)**
+
+> **Done:** `backend/server.py` `GREATREADS_URL` now defaults to `http://127.0.0.1:8092`; the
+> transitional dual-write mirror (`GREATREADS_MIRROR_URLS` / `_gr_mirror`) was removed. The old
+> prod container `greatreads_app` (:8007) is **stopped** (data dir retained as a cold backup), and
+> APScheduler (Calibre/ABS auto-sync + midnight chain recalc) is now **enabled on :8092**
+> (`ENABLE_SCHEDULERS=true`) as the sole writer. Daily online DB backups run via
+> `greatreads/scripts/backup-db.sh` (cron 02:30). Deep links between reader/player and GreatReads
+> remain a follow-up. NOTE: stopping :8007 also took down the public `forge-freedom.com/greatreads`
+> route — repoint the host reverse proxy to :8092 if that external URL is still needed.
 
 **As** a user **I want** books to link between the reader/player and GreatReads, and **as** the
 maintainer **I want** all GreatReads traffic to hit the local service **so that** the remote

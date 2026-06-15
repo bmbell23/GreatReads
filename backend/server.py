@@ -51,33 +51,10 @@ PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '100.69.184.113:8091')
 # is updated from our audiobook percentage, an "Ebook" reading from our ebook
 # percentage. We only ever update the percentage of existing in-progress
 # readings — we never create, finish, or re-format anything.
-GREATREADS_URL = os.environ.get('GREATREADS_URL', 'http://100.69.184.113:8007').rstrip('/')
-
-# Transitional dual-write (GreatReads merge, Story 1→2). Reads and the response
-# we return always come from GREATREADS_URL (the primary — currently prod). Each
-# WRITE we make (progress sync, finish ratings, start-next) is ALSO mirrored,
-# best-effort, to every base URL below, so the newly-vendored local instance
-# (:8092) receives the same progress while prod stays the proven source of truth.
-# Reading IDs match across instances (the local one is a snapshot copy of prod),
-# so the same /api/readings/{id}/... path is valid on every target.
-#   - "both" (default):    GREATREADS_MIRROR_URLS=http://127.0.0.1:8092
-#   - "just new instance": set GREATREADS_URL=http://127.0.0.1:8092 and
-#                          GREATREADS_MIRROR_URLS=""  (empty)
-GREATREADS_MIRROR_URLS = [u.strip().rstrip('/') for u in
-    os.environ.get('GREATREADS_MIRROR_URLS', 'http://127.0.0.1:8092').split(',')
-    if u.strip()]
-
-def _gr_mirror(method, path, **kwargs):
-    """Best-effort: replay a GreatReads write at each mirror base URL. Never
-    raises — mirroring must never affect the primary call or its response."""
-    kwargs.setdefault('timeout', 10)
-    for base in GREATREADS_MIRROR_URLS:
-        if base == GREATREADS_URL:
-            continue  # don't double-write the primary
-        try:
-            requests.request(method, base + path, **kwargs)
-        except Exception as e:
-            print(f'GreatReads mirror {method} {base}{path} failed: {e}')
+# Canonical GreatReads service: the local vendored instance on :8092 (Story 2).
+# It reads/writes the repo-local greatreads.db that the reader also writes to, so
+# there is one source of truth. The old remote prod (:8007) has been retired.
+GREATREADS_URL = os.environ.get('GREATREADS_URL', 'http://127.0.0.1:8092').rstrip('/')
 
 # Persisted user data (highlights + bookmarks). Single JSON file on disk —
 # trivial to back up, trivial to grep. Guarded by a lock because Flask is
@@ -2286,7 +2263,6 @@ def greatreads_finish():
         ur = requests.put(GREATREADS_URL + f'/api/readings/{reading_id}/',
                           json=update_data, timeout=15)
         ur.raise_for_status()
-        _gr_mirror('PUT', f'/api/readings/{reading_id}/', json=update_data)
         message = f'Marked reading #{reading_id} as finished'
     except Exception as e:
         return jsonify({'error': 'GreatReads API error', 'detail': str(e)}), 502
@@ -2404,8 +2380,6 @@ def greatreads_start_next():
             GREATREADS_URL + f'/api/readings/{reading_id}/start',
             params={'start_date': start_date}, timeout=15)
         r.raise_for_status()
-        _gr_mirror('POST', f'/api/readings/{reading_id}/start',
-                   params={'start_date': start_date})
     except Exception as e:
         return jsonify({'error': 'GreatReads API error', 'detail': str(e)}), 502
     return jsonify({'success': True, 'readingId': reading_id, 'startDate': start_date})

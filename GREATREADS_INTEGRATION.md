@@ -1,6 +1,14 @@
 # GreatReads Integration Reference
 
-**GreatReads Source Code**: `../GreatReads/` (symlinked as `GREATREADS_SOURCE/` in this repo)
+> **STATUS (Story 2 — DONE, 2026-06-15):** The integration now runs entirely against the
+> **local vendored GreatReads on `:8092`** (`greatreads_ereader` container, repo-local DB at
+> `greatreads/data/greatreads.db`). The old remote prod **`:8007` has been retired** —
+> `greatreads_app` is stopped, its data dir kept as a cold backup. Reading progress is written
+> straight into that DB (see [`backend/server.py`](backend/server.py) `_gr_set_current_percent`
+> and the `ereader_progress` table), so the old title-matching "sync" job is gone. The base URL
+> below and any remaining `:8007` references are historical.
+
+**GreatReads Source Code**: vendored in-repo at `greatreads/` (was `../GreatReads/`, source commit `dbafbc1 v2.1.7`)
 
 ## CRITICAL RULES FOR AGENTS
 
@@ -71,7 +79,7 @@ Reading C (id=300, id_previous=200)
 
 ## GreatReads API Endpoints (Used by Ereader)
 
-**Base URL**: `http://100.69.184.113:8007`
+**Base URL**: `http://127.0.0.1:8092` (local vendored instance; was `http://100.69.184.113:8007` before Story 2)
 
 ### Reading CRUD
 - `GET  /api/readings/` — List all readings. Query params: `media`, `status` (computed), `book_title`
