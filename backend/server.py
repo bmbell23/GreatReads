@@ -355,8 +355,8 @@ def _gr_set_current_percent(book_key, record):
             if not row:
                 return  # GreatReads has no in-progress reading for this book+format
             cur = row['current_percent']
-            if cur is not None and abs(float(cur) - pct) < 0.5:
-                return  # already there — skip the write
+            if cur is not None and abs(float(cur) - pct) < 0.05:
+                return  # unchanged — skip a redundant write (keep GR tracking tightly)
             from datetime import datetime
             with conn:
                 conn.execute(
