@@ -9,6 +9,7 @@ from ..database import get_db
 from ..models.book import Book, BookResponse
 from ..models.reading import Reading
 from ..models.inventory import Inventory
+from ..models.external_import import ExternalImport
 
 router = APIRouter()
 
@@ -16,7 +17,7 @@ router = APIRouter()
 @router.get("/books", response_model=List[Dict[str, Any]])
 async def get_library_books(
     skip: int = Query(0, ge=0),
-    limit: int = Query(100, ge=1, le=1000),
+    limit: int = Query(100, ge=1, le=10000),
     search: Optional[str] = Query(None),
     author: Optional[str] = Query(None),
     series: Optional[str] = Query(None),
@@ -135,6 +136,17 @@ async def get_library_books(
             if inv.owned_physical:
                 media_owned.append("Physical")
         book_data["media_owned"] = list(set(media_owned))  # Remove duplicates
+
+        # External source links (Calibre / Audiobookshelf). The unified home uses
+        # these to open a readable book in the reader/player by its source id;
+        # books with neither link are tracking-only (physical / manually added).
+        ext = db.query(ExternalImport).filter(ExternalImport.book_id == book.id).all()
+        book_data["calibre_id"] = next(
+            (e.external_id for e in ext if e.source == "calibre"), None
+        )
+        book_data["abs_id"] = next(
+            (e.external_id for e in ext if e.source == "audiobookshelf"), None
+        )
 
         enriched_books.append(book_data)
 

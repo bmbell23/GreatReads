@@ -54,7 +54,7 @@
                         <div class="d-flex gap-1">
                             <select class="form-select" id="sortSelect">
                                 <option value="title">Title</option>
-                                <option value="author">Author</option>
+                                <option value="author" selected>Author</option>
                                 <option value="date_published">Publication Date</option>
                                 <option value="series">Series</option>
                                 <option value="word_count">Word Count</option>
@@ -79,69 +79,34 @@
 <div class="row mb-3">
     <div class="col-12">
         <div class="card compact-stats">
-            <div class="card-body py-3">
-                <div class="row text-center">
-                    <!-- Status filters (left on mobile) -->
-                    <div class="col-6 col-md-2 order-0">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="read-status"
-                             data-filter-value="all"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-book text-primary mb-1"></i>
-                            <small class="text-muted">Total</small>
-                            <strong class="text-primary" id="totalBooks">-</strong>
-                        </div>
+            <div class="card-body py-2">
+                <div class="d-flex flex-wrap justify-content-center align-items-center stat-chips">
+                    <!-- Read-status filters (single-select) -->
+                    <div class="stat-filter stat-chip text-primary" title="All books"
+                         data-filter-type="read-status" data-filter-value="all" onclick="toggleFilter(this)">
+                        <i class="fas fa-book"></i><strong id="totalBooks">-</strong>
                     </div>
-                    <div class="col-6 col-md-2 order-2 order-md-1">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="read-status"
-                             data-filter-value="read"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-check-circle text-success mb-1"></i>
-                            <small class="text-muted">Read</small>
-                            <strong class="text-success" id="readBooks">-</strong>
-                        </div>
+                    <div class="stat-filter stat-chip text-success" title="Read"
+                         data-filter-type="read-status" data-filter-value="read" onclick="toggleFilter(this)">
+                        <i class="fas fa-check-circle"></i><strong id="readBooks">-</strong>
                     </div>
-                    <div class="col-6 col-md-2 order-4 order-md-2">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="read-status"
-                             data-filter-value="unread"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-list text-info mb-1"></i>
-                            <small class="text-muted">Unread</small>
-                            <strong class="text-info" id="unreadBooks">-</strong>
-                        </div>
+                    <div class="stat-filter stat-chip text-info" title="Unread"
+                         data-filter-type="read-status" data-filter-value="unread" onclick="toggleFilter(this)">
+                        <i class="fas fa-list"></i><strong id="unreadBooks">-</strong>
                     </div>
-                    <!-- Media filters (right on mobile) -->
-                    <div class="col-6 col-md-2 order-1 order-md-3">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="ebook"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-tablet-alt mb-1" style="color: #0066CC;"></i>
-                            <small class="text-muted">Ebook</small>
-                            <strong id="ebookCount" style="color: #0066CC;">-</strong>
-                        </div>
+                    <span class="vr mx-1 d-none d-sm-block"></span>
+                    <!-- Media filters (multi-select; AND) -->
+                    <div class="stat-filter stat-chip" style="color:#0066CC;" title="Owns ebook"
+                         data-filter-type="media-type" data-filter-value="ebook" onclick="toggleFilter(this)">
+                        <i class="fas fa-tablet-alt"></i><strong id="ebookCount">-</strong>
                     </div>
-                    <div class="col-6 col-md-2 order-3 order-md-4">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="physical"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-book mb-1" style="color: #6B4BA3;"></i>
-                            <small class="text-muted">Physical</small>
-                            <strong id="physicalCount" style="color: #6B4BA3;">-</strong>
-                        </div>
+                    <div class="stat-filter stat-chip" style="color:#6B4BA3;" title="Owns physical"
+                         data-filter-type="media-type" data-filter-value="physical" onclick="toggleFilter(this)">
+                        <i class="fas fa-book"></i><strong id="physicalCount">-</strong>
                     </div>
-                    <div class="col-6 col-md-2 order-5 order-md-5">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="audio"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-headphones mb-1" style="color: #FF6600;"></i>
-                            <small class="text-muted">Audio</small>
-                            <strong id="audioCount" style="color: #FF6600;">-</strong>
-                        </div>
+                    <div class="stat-filter stat-chip" style="color:#FF6600;" title="Owns audiobook"
+                         data-filter-type="media-type" data-filter-value="audio" onclick="toggleFilter(this)">
+                        <i class="fas fa-headphones"></i><strong id="audioCount">-</strong>
                     </div>
                 </div>
             </div>
@@ -428,6 +393,21 @@
         </div>
     </div>
 </div>
+
+<!-- Read / Listen picker — opened by tapping or right-clicking a book cover -->
+<div class="modal fade" id="openBookModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-truncate" id="openBookTitle"></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-2" id="openBookOptions"></div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -539,6 +519,99 @@
 .btn-check:checked + .format-type-physical i {
     color: white;
 }
+
+/* ---- Compact, icon-forward library cards ---- */
+.lib-card {
+    min-height: 0;
+    border: 1px solid #e9ecef;
+    border-radius: 10px;
+    overflow: hidden;
+    transition: box-shadow 0.15s, transform 0.15s;
+}
+.lib-card:hover { box-shadow: 0 6px 18px rgba(0,0,0,0.12); transform: translateY(-2px); }
+.lib-cover-wrap {
+    position: relative;
+    cursor: pointer;
+    background: linear-gradient(135deg, #e9ecef 0%, #dee2e6 100%);
+    aspect-ratio: 2 / 3;
+    display: flex; align-items: center; justify-content: center;
+}
+.lib-cover-wrap img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.lib-cover-wrap .book-cover-fallback { font-size: 2.5rem; color: #adb5bd; }
+
+/* Read status is shown by the whole card: warm gold glow when read, muted gray
+   when not — so it reads at a glance across the grid without a per-cover icon. */
+.lib-card.is-read {
+    border: 2px solid #e0a800;
+    box-shadow: 0 0 10px rgba(224,168,0,0.5), 0 2px 8px rgba(0,0,0,0.08);
+}
+.lib-card.is-read:hover {
+    box-shadow: 0 0 16px rgba(224,168,0,0.72), 0 6px 18px rgba(0,0,0,0.15);
+}
+.lib-card.is-unread { border: 1px solid #ced4da; }
+
+/* ×N times-read badge — top-left, round, color-tiered (read-count-N gradients). */
+.lib-readcount {
+    position: absolute; top: 8px; left: 8px;
+    width: 2rem; height: 2rem; padding: 0 !important; min-width: 0 !important;
+    display: flex; align-items: center; justify-content: center;
+    border-radius: 999px !important;
+    font-size: 0.82rem !important; font-weight: 800; line-height: 1;
+    box-shadow: 0 2px 6px rgba(0,0,0,0.45);
+    border: 1.5px solid rgba(255,255,255,0.85);
+}
+
+/* Owned-media icons, bottom-left over the cover (bigger, color-coded). */
+.lib-media {
+    position: absolute; bottom: 6px; left: 6px;
+    display: flex; gap: 7px;
+    background: rgba(0,0,0,0.5); border-radius: 16px; padding: 4px 9px;
+    backdrop-filter: blur(2px); font-size: 1.05rem;
+}
+.lib-media .ebook    { color: #4aa3ff; }
+.lib-media .audio    { color: #ff9a4d; }
+.lib-media .physical { color: #b89cf0; }
+
+.lib-meta { padding: 8px 10px 10px; }
+.lib-title {
+    font-size: 0.85rem; font-weight: 600; line-height: 1.25; color: #212529;
+    display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+    min-height: 2.5em;                                    /* always reserve 2 lines so cards align */
+}
+.lib-author { font-size: 0.75rem; color: #6c757d; margin-top: 2px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+/* ---- Read/Listen picker + secondary actions (cover tap popup) ---- */
+.open-type-btn {
+    width: 100%; min-height: 96px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-width: 2px; border-style: solid; border-radius: 12px;
+    background: #fff; transition: all 0.15s; cursor: pointer;
+}
+.open-type-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.15); }
+.open-type-ebook  { border-color: #0066CC; color: #0066CC; }
+.open-type-audio  { border-color: #FF6600; color: #FF6600; }
+.open-type-ebook:hover  { background: #0066CC; color: #fff; }
+.open-type-audio:hover  { background: #FF6600; color: #fff; }
+.open-secondary { display: flex; flex-direction: column; gap: 5px; }
+.open-secondary .btn { text-align: left; }
+
+/* Compact, label-less stat/filter chips */
+.stat-chips { gap: 8px; }
+.stat-chip {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 5px 12px; border-radius: 999px;
+    background: #f1f3f5; cursor: pointer; user-select: none;
+    border: 2px solid transparent; transition: all 0.12s; line-height: 1;
+}
+.stat-chip i { font-size: 0.95rem; }
+.stat-chip strong { font-size: 0.95rem; }
+.stat-chip:hover { background: #e9ecef; }
+.stat-chip.active { border-color: currentColor; background: #fff; }
+
+/* Book-detail rows in the cover popup */
+.open-details { font-size: 0.85rem; }
+.open-details > div { padding: 3px 0; border-bottom: 1px solid #f0f0f0; }
+.open-details > div:last-child { border-bottom: none; }
 </style>
 
 <script>
@@ -585,6 +658,72 @@ function setupEventListeners() {
     }
 }
 
+// ---- Ereader reading progress (cross-origin, same feed the Ereader home uses) ----
+const EREADER_API = 'http://100.69.184.113:8091/api';
+const progressByCalibre = new Map();  // calibre_id -> { progress, updated, ... }
+const progressByAbs = new Map();      // abs_id     -> { progress, updated, ... }
+
+async function loadReadingProgress() {
+    try {
+        const res = await fetch(`${EREADER_API}/progress`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? data.items : [];
+        progressByCalibre.clear();
+        progressByAbs.clear();
+        for (const it of items) {
+            if (it && it.bookId != null) progressByCalibre.set(String(it.bookId), it);
+            if (it && it.absId) progressByAbs.set(String(it.absId), it);
+        }
+    } catch (_) {
+        // Offline / Ereader API unreachable — sort just falls back to no float.
+    }
+}
+
+// Progress record for a book (prefer ebook/calibre, fall back to audio/abs).
+function bookProgress(book) {
+    if (book.calibre_id && progressByCalibre.has(String(book.calibre_id))) {
+        return progressByCalibre.get(String(book.calibre_id));
+    }
+    if (book.abs_id && progressByAbs.has(String(book.abs_id))) {
+        return progressByAbs.get(String(book.abs_id));
+    }
+    return null;
+}
+
+// "In progress" = opened and partway through (0 < p < 1) — not finished, not just opened.
+function isInProgress(book) {
+    const pr = bookProgress(book);
+    const p = pr && typeof pr.progress === 'number' ? pr.progress : 0;
+    return !!pr && p > 0 && p < 1;
+}
+
+// Ereader-home-style ordering: in-progress books first (newest update first),
+// then everyone else by author last name → series → series order → pub date.
+function sortAuthorEreaderStyle(list) {
+    const inProgress = [];
+    const rest = [];
+    for (const b of list) {
+        (isInProgress(b) ? inProgress : rest).push(b);
+    }
+    inProgress.sort((a, b) => {
+        const au = (bookProgress(a) && bookProgress(a).updated) || 0;
+        const bu = (bookProgress(b) && bookProgress(b).updated) || 0;
+        return bu - au;
+    });
+    const lastName = b => (b.author_name_second || b.author_sorted || b.author || 'Unknown');
+    rest.sort((a, b) => {
+        const lc = lastName(a).toLowerCase().localeCompare(lastName(b).toLowerCase());
+        if (lc !== 0) return lc;
+        const sc = (a.series || '').toLowerCase().localeCompare((b.series || '').toLowerCase());
+        if (sc !== 0) return sc;
+        const ai = a.series_number ?? 0, bi = b.series_number ?? 0;
+        if (ai !== bi) return ai - bi;
+        return (a.date_published || '').localeCompare(b.date_published || '');
+    });
+    return inProgress.concat(rest);
+}
+
 async function loadLibraryData() {
     try {
         // Check if GreatReads is available
@@ -592,12 +731,15 @@ async function loadLibraryData() {
             throw new Error('GreatReads library not loaded');
         }
 
-        // Load books and filter options in parallel
+        // Load books + filters in parallel; pull Ereader reading progress too so
+        // in-progress books can float to the top (matches the Ereader home).
         const [books, stats, filters] = await Promise.all([
-            GreatReads.apiCall('/library/books?limit=1000'),
+            GreatReads.apiCall('/library/books?limit=10000'),
             GreatReads.apiCall('/library/stats'),
             GreatReads.apiCall('/library/filters')
         ]);
+
+        await loadReadingProgress();
 
         allBooks = books;
         filteredBooks = books;
@@ -605,10 +747,13 @@ async function loadLibraryData() {
 
         displayStats(stats);
         populateFilterOptions(filters);
-        displayBooks(books);
 
-        // Initialize filters from URL parameters
+        // Initialize filters from URL params, then render via applyFilters() so the
+        // default Author (in-progress-first) sort is actually applied on first load
+        // — previously the initial render used raw API order while the dropdown
+        // already said "Author".
         initializeFiltersFromURL();
+        applyFilters();
 
     } catch (error) {
         console.error('Library data loading failed:', error);
@@ -658,69 +803,207 @@ function displayBooks(books) {
     booksGrid.innerHTML = html;
 }
 
+// Open a readable book in the Ereader reader/player. Both are served same-origin
+// at the site root via the :8090 proxy, so root-absolute paths work whether this
+// page was reached at /greatreads/library or embedded. Cache-bust with a stamp so
+// reader/player HTML edits show up immediately (mirrors the Ereader home).
+function openLibraryEbook(calibreId, titleEnc) {
+    const v = Date.now();
+    window.location.href = `/reader.html?v=${v}&id=${encodeURIComponent(calibreId)}&format=epub&title=${titleEnc}`;
+}
+function openLibraryAudio(absId, titleEnc, authorEnc) {
+    const v = Date.now();
+    window.location.href = `/player.html?v=${v}&absId=${encodeURIComponent(absId)}&title=${titleEnc}&author=${authorEnc}`;
+}
+
 function createBookCard(book) {
-    const readStatus = book.is_read ? 'read' : 'unread';
-    const statusClass = book.is_read ? 'success' : 'secondary';
-    const statusText = book.is_read ? 'Read' : 'Unread';
+    const owned = book.media_owned || [];
+    const has = m => owned.includes(m);
+    const mediaIcons = `
+        ${has('Ebook')    ? '<i class="fas fa-tablet-alt ebook" title="Ebook"></i>' : ''}
+        ${has('Audio')    ? '<i class="fas fa-headphones audio" title="Audiobook"></i>' : ''}
+        ${has('Physical') ? '<i class="fas fa-book physical" title="Physical"></i>' : ''}
+    `.trim();
+
+    const coverInner = book.cover
+        ? `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg" alt="${book.title}" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+           <i class="fas fa-book book-cover-fallback" style="display:none;"></i>`
+        : `<i class="fas fa-book book-cover-fallback"></i>`;
 
     return `
-        <div class="col-md-6 col-lg-4 mb-4">
-            <div class="card h-100 book-card">
-                <div class="card-body">
-                    <div class="d-flex">
-                        <div class="me-3">
-                            <div class="book-cover">
-                                ${book.cover ?
-                                    `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg" alt="${book.title}" class="book-cover-img" onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-                                     <i class="fas fa-book book-cover-fallback" style="display:none;"></i>` :
-                                    `<i class="fas fa-book book-cover-fallback"></i>`
-                                }
-                            </div>
-                            <div class="d-flex justify-content-between align-items-center mt-2 px-1">
-                                <span class="badge bg-${statusClass}">${statusText}</span>
-                                ${book.read_count > 0 ? `<span class="read-count-badge read-count-${book.read_count}">×${book.read_count}</span>` : ''}
-                            </div>
-                        </div>
-                        <div class="flex-grow-1 d-flex flex-column">
-                            <div class="mb-2">
-                                <h6 class="card-title mb-1">${book.title}</h6>
-                                <p class="text-muted small mb-1">${book.author}</p>
-                            </div>
-
-                            <div class="small text-muted mb-2">
-                                ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
-                                ${book.page_count ? (book.word_count ? ' • ' : '') + book.page_count + ' pages' : ''}
-                            </div>
-
-                            ${book.series ? `
-                                <div class="small text-muted mb-2">
-                                    <i class="fas fa-layer-group me-1"></i>
-                                    ${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number != null ? ' #' + book.series_number : ''}
-                                </div>
-                            ` : ''}
-
-                            <div class="mt-auto">
-                                <!-- Media badges anchored to bottom -->
-                                ${book.media_owned.length > 0 ? `
-                                    <div class="d-flex gap-1 mb-2 media-badges-container">
-                                        ${book.media_owned.map(media => `<span class="media-badge-large ${media.toLowerCase()}">${media}</span>`).join('')}
-                                    </div>
-                                ` : ''}
-                                <div class="btn-group btn-group-sm w-100">
-                                    <button class="btn btn-outline-primary" onclick="viewBookDetails(${book.id})">
-                                        <i class="fas fa-eye"></i> View
-                                    </button>
-                                    <button class="btn btn-outline-success" onclick="addToTBR(${book.id})">
-                                        <i class="fas fa-plus"></i> TBR
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
+        <div class="col-4 col-sm-3 col-md-3 col-lg-2 mb-3">
+            <div class="card h-100 book-card lib-card ${book.is_read ? 'is-read' : 'is-unread'}">
+                <div class="lib-cover-wrap"
+                     onclick="openBookActions(${book.id})"
+                     oncontextmenu="openBookActions(${book.id}); return false;">
+                    ${coverInner}
+                    ${(book.read_count || 0) > 1 ? `<span class="read-count-badge read-count-${Math.min(book.read_count, 15)} lib-readcount" title="Read ${book.read_count}×">×${book.read_count}</span>` : ''}
+                    ${mediaIcons ? `<span class="lib-media">${mediaIcons}</span>` : ''}
+                </div>
+                <div class="lib-meta">
+                    <div class="lib-title" title="${book.title}">${book.title}</div>
+                    <div class="lib-author">${book.author || ''}</div>
                 </div>
             </div>
         </div>
     `;
+}
+
+// Click a cover → one popup: big Read/Listen format button(s) up top, then the
+// smaller secondary actions (View Details / Add to TBR / Mark Finished / Clear
+// Progress). Only the formats a book actually has are offered; a tracking-only
+// book (no Calibre/ABS link) just shows a short note above the secondary actions.
+function openBookActions(bookId) {
+    const book = allBooks.find(b => b.id === bookId);
+    if (!book) return;
+    const canRead = !!book.calibre_id;
+    const canListen = !!book.abs_id;
+    // encodeURIComponent leaves ' unescaped, which would break the inline
+    // onclick string for titles with apostrophes — escape it explicitly.
+    const titleEnc = encodeURIComponent(book.title || '').replace(/'/g, '%27');
+    const authorEnc = encodeURIComponent(book.author || '').replace(/'/g, '%27');
+
+    document.getElementById('openBookTitle').textContent = book.title || '';
+
+    // Book details (word/page count, series, physical shelf location).
+    const rows = [];
+    if (book.author) rows.push(['Author', book.author]);
+    if (book.series) {
+        const num = (book.series_number != null) ? ' #' + book.series_number : '';
+        rows.push(['Series', `${book.universe ? book.universe + ': ' : ''}${book.series}${num}`]);
+    }
+    if (book.word_count) rows.push(['Words', Number(book.word_count).toLocaleString()]);
+    if (book.page_count) rows.push(['Pages', Number(book.page_count).toLocaleString()]);
+    const phys = (book.inventory || []).find(i => i.owned_physical && (i.shelf_bookshelf || i.location));
+    if (phys) {
+        let loc = phys.location || '';
+        if (phys.shelf_bookshelf) {
+            loc = `Shelf ${phys.shelf_bookshelf}` +
+                  (phys.shelf_shelf != null ? `-${phys.shelf_shelf}` : '') +
+                  (phys.shelf_position != null ? `, pos ${phys.shelf_position}` : '');
+        }
+        if (loc) rows.push(['Location', loc]);
+    }
+    const details = rows.length ? `
+        <div class="col-12">
+            <div class="open-details">
+                ${rows.map(([k, v]) => `<div class="d-flex justify-content-between gap-3">
+                    <span class="text-muted">${k}</span><span class="fw-medium text-end">${v}</span>
+                </div>`).join('')}
+            </div>
+        </div>` : '';
+
+    const big = (canRead || canListen) ? `
+        <div class="col-12">
+            <div class="row g-2">
+                ${canRead ? `<div class="col">
+                    <button type="button" class="open-type-btn open-type-ebook"
+                            onclick="openLibraryEbook('${book.calibre_id}', '${titleEnc}')">
+                        <i class="fas fa-book-open fa-2x mb-2"></i><div class="fw-bold">Read</div>
+                    </button>
+                </div>` : ''}
+                ${canListen ? `<div class="col">
+                    <button type="button" class="open-type-btn open-type-audio"
+                            onclick="openLibraryAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}')">
+                        <i class="fas fa-headphones fa-2x mb-2"></i><div class="fw-bold">Listen</div>
+                    </button>
+                </div>` : ''}
+            </div>
+        </div>` : `
+        <div class="col-12 text-center text-muted small pb-1">
+            <i class="fas fa-book me-1"></i>Tracked book — no ebook or audiobook file linked.
+        </div>`;
+
+    const secondary = `
+        <div class="col-12">
+            <div class="open-secondary">
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libViewDetails(${book.id})">
+                    <i class="fas fa-eye me-2 text-primary"></i>View Details
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libAddToTBR(${book.id})">
+                    <i class="fas fa-plus me-2 text-success"></i>Add to TBR
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libMarkFinished(${book.id})">
+                    <i class="fas fa-check-circle me-2 text-success"></i>Mark as Finished
+                </button>
+                <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libClearProgress(${book.id})">
+                    <i class="fas fa-trash me-2 text-danger"></i>Clear Reading Progress
+                </button>
+            </div>
+        </div>`;
+
+    document.getElementById('openBookOptions').innerHTML = big + details + secondary;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('openBookModal')).show();
+}
+
+function hideOpenBookModal() {
+    const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+    if (m) m.hide();
+}
+function libViewDetails(id) { hideOpenBookModal(); viewBookDetails(id); }
+function libAddToTBR(id) { hideOpenBookModal(); addToTBR(id); }
+
+// Mark finished, GreatReads-native: finish an existing unfinished reading if there
+// is one, else create a finished reading. (Ratings stay optional — the full rating
+// flow lives on the journal.)
+async function libMarkFinished(id) {
+    const book = allBooks.find(b => b.id === id);
+    if (!book) return;
+    if (!confirm(`Mark "${book.title}" as finished today?`)) return;
+    hideOpenBookModal();
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        const owned = book.media_owned || [];
+        const media = owned.includes('Ebook') ? 'Ebook'
+                    : owned.includes('Audio') ? 'Audio'
+                    : owned.includes('Physical') ? 'Physical' : 'Ebook';
+        const unfinished = (book.readings || []).find(r => !r.date_finished_actual);
+        if (unfinished) {
+            await GreatReads.apiCall(`/readings/${unfinished.id}`, {
+                method: 'PUT', data: { date_finished_actual: today }
+            });
+        } else {
+            await GreatReads.apiCall('/readings/', {
+                method: 'POST',
+                data: { book_id: id, media, date_started: today, date_finished_actual: today }
+            });
+        }
+        GreatReads.showToast('Marked as finished!', 'success');
+        await refreshLibraryData();
+    } catch (e) {
+        console.error('Mark finished failed:', e);
+        GreatReads.showToast('Failed to mark as finished', 'error');
+    }
+}
+
+// Clear reading progress via the Ereader API (same feed/keys the reader writes).
+async function libClearProgress(id) {
+    const book = allBooks.find(b => b.id === id);
+    if (!book) return;
+    if (!confirm(`Clear reading progress for "${book.title}"?`)) return;
+    hideOpenBookModal();
+    try {
+        const keys = [];
+        if (book.calibre_id) keys.push(String(book.calibre_id));
+        if (book.abs_id) keys.push('abs:' + book.abs_id);
+        for (const k of keys) {
+            await fetch(`${EREADER_API}/progress/${encodeURIComponent(k)}`, { method: 'DELETE' }).catch(() => {});
+        }
+        GreatReads.showToast('Reading progress cleared', 'success');
+        await loadReadingProgress();
+        applyFilters();
+    } catch (e) {
+        console.error('Clear progress failed:', e);
+        GreatReads.showToast('Failed to clear progress', 'error');
+    }
+}
+
+async function refreshLibraryData() {
+    try {
+        allBooks = await GreatReads.apiCall('/library/books?limit=10000');
+        await loadReadingProgress();
+        applyFilters();
+    } catch (_) {}
 }
 
 // Fuzzy search function - returns true if search term fuzzy matches the text
@@ -773,15 +1056,25 @@ function applyFilters() {
             if (activeFilters.readStatus === 'unread' && book.is_read) return false;
         }
 
-        // Media filter (from stat badges)
-        if (activeFilters.mediaType) {
-            const mediaOwned = book.media_owned || [];
-            const mediaType = activeFilters.mediaType.charAt(0).toUpperCase() + activeFilters.mediaType.slice(1);
-            if (!mediaOwned.includes(mediaType)) return false;
+        // Media filter (multi-select, AND — book must own EVERY selected format)
+        if (activeFilters.mediaTypes && activeFilters.mediaTypes.length) {
+            const owned = (book.media_owned || []).map(m => m.toLowerCase());
+            for (const mt of activeFilters.mediaTypes) {
+                if (!owned.includes(mt)) return false;
+            }
         }
 
         return true;
     });
+
+    // Author (default) view: float in-progress books to the top (newest first),
+    // then group by author last name → series → series order → publication date.
+    // Mirrors the Ereader home's applySort() so the two libraries feel identical.
+    if (sort === 'author') {
+        filteredBooks = sortAuthorEreaderStyle(filteredBooks);
+        displayBooks(filteredBooks);
+        return;
+    }
 
     // Apply sorting
     filteredBooks.sort((a, b) => {
@@ -843,7 +1136,7 @@ function clearFilters() {
 
     // Clear stat badge filters
     activeFilters.readStatus = null;
-    activeFilters.mediaType = null;
+    activeFilters.mediaTypes = [];
 
     // Remove active class from all stat badges
     document.querySelectorAll('.stat-filter').forEach(el => {
@@ -1326,8 +1619,8 @@ function debounce(func, wait) {
 
 // Filter functionality for library stats
 let activeFilters = {
-    readStatus: null, // 'read', 'unread', or 'all'
-    mediaType: null   // 'ebook', 'physical', or 'audio'
+    readStatus: null,  // 'read', 'unread', or 'all' (single-select)
+    mediaTypes: []     // any of 'ebook','physical','audio' (multi-select, AND)
 };
 
 // Sort direction state
@@ -1361,22 +1654,26 @@ function toggleFilter(element) {
     const filterType = element.dataset.filterType;
     const filterValue = element.dataset.filterValue;
 
-    // Convert hyphenated filter type to camelCase for activeFilters object
-    const filterKey = filterType === 'read-status' ? 'readStatus' :
-                      filterType === 'media-type' ? 'mediaType' : filterType;
-
-    // Toggle logic
-    if (activeFilters[filterKey] === filterValue) {
-        // Clicking the same filter again deactivates it
-        activeFilters[filterKey] = null;
-        element.classList.remove('active');
+    if (filterType === 'media-type') {
+        // Multi-select: toggle membership; books must own ALL selected (AND).
+        const i = activeFilters.mediaTypes.indexOf(filterValue);
+        if (i >= 0) {
+            activeFilters.mediaTypes.splice(i, 1);
+            element.classList.remove('active');
+        } else {
+            activeFilters.mediaTypes.push(filterValue);
+            element.classList.add('active');
+        }
     } else {
-        // Remove active from siblings
-        document.querySelectorAll(`[data-filter-type="${filterType}"]`).forEach(el => {
-            el.classList.remove('active');
-        });
-        activeFilters[filterKey] = filterValue;
-        element.classList.add('active');
+        // Read-status: single-select (read / unread / all are mutually exclusive).
+        if (activeFilters.readStatus === filterValue) {
+            activeFilters.readStatus = null;
+            element.classList.remove('active');
+        } else {
+            document.querySelectorAll('[data-filter-type="read-status"]').forEach(el => el.classList.remove('active'));
+            activeFilters.readStatus = filterValue;
+            element.classList.add('active');
+        }
     }
 
     filterBooks();
@@ -1397,8 +1694,8 @@ function updateURL() {
     if (activeFilters.readStatus && activeFilters.readStatus !== 'all') {
         params.set('status', activeFilters.readStatus);
     }
-    if (activeFilters.mediaType) {
-        params.set('media', activeFilters.mediaType);
+    if (activeFilters.mediaTypes && activeFilters.mediaTypes.length) {
+        params.set('media', activeFilters.mediaTypes.join(','));
     }
 
     const newURL = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
@@ -2064,12 +2361,14 @@ function initializeFiltersFromURL() {
         }
     }
 
-    if (media && ['ebook', 'physical', 'audio'].includes(media)) {
-        const mediaElement = document.querySelector(`[data-filter-value="${media}"]`);
-        if (mediaElement) {
-            activeFilters.mediaType = media;
-            mediaElement.classList.add('active');
-        }
+    if (media) {
+        media.split(',').filter(m => ['ebook', 'physical', 'audio'].includes(m)).forEach(m => {
+            const el = document.querySelector(`[data-filter-type="media-type"][data-filter-value="${m}"]`);
+            if (el) {
+                if (!activeFilters.mediaTypes.includes(m)) activeFilters.mediaTypes.push(m);
+                el.classList.add('active');
+            }
+        });
     }
 }
 </script>

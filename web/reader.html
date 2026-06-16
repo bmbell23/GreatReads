@@ -1590,6 +1590,11 @@
         // EPUB pagination state
         let epubPages = [];
         let currentEpubPage = 0;
+        // Set true on the first real user page-turn. Until then we never persist a
+        // page-0 state — otherwise an open that lands at the start (failed/partial
+        // restore, no local state on this device) would auto-save 0/0 and WIPE the
+        // real position already saved on the server. See saveReadingState().
+        let _userNavigated = false;
         // Chapter-summary set for this book, fetched from /api/summaries/<bookId>.
         // null until loaded / when the book has no matching set. Shape:
         // { available, setTitle, bookTitle, chapters:[{title, html}] }. Chapters
@@ -3004,6 +3009,11 @@
 
         function saveReadingState() {
             if (!bookId || !totalPages) return;
+            // Never persist a page-0 state until the user has actually navigated.
+            // This is the guard against the open-time clobber: a fresh open sits at
+            // page 0 before/without a successful restore, and saving that would
+            // overwrite real progress already on the server with 0/0.
+            if (currentEpubPage === 0 && !_userNavigated) return;
             try {
                 // Persist BOTH the anchor (word-level position, stable across
                 // font/viewport changes) AND the bare progress fraction
@@ -5594,6 +5604,23 @@
                 }
                 hideHLPopup();
             }, true);
+            // Intercept in-book link taps so they jump to the target page instead
+            // of navigating the WebView to a relative path (which 404s on the
+            // static server). External links are made inert here; unresolved
+            // internal links fall through to a no-op (still no navigation).
+            const _epubContentEl = document.getElementById('epub-content');
+            if (_epubContentEl) {
+                _epubContentEl.addEventListener('click', (e) => {
+                    const a = e.target.closest && e.target.closest('a');
+                    if (!a || !_epubContentEl.contains(a)) return;
+                    const href = a.getAttribute('href') || '';
+                    e.preventDefault();
+                    e.stopPropagation();
+                    if (/^(https?:|mailto:|tel:)/i.test(href)) return;  // inert
+                    const page = resolveInBookHref(href, a);
+                    if (page != null) jumpToPage(page);
+                }, true);
+            }
             // Wire the custom drag handles. pointerdown is all we need here;
             // pointermove / pointerup are attached dynamically on each drag.
             const hs = document.getElementById('hl-handle-start');
@@ -5737,6 +5764,7 @@
         // Override prevPage for EPUB
         function prevPage() {
             console.log('⏪ prevPage called, current:', currentEpubPage, 'total:', totalPages);
+            _userNavigated = true;
 
             if (format.toLowerCase() === 'epub' && totalPages > 0) {
                 if (currentEpubPage > 0) {
@@ -5753,6 +5781,7 @@
 
         function nextPage() {
             console.log('⏩ nextPage called, current:', currentEpubPage, 'total:', totalPages);
+            _userNavigated = true;
 
             if (format.toLowerCase() === 'epub' && totalPages > 0) {
                 if (currentEpubPage < totalPages - 1) {
@@ -6056,6 +6085,72 @@
                     _scene: true,
                 }));
             }
+        }
+
+        // ---- In-book link navigation ------------------------------------------
+        // EPUB body HTML is injected verbatim (see the spine concat at load), so
+        // footnotes / TOC entries / cross-references keep their original
+        // <a href="file.xhtml#frag"> links. Left alone, a tap navigates the
+        // WebView to that relative path and hits a 404 from the static server.
+        // Resolve such links to a page jump using the per-spine wrappers
+        // ([data-spine-href]) + data-anchor markers added at load; return null
+        // when unresolvable so the caller can simply neutralize the click.
+        function resolveInBookHref(href, linkEl) {
+            if (!href) return null;
+            const content = document.getElementById('epub-content');
+            if (!content) return null;
+            const hashIdx = href.indexOf('#');
+            const filePart = hashIdx >= 0 ? href.slice(0, hashIdx) : href;
+            const fragPart = hashIdx >= 0 ? href.slice(hashIdx + 1) : '';
+
+            // Which spine file? A bare "#frag" stays in the link's own file;
+            // otherwise match the target file by basename.
+            let wrapper = null;
+            if (!filePart) {
+                wrapper = linkEl.closest('[data-spine-href]');
+            } else {
+                let base = (filePart.split('/').pop() || '').toLowerCase();
+                try { base = decodeURIComponent(base); } catch (_) {}
+                for (const el of content.querySelectorAll('[data-spine-href]')) {
+                    let b = (el.getAttribute('data-spine-href') || '').split('/').pop() || '';
+                    try { b = decodeURIComponent(b); } catch (_) {}
+                    if (b.toLowerCase() === base) { wrapper = el; break; }
+                }
+            }
+            if (!wrapper) return null;
+
+            // Locate the fragment target inside that wrapper (scoped so dup ids
+            // across files don't cross-match); fall back to the wrapper itself.
+            let target = wrapper;
+            if (fragPart) {
+                let frag = fragPart;
+                try { frag = decodeURIComponent(frag); } catch (_) {}
+                let t = null;
+                try { t = wrapper.querySelector('#' + CSS.escape(frag)); } catch (_) {}
+                if (!t) {
+                    const safe = frag.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                    t = wrapper.querySelector('[id="' + safe + '"]')
+                     || wrapper.querySelector('[name="' + safe + '"]');
+                }
+                if (t) target = t;
+            }
+
+            // Nearest data-anchor: self → descendant → ancestor (within content).
+            function anchorFor(el) {
+                if (!el) return null;
+                if (el.dataset && el.dataset.anchor != null) return parseInt(el.dataset.anchor, 10);
+                const child = el.querySelector && el.querySelector('[data-anchor]');
+                if (child) return parseInt(child.dataset.anchor, 10);
+                let cur = el.parentElement;
+                while (cur && content.contains(cur)) {
+                    if (cur.dataset && cur.dataset.anchor != null) return parseInt(cur.dataset.anchor, 10);
+                    cur = cur.parentElement;
+                }
+                return null;
+            }
+            const anchor = anchorFor(target);
+            if (anchor == null || isNaN(anchor)) return null;
+            return findPageForAnchor(anchor);
         }
 
         // ---- TOC tree UI -------------------------------------------------------
