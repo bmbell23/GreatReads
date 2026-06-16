@@ -98,6 +98,12 @@ class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
     def do_GET(self):
         if self._is_greatreads():
             return self._proxy_greatreads()
+        # The unified home is the GreatReads Library — send the launch URL there.
+        if self.path == "/" or self.path == "/index.html":
+            self.send_response(302)
+            self.send_header("Location", "/greatreads/library")
+            self.end_headers()
+            return
         return super().do_GET()
 
     def do_HEAD(self):

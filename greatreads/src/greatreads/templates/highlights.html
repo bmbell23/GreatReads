@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+
+{% block title %}Highlights - GreatReads{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-12">
+        <div class="page-header-bookish mb-4">
+            <div class="page-header-icon">
+                <i class="fas fa-highlighter"></i>
+            </div>
+            <div class="page-header-content">
+                <h1 class="page-header-title">Highlights</h1>
+                <p class="page-header-subtitle">Everything you've highlighted and bookmarked while reading</p>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Sub-tabs + search -->
+<div class="card mb-4">
+    <div class="card-body py-3">
+        <div class="d-flex flex-wrap gap-3 align-items-center">
+            <ul class="nav nav-pills hl-subtabs" id="hl-subtabs">
+                <li class="nav-item">
+                    <button class="nav-link active" data-hltype="highlight">
+                        <i class="fas fa-highlighter me-1"></i>Highlights
+                    </button>
+                </li>
+                <li class="nav-item">
+                    <button class="nav-link" data-hltype="bookmark">
+                        <i class="fas fa-bookmark me-1"></i>Bookmarks
+                    </button>
+                </li>
+            </ul>
+            <div class="flex-grow-1" style="min-width: 220px;">
+                <input type="text" class="form-control" id="hl-search"
+                       placeholder="Search highlights &amp; bookmarks…">
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="hl-results">
+    <div class="text-center text-muted py-5" id="hl-loading">
+        <div class="spinner-border text-secondary" role="status"></div>
+        <div class="mt-2">Loading…</div>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<style>
+.hl-subtabs .nav-link { cursor: pointer; }
+.hl-book-card { border-left: 4px solid var(--primary-color, #667eea); }
+.hl-book-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+.hl-book-author { color: #6c757d; font-weight: 400; font-size: 0.9rem; }
+.hl-item { padding: 10px 0; border-top: 1px solid #f0f0f0; }
+.hl-item:first-of-type { border-top: none; }
+.hl-quote {
+    border-left: 3px solid #ffd54f; padding: 4px 0 4px 12px; margin: 4px 0;
+    color: #333; font-style: italic; white-space: pre-wrap;
+}
+.hl-item.bookmark .hl-quote { border-left-color: #4aa3ff; font-style: normal; }
+.hl-item-meta { font-size: 0.78rem; color: #adb5bd; }
+</style>
+<script>
+const EREADER_API = 'http://100.69.184.113:8091/api';
+let hlType = 'highlight';
+let hlDebounce = null;
+
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
+        '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
+    }[c]));
+}
+
+async function loadHL() {
+    const q = document.getElementById('hl-search').value.trim();
+    const box = document.getElementById('hl-results');
+    box.innerHTML = `<div class="text-center text-muted py-5">
+        <div class="spinner-border text-secondary" role="status"></div></div>`;
+    const params = new URLSearchParams({ type: hlType });
+    if (q) params.set('q', q);
+    try {
+        const r = await fetch(`${EREADER_API}/highlights?` + params.toString());
+        if (!r.ok) throw new Error('HTTP ' + r.status);
+        const data = await r.json();
+        renderHL(data.items || []);
+    } catch (e) {
+        box.innerHTML = `<div class="alert alert-danger">Failed to load: ${esc(e.message)}</div>`;
+    }
+}
+
+function renderHL(items) {
+    const box = document.getElementById('hl-results');
+    if (!items.length) {
+        const noun = hlType === 'bookmark' ? 'bookmarks' : 'highlights';
+        const verb = hlType === 'bookmark' ? 'Bookmark a page' : 'Highlight some text';
+        box.innerHTML = `<div class="text-center text-muted py-5">
+            <i class="fas fa-${hlType === 'bookmark' ? 'bookmark' : 'highlighter'} fa-2x mb-3 d-block"></i>
+            No ${noun} yet. ${verb} in a book to get started.</div>`;
+        return;
+    }
+    // Group by book (insertion order ≈ newest-first from the API).
+    const groups = new Map();
+    for (const it of items) {
+        const bid = String(it.bookId);
+        if (!groups.has(bid)) groups.set(bid, { title: it.bookTitle || '?', author: it.bookAuthor || '', items: [] });
+        groups.get(bid).items.push(it);
+    }
+    let html = '';
+    for (const [bid, g] of groups) {
+        const rows = g.items.map(it => {
+            const when = it.created ? new Date(it.created).toLocaleDateString() : '';
+            const pg = it.page != null ? `p. ${it.page + 1}${it.total ? '/' + it.total : ''}` : '';
+            const body = it.text || it.note || (it.type === 'bookmark' ? 'Bookmarked page' : '');
+            return `<div class="hl-item ${esc(it.type)}">
+                <div class="hl-quote">${esc(body)}</div>
+                <div class="d-flex justify-content-between align-items-center mt-1">
+                    <span class="hl-item-meta">${[pg, when].filter(Boolean).join(' · ')}</span>
+                    <span>
+                        <button class="btn btn-sm btn-outline-primary py-0 px-2 hl-open"
+                            data-bid="${esc(bid)}" data-title="${esc(g.title)}"
+                            data-anchor="${it.anchor != null ? it.anchor : ''}"
+                            data-page="${it.page != null ? it.page : ''}">
+                            <i class="fas fa-book-open"></i> Open
+                        </button>
+                        <button class="btn btn-sm btn-outline-danger py-0 px-2 hl-del" data-id="${esc(it.id)}">
+                            <i class="fas fa-trash"></i>
+                        </button>
+                    </span>
+                </div>
+            </div>`;
+        }).join('');
+        html += `<div class="card mb-3 hl-book-card">
+            <div class="card-body">
+                <div class="hl-book-head mb-2">
+                    <h5 class="mb-0">${esc(g.title)}<span class="hl-book-author">${g.author ? ' — ' + esc(g.author) : ''}</span></h5>
+                    <span class="badge bg-secondary">${g.items.length}</span>
+                </div>
+                ${rows}
+            </div>
+        </div>`;
+    }
+    box.innerHTML = html;
+}
+
+// Open the book in the reader at this highlight/bookmark. Reader is served
+// same-origin at /reader.html via the proxy; it reads the one-shot jump target
+// from localStorage on open.
+function jumpHL(bookId, anchor, page, title) {
+    try {
+        localStorage.setItem('ereader.jump.' + bookId,
+            JSON.stringify({ anchor: anchor, page: page, ts: Date.now() }));
+    } catch (_) {}
+    const v = Date.now();
+    window.location.href = `/reader.html?v=${v}&id=${encodeURIComponent(bookId)}&format=epub&title=${encodeURIComponent(title || '')}`;
+}
+
+async function deleteHL(id) {
+    if (!confirm('Delete this item?')) return;
+    try {
+        await fetch(`${EREADER_API}/highlights/${encodeURIComponent(id)}`, { method: 'DELETE' });
+        if (window.GreatReads && GreatReads.showToast) GreatReads.showToast('Deleted', 'success');
+        loadHL();
+    } catch (e) {
+        if (window.GreatReads && GreatReads.showToast) GreatReads.showToast('Delete failed', 'error');
+    }
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    // ?view=bookmarks deep-links straight to the Bookmarks sub-tab.
+    const view = new URLSearchParams(location.search).get('view');
+    if (view === 'bookmarks') {
+        hlType = 'bookmark';
+        document.querySelectorAll('#hl-subtabs .nav-link').forEach(b =>
+            b.classList.toggle('active', b.dataset.hltype === 'bookmark'));
+    }
+    document.getElementById('hl-subtabs').addEventListener('click', (e) => {
+        const btn = e.target.closest('.nav-link[data-hltype]');
+        if (!btn) return;
+        hlType = btn.dataset.hltype;
+        document.querySelectorAll('#hl-subtabs .nav-link').forEach(b => b.classList.toggle('active', b === btn));
+        loadHL();
+    });
+    document.getElementById('hl-search').addEventListener('input', () => {
+        clearTimeout(hlDebounce);
+        hlDebounce = setTimeout(loadHL, 250);
+    });
+    // Delegated actions (data attributes avoid inline-onclick quoting issues).
+    document.getElementById('hl-results').addEventListener('click', (e) => {
+        const open = e.target.closest('.hl-open');
+        if (open) {
+            const a = open.dataset.anchor === '' ? null : parseInt(open.dataset.anchor, 10);
+            const p = open.dataset.page === '' ? null : parseInt(open.dataset.page, 10);
+            jumpHL(open.dataset.bid, a, p, open.dataset.title);
+            return;
+        }
+        const del = e.target.closest('.hl-del');
+        if (del) deleteHL(del.dataset.id);
+    });
+    loadHL();
+});
+</script>
+{% endblock %}

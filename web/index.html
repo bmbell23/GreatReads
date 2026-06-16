@@ -2210,16 +2210,13 @@
         // Highlights/Bookmarks open in-page overlays; everything else navigates.
         // The GreatReads pages are served same-origin under /greatreads/ via the
         // proxy, so plain location.href works in both the browser and the WebView.
-        document.getElementById('menu-highlights').addEventListener('click', () => {
-            menuPopup.classList.remove('open');
-            openOverlay('highlight');
-        });
         const MENU_NAV = {
-            'menu-library':  '/greatreads/library',
-            'menu-tbr':      '/greatreads/tbr',
-            'menu-journal':  '/greatreads/journal',
-            'menu-stats':    '/greatreads/stats',
-            'menu-settings': '/greatreads/settings',
+            'menu-library':    '/greatreads/library',
+            'menu-tbr':        '/greatreads/tbr',
+            'menu-journal':    '/greatreads/journal',
+            'menu-highlights': '/greatreads/highlights',
+            'menu-stats':      '/greatreads/stats',
+            'menu-settings':   '/greatreads/settings',
         };
         Object.entries(MENU_NAV).forEach(([id, href]) => {
             document.getElementById(id).addEventListener('click', () => {

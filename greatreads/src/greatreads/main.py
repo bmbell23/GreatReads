@@ -240,6 +240,13 @@ async def stats_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(request, "stats.html", {"current_user": current_user})
 
 
+@app.get("/highlights", response_class=HTMLResponse)
+async def highlights_page(request: Request, db: Session = Depends(get_db)):
+    """Highlights & bookmarks page (data served by the Ereader API)."""
+    current_user = get_current_user_from_cookie(request, db)
+    return templates.TemplateResponse(request, "highlights.html", {"current_user": current_user})
+
+
 @app.get("/settings", response_class=HTMLResponse)
 async def settings_page(request: Request, db: Session = Depends(get_db)):
     """User settings page."""

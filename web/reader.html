@@ -1644,7 +1644,10 @@
         function goBack() {
             // Clear 180° flip before navigating away
             document.body.style.transform = '';
-            window.location.href = 'index.html';
+            // Proper back: return to wherever the reader was opened from (Library,
+            // TBR, Highlights…). Fall back to the Library home if there's no history.
+            if (window.history.length > 1) window.history.back();
+            else window.location.href = '/greatreads/library';
         }
 
         function updatePageInfo() {
