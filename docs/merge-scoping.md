@@ -1,6 +1,6 @@
 # GreatReads Merge — Execution Scoping (file-level)
 
-Companion to [`GREATREADS_MERGE_PLAN.md`](GREATREADS_MERGE_PLAN.md). That doc holds the
+Companion to [`merge-plan.md`](merge-plan.md). That doc holds the
 strategy and the Jira **Stories**; this doc holds the **how** — exact files, commands, and
 code-change locations to implement each Story. Deep detail for Stories 0–2 (next up), lighter
 for 3–5 (further out, revisit when we get there).

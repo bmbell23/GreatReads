@@ -1,7 +1,7 @@
 # Vendored GreatReads
 
 This directory is a **plain copy** of the GreatReads app, vendored into the Ereader repo as
-part of the merge (see [`../GREATREADS_MERGE_PLAN.md`](../GREATREADS_MERGE_PLAN.md), Story 0).
+part of the merge (see [`../docs/merge-plan.md`](../docs/merge-plan.md), Story 0).
 
 - **Source repo:** `/home/brandon/projects/GreatReads` (GitHub: `bmbell23/GreatReads`)
 - **Source commit:** `dbafbc1421b0345fa79a36e8233fda5b1ac283b3` — *v2.1.7: large improvements to the TBR reordering page*

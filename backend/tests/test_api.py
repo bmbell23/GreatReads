@@ -1,8 +1,8 @@
 """Endpoint behavior tests against the running backend.
 
 Read endpoints are asserted for shape; the CRUD endpoints (highlights,
-progress, requests) do a create -> read -> update -> delete round-trip and
-clean up after themselves so they never leave test rows in the JSON stores.
+progress) do a create -> read -> update -> delete round-trip and
+clean up after themselves so they never leave test rows in the stores.
 """
 import unittest
 
@@ -192,18 +192,6 @@ class TestProgressCrud(unittest.TestCase):
                                     'updated must not go backwards on re-PUT')
         finally:
             self.assertIn(b.delete(f'/progress/{bid}').status_code, (200, 204))
-
-
-class TestRequestsCrud(unittest.TestCase):
-    def test_roundtrip(self):
-        rid = b.post('/requests', {'title': '__test__ delete me'}).json().get('id')
-        self.assertTrue(rid)
-        try:
-            self.assertIn(b.post(f'/requests/{rid}/comments',
-                                 {'text': 'ping', 'author': 'agent'}).status_code, (200, 201))
-            self.assertEqual(b.put(f'/requests/{rid}', {'status': 'Backlog'}).status_code, 200)
-        finally:
-            self.assertIn(b.delete(f'/requests/{rid}').status_code, (200, 204))
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 ---
-alwaysApply: true
+type: always
 description: Ereader agent guidelines — extends shared server guidelines
 ---
 
@@ -21,11 +21,8 @@ description: Ereader agent guidelines — extends shared server guidelines
 3. **Verify backend API responses aren't throwing errors:**
    - `curl -s http://localhost:8091/api/library?limit=3` should return JSON, not HTML error pages
    - If you see HTML or OSError, restart the backend
-4. **Check the Requested queue:** `curl -s http://localhost:8091/api/requests?status=Requested`
-   - If items exist, present them to the user and offer to start on one (or pick the first if the user says "work on the next feature").
-   - If empty, tell the user the queue is empty and list the Backlog items so they can promote one.
 
-**If the user reports nothing loading / black screen / broken app: See `RECOVERY.md` in the repo root.**
+**If the user reports nothing loading / black screen / broken app: See `docs/RECOVERY.md`.**
 
 ---
 
@@ -34,7 +31,7 @@ description: Ereader agent guidelines — extends shared server guidelines
 - **NEVER**: `sudo reboot`, `shutdown`, `docker-compose down`, `DROP DATABASE`, `pg_resetwal`
 - **NEVER** pipe `curl … | bash` from third-party sources without explicit user confirmation
 - **NEVER** commit, push, install dependencies, or build/flash the APK without explicit permission
-- **THIS FILE is the source of truth** for project layout/ports/APIs/invariants. The stale root-level `*.md`/`*.txt` docs have been deleted — do not recreate them.
+- **THIS FILE** (`.augment/rules/ereader-guidelines.md`) **is the source of truth** for project layout/ports/APIs/invariants. Keep reference docs in `docs/` (e.g. `docs/RECOVERY.md`, `docs/OFFLINE_PLAN.md`, `docs/merge-plan.md`); don't scatter `*.md` back into the repo root.
 - **Tailscale IP**: `100.69.184.113`
 - Not a Docker project — runs as a bare Flask process + static web files
 
@@ -51,7 +48,6 @@ description: Ereader agent guidelines — extends shared server guidelines
   - `web/index.html` — library browser (~1278 lines). Consumes `/api/library` (Calibre+ABS merged); cards show 📖/🎧 media-type badges (audio-only → 🎧, dual → 📖🎧, ebook-only → none). Tap routing: ebook-only → reader, audio-only → player, dual → Read/Listen action sheet. **Sort modes:** Author (actively in-progress books — `0 < progress < 1` — newest-updated first, then rest by author last name → series → series_index → published), Title (pure A→Z), Series (grouped grid), Saga (grouped grid). `applySort()` implements the client-side portion; backend pre-sorts `/api/library` by author but `ensureProgressBooksLoaded()` prepends missing in-progress books, so client must re-sort. Books with `progress === 0` (opened but not read) or `progress >= 1` (finished) sort with the rest, not as in-progress.
   - `web/reader.html` — PDF + EPUB reader (~4450 lines, consumed in-app via WebView)
   - `web/player.html` + `web/player.js` — audiobook player (consumed in-app via WebView). Opened as `player.html?absId=&title=&author=` (dual-format works also pass `&bookId=&format=&hasEbook=1` so the player can open the ebook). Loads hls.js from CDN; starts an ABS session via the backend play route, plays HLS (transcode) or direct single-file. UI uses the brand (bi-pride) gradient `#4067EF→#8640C0→#C940B0`; large cover; PNG play/pause button (`web/play.png` / `web/pause.png`, inverted to white over the gradient). Two seekable progress bars (book + chapter), each showing elapsed / remaining + percent — **remaining is wall-clock time at the current speed** (`remaining_content / rate`). Speed is a slider 1.0×–3.0× in 0.1 steps, shown in a pill and **persisted in `localStorage['ereader.audio.speed']`** so it propagates across books (re-applied on each media load). Resume position is persisted to OUR backend (`PUT /api/progress/abs:<absId>`) every ~15s sync + on close, and read back on open — independent of ABS's own session currentTime. It is ALSO mirrored synchronously to `localStorage['ereader.state.abs:<absId>']` (`{position,duration,progress,mediaType:'audiobook',ts}`, same shape/prefix the EPUB reader uses for `ereader.state.<bookId>`) — written on the throttled (~2s) UI tick and on close. The library reads this snapshot as a freshness-winning fallback so the audio progress bar updates instantly on return even before the keepalive backend PUT commits (avoids the back-button race where `index.html` re-fetches `/api/progress` before the player's final save lands). When `hasEbook`, a 🔍 button opens `reader.html` in a same-origin iframe overlay and calls its `openSearch()`; audio keeps playing while reading/searching; the player's ‹ back button closes the session (stops audio). Also: ±30s, prev/next chapter, chapter drawer, Media Session lock-screen controls.
-  - `web/requests.html` + `web/requests.js` — in-app feature-request / TODO list ("📋 Requests" hamburger entry). See "Requests Workflow" below.
   - `web/about.html` + `web/about.js` — in-app About page ("ℹ️ About" hamburger entry). Documents the reading-speed algorithm and shows live `/api/version` + `/api/build-stamp`.
   - `web/serve.py` — preferred static server (no-cache headers, correct `.apk` MIME, permissive CORS). Use this over `python3 -m http.server` so the WebView never serves stale HTML.
 - **Android app**: `simple-app/` — minimal native WebView wrapper pointing at `http://100.69.184.113:8090`
@@ -113,16 +109,10 @@ All endpoints are JSON unless noted. CORS is permissive.
   - `GET  /api/fetch?url=<encoded>` — server-side GET of a public **http/https** URL, body passed through with its content-type, capped at 4 MB. **Not an open proxy:** scheme-restricted and loopback/private/link-local hosts are refused (`_fetch_host_blocked`, basic SSRF guard) since the only legit targets are public reference sites. Used by the reader to fetch the MediaWiki action API + dictionaryapi.dev without CORS.
   - **Reader lookups** (`web/reader.html`): highlighting text and tapping 🌐/📖 no longer navigates the WebView to the live (ad-laden, jank-scrolling) page. `openCleanReader(kind,text)` renders results in `#reader-overlay` — OUR own scroll container. **wiki** → MediaWiki action API (`_wikiApiBase()`: `/w/api.php` for wikipedia/wikimedia/wiktionary, else `/api.php`) search→parse, then `cleanWikiHTML()` strips nav/editsection/references/navboxes via DOMParser, neutralizes links, absolutizes image URLs (keeps the Fandom/portable infobox). **dict** → dictionaryapi.dev JSON → simple definitions. Any failure falls back to the old `window.open(configuredURL)`. The wiki/dict URL *patterns* in the Lookup-URL settings still define which site (origin) is used. The current reader chapter is matched to a summary chapter by normalized title (`_summaryNorm`, mirrors the backend; "CHAPTER TWENTY-ONE"≡"Chapter Twenty-One") — **no ordinal fallback**, so a summary never mis-fires onto the wrong/unmatched chapter (BOOK dividers, front matter, Glossary simply show nothing). **Spoiler-safe:** `buildReachedSummaryChapters()` only ever exposes chapters whose `chapterStarts` page ≤ `currentEpubPage`; "Story so far" concatenates those same reached chapters.
 - **GreatReads tracker integration** (see "GreatReads Integration" section below for the full upstream API contract)
-  - `POST /api/greatreads/sync` — mirror in-progress percentages to GreatReads (respects format per reading). Idempotent, non-destructive. Supports `?dry_run=1`.
+  - `POST /api/greatreads/sync` — **deprecated no-op** (kept so the reader's fire-and-forget call doesn't 404). Progress is now written straight into the GreatReads SQLite DB on every `PUT /api/progress` via `_gr_set_current_percent` (Story 3); the old title-matching sync job is retired.
   - `GET  /api/greatreads/format/<bookId>` — auto-detect which in-progress reading GreatReads has for this book. Returns `{media: "Physical"|"Ebook"|"Audio"|null, readingId: int|null, status: str|null}`. Pulls `?status=in_progress&limit=1000` and matches by normalized title locally (upstream has no title filter — see below). Returns nulls when no in-progress reading matches; the UI then falls back to inferring media from `mediaTypes`.
   - `POST /api/greatreads/finish` — mark a book as finished in GreatReads. Body: `{bookId, title, author, media, finishDate: "YYYY-MM-DD", rating, ratings: {horror, spice, world_building, writing, characters, readability, enjoyment} (all 0-10 from our slider), readingId: int|null}`. Returns `{success, readingId, message, nextBook: {readingId, alreadyStarted, title, media, id, author, cover, mediaTypes}|null}`. Flow: (1) resolve the reading — use `readingId` if supplied, else search `?status=in_progress`; 404 if no in-progress reading matches (user must start it in GreatReads first). (2) `PUT /api/readings/{id}/` with `date_finished_actual=finishDate` + the seven `rating_*` ints (**halve our 0-10 slider value and round to nearest int 0-5** — GR's native UI is 5 emoji items / `parseInt`; raw 0-10 renders inconsistently because GR's read-side halves anything >5 for legacy compat, so values ≤5 like horror=2 stay 2 while writing=7 renders 4. Sending halved-and-rounded matches what the user sees in GR.). **Never send `rating_overall`** — it's a computed property server-side. (3) Pull `GET /api/readings/tbr`, pick the first item whose `media == finished_media` (excluding the one just finished) and return it as `nextBook`. **Does NOT start the next reading** — that's the caller's job via `/start-next` below, so a Cancel actually cancels. (4) Clear our local progress record(s).
   - `POST /api/greatreads/start-next` — surface a not-yet-started TBR reading as in-progress in GreatReads. Body: `{readingId: int (required), startDate: "YYYY-MM-DD" (optional; defaults to today)}`. Forwards to upstream `POST /api/readings/{id}/start?start_date=…`. Returns `{success, readingId, startDate}` on 200 or 502 on upstream error. The frontend calls this only after the user confirms the "Start reading X next?" prompt from `/finish`.
-- **Feature requests / TODO list** (see "Requests Workflow" below)
-  - `GET    /api/requests?status=` — list, newest-updated first; optional status filter
-  - `POST   /api/requests` — create (`title` required; defaults to `Backlog`)
-  - `PUT    /api/requests/<id>` — partial update; mutable: `title`, `body`, `status`, `sections`
-  - `DELETE /api/requests/<id>`
-  - `POST   /api/requests/<id>/comments` — append a comment `{text, author?}` (iteration thread)
 - **Meta**
   - `GET /api/health` — checks Calibre reachability, returns `version`
   - `GET /api/version` — reads `version.txt` live
@@ -130,7 +120,7 @@ All endpoints are JSON unless noted. CORS is permissive.
 
 ## GreatReads Integration (upstream API contract)
 
-External reading tracker at `GREATREADS_URL` (default `http://100.69.184.113:8007`). FastAPI app, source at `../GreatReads/`. No auth — server auto-authenticates as the `brandon` user when no cookie is present; CORS is `*`. Always read-only from our side; **the only write surface we ever touch is `PUT /api/readings/{id}/` (ratings + finish date) and `POST /api/readings/{id}/start` (advance the next book)** — we never POST/DELETE readings or write to books.
+GreatReads runs as the **vendored, in-repo** FastAPI app at `GREATREADS_URL` (default `http://127.0.0.1:8092`, the `greatreads_ereader` container; source lives in-repo at `greatreads/`). The old remote prod `:8007` is retired (Story 2). No auth — server auto-authenticates as the `brandon` user when no cookie is present; CORS is `*`. Always read-only from our side; **the only write surface we ever touch is `PUT /api/readings/{id}/` (ratings + finish date) and `POST /api/readings/{id}/start` (advance the next book)** — we never POST/DELETE readings or write to books.
 
 **Authoritative read endpoints (use these — do not paginate `/api/readings/` looking for things):**
 - `GET /api/readings/tbr` — every unfinished reading **already sorted in reading order** (in-progress first, then not-started by `date_est_start`). This is the canonical "what's next" source per format. Each item carries the joined `book` object. Use it for finding the next book of a given `media` after we mark something finished.
@@ -138,19 +128,19 @@ External reading tracker at `GREATREADS_URL` (default `http://100.69.184.113:800
 - `GET /api/readings/{id}/` — single reading by id. Use this once we have a `readingId`.
 - `GET /api/books/?search=<text>` — book title fuzzy search. **Note:** `/api/books/` ignores any `title=` param; the real filter is `search=` (uses `ilike("%text%")`). Same trap on `/api/readings/`: it accepts only `skip`, `limit`, `status`, `media` — `?book_title=` is silently ignored and returns the first 100 readings, which is the bug that made "mark as finished" pick random books.
 
-**Reading fields we care about** (from `../GreatReads/src/greatreads/models/reading.py`):
+**Reading fields we care about** (from `greatreads/src/greatreads/models/reading.py`):
 - `id`, `book_id`, `media` (`"Ebook"` | `"Audio"` | `"Physical"` — `"Kindle"` was migrated to `"Ebook"`; no other values)
 - `status` (`"in_progress"` | `"not_started"` | `"finished"` | `"paused"` — derived from dates)
 - `is_started`, `is_finished`, `is_paused`
 - `date_started`, `date_finished_actual`, `date_est_start`
 - `id_previous` — linked-list chain pointer per media. **Mostly `null` in the live DB**, so do NOT rely on `id_previous == current_reading_id` to find the next book; that's why our old chain-walk silently did nothing. Use `/api/readings/tbr` instead.
-- `rating_horror`, `rating_spice`, `rating_world_building`, `rating_writing`, `rating_characters`, `rating_readability`, `rating_enjoyment` — `Float` columns, but **GR's native UI is a 0-5 integer scale** (5 emoji items, `parseInt` throughout — see `../GreatReads/src/greatreads/static/js/app.js`). Send `int(round(slider/2))` clamped to 0-5. GR's read-side has legacy 0-10 backward compat: if it sees a stored value `>5` it divides by 2 and rounds, but values `≤5` are shown raw — so sending raw 0-10 produces inconsistent display (e.g. writing=7 → 4 stars, horror=2 → 2 stars; the "horror wasn't halved" symptom).
+- `rating_horror`, `rating_spice`, `rating_world_building`, `rating_writing`, `rating_characters`, `rating_readability`, `rating_enjoyment` — `Float` columns, but **GR's native UI is a 0-5 integer scale** (5 emoji items, `parseInt` throughout — see `greatreads/src/greatreads/static/js/app.js`). Send `int(round(slider/2))` clamped to 0-5. GR's read-side has legacy 0-10 backward compat: if it sees a stored value `>5` it divides by 2 and rounds, but values `≤5` are shown raw — so sending raw 0-10 produces inconsistent display (e.g. writing=7 → 4 stars, horror=2 → 2 stars; the "horror wasn't halved" symptom).
 - `rating_overall` — **computed `@property` server-side** (average of writing/characters/world_building/readability/enjoyment, on whatever scale those were stored). Read-only. Never send it on PUT.
-- `current_percent` — 0-100 float we push via `PUT /api/readings/{id}/progress?current_percent=<n>` from `/api/greatreads/sync`.
+- `current_percent` — 0-100 float. We now write it **directly into the GreatReads SQLite DB** (`read.current_percent` + `current_percent_manual_override` + `date_progress_set`) via `_gr_set_current_percent` on every `PUT /api/progress`, resolving the reading precisely through `external_imports` (Story 3). The old HTTP `PUT /api/readings/{id}/progress` push is no longer used.
 
 **Write paths we use:**
 - `PUT /api/readings/{id}/` — partial update via Pydantic `ReadingUpdate`. To mark finished, send `{"date_finished_actual": "YYYY-MM-DD", "rating_*": <0-5 ints>}`. The server runs `ChainCalculator.recalculate_all_chains()` afterward.
-- `PUT /api/readings/{id}/progress?current_percent=<float>` — progress-only update used by `/api/greatreads/sync`.
+- `PUT /api/readings/{id}/progress?current_percent=<float>` — upstream progress-only endpoint. **No longer used by us** — current_percent is written directly to the DB (see above).
 - `POST /api/readings/{id}/start?start_date=YYYY-MM-DD` — start a not-started reading (sets `date_started`, recalcs chains). Used to surface the next TBR book as "in progress" after we mark its predecessor finished, because `id_previous` is mostly null so GreatReads' own `finish_reading_and_start_next` no-ops.
 - We deliberately **do not** call `POST /api/readings/{id}/finish` (it hard-codes `date.today()` and rejects if `date_finished_actual` is set — useless when the user picks a custom finish date).
 
@@ -162,14 +152,13 @@ External reading tracker at `GREATREADS_URL` (default `http://100.69.184.113:800
 - Walking `id_previous` to find the next book — chain links are mostly null. Use `/api/readings/tbr` filtered by `media` instead.
 - Using `PATCH` on a reading — the route is `PUT`.
 
-**Reference files:** source at `../GreatReads/src/greatreads/routes/readings.py` and `.../models/reading.py`; chain math at `../GreatReads/src/greatreads/services/chain_calculator.py`. The `GREATREADS_INTEGRATION.md` and `GREATREADS_CHAIN_REFERENCE.md` files in this repo predate this section — trust this file when they disagree.
+**Reference files (vendored, in-repo):** source at `greatreads/src/greatreads/routes/readings.py` and `.../models/reading.py`; chain math at `greatreads/src/greatreads/services/chain_calculator.py`; chain internals doc at `greatreads/CHAIN_SYSTEM_ANALYSIS.md`. This section is the canonical integration contract.
 
 ## Persisted Backend State
 
 - Stored as plain JSON in `backend/data/` (override with `$EREADER_DATA_DIR`):
   - `highlights.json` — list of highlight/bookmark items (lock: `_highlights_lock`)
   - `progress.json` — `{ "<bookId>": {progress record}, ... }` (lock: `_progress_lock`)
-  - `requests.json` — list of feature-request items (lock: `_requests_lock`). Seeded from `REQUESTS_SEED` in `server.py` on first run if the file doesn't exist.
   - `links.json` — optional manual audiobook↔ebook overrides for matches auto-matching misses (lock: `_links_lock`). Shape: `{ "<calibre_id>": "<abs_id>", ... }`. Read-only in Phase 1; absent file means no overrides.
   - `series_overrides.json` — optional per-book series overrides for cases Calibre/ABS can't express and we can't write back to (both are read-only sources). Keyed by bookId (`"<calibre_id>"` or `"abs:<id>"`), mtime-cached so a hand-edit is picked up without a restart (lock: `_series_overrides_lock`). Value shapes: `{"series_index": null}` (or shorthand `null`) marks the book **in the series but unnumbered** → it sorts ahead of every numbered book (incl. 0/negatives) and shows no `#N` badge; `{"series": "X", "series_index": 2}` forces both; a bare number forces just the index. Applied in `_apply_series_override`, called from `get_book_metadata` + `normalize_abs_item`. Absent file = no overrides. (Currently: Calibre id 681, *The World of Ice & Fire*, marked unnumbered.)
   - `universe_overrides.json` — optional per-book saga (universe) overrides. Same key shape as `series_overrides` (Calibre id or `"abs:<id>"`). Value is a saga name string (e.g. `"Maasverse"`). mtime-cached (lock: `_universe_overrides_lock`). Applied in `_apply_series_override` after the series override pass. Absent file = no overrides. Use this when the Calibre `#universe` column isn't set but you want a book grouped into a saga — keeps Calibre read-only. (Currently: all Throne of Glass, A Court of Thorns and Roses, and Crescent City books mapped to "Maasverse".)
@@ -177,27 +166,6 @@ External reading tracker at `GREATREADS_URL` (default `http://100.69.184.113:800
 - ABS credentials live in `backend/abs.env` (gitignored; template `backend/abs.env.example`) — never commit the token.
 - Atomic writes via `tmp + os.replace`. Trivial to back up; trivial to grep.
 - **Read-only access to the Calibre library is the rule** — never write back to Calibre from this project.
-
-## Requests Workflow
-
-The in-app **Requests** page (📋 in the hamburger menu → `web/requests.html`) is the user's lightweight kanban for things they want built. Item shape:
-
-```
-{ id, title, body, status, comments: [{ts, author, text}],
-  sections: [{ id, title, body: html }],
-  created: epoch_ms, updated: epoch_ms }
-```
-
-`sections` is the rich-text body of a feature doc, rendered as tabs in the detail view (Overview / UX / Technical / Implementation / Open Questions / References by convention, but freely renamable). Each section's `body` is sanitised HTML (the editor strips `<script>`, inline event handlers, and `javascript:` URLs in `web/requests.js` → `sanitizeHTML`). Legacy items pre-dating sections have `sections: []` and fall back to the plain `body` string — the UI synthesises a single "Overview" section from it on open. When you POST or PUT a request, send `sections` if you want structured content; omit it to leave existing sections untouched.
-
-`status ∈ {"Backlog", "Requested", "In Progress", "Done"}`:
-
-- **Backlog** — user's scratchpad. **Do not auto-act on these.** The user refines them here before promoting.
-- **Requested** — work queued for an agent session. **On session start, query `GET /api/requests?status=Requested` and treat each item as work to consider picking up.** Use the `comments` thread for back-and-forth with the user (POST to `/api/requests/<id>/comments` with `author: "agent"`).
-- **In Progress** — there are active code changes; the user is reviewing in-app.
-- **Done** — historical record. Don't delete items here without being asked.
-
-When you start work on a `Requested` item, move it to `In Progress` via `PUT /api/requests/<id>` with `{"status": "In Progress"}` so the user sees you've picked it up. Don't move items to `Done` yourself — the user does that via an explicit Approve action (Phase 2, not yet wired to `gvc`).
 
 ## JS ↔ Java Bridge (`window.Android` in the WebView)
 
@@ -281,14 +249,14 @@ ss -ltnp | grep :8090
 
 **CRITICAL**: After ANY frontend code change, the user must **force-close the app** (swipe away from recent apps) and reopen. The Android WebView aggressively caches HTML/JS — navigating back to the library is NOT enough.
 
-**Full recovery procedure**: See `RECOVERY.md` in the repo root for the complete checklist when things break.
+**Full recovery procedure**: See `docs/RECOVERY.md` for the complete checklist when things break.
 
 ## Testing
 
 - `backend/run-tests.sh` runs the whole suite (stdlib `unittest`, no extra deps; uses the existing `venv`). `./run-tests.sh test_matching` runs one module. Modules live in `backend/tests/`:
   - `test_matching.py` — offline unit tests of `_norm`/`_norm_author`/`_strip_edition`/`_first_author`/`match_works` (imports `server.py`, synthetic data, no network).
   - `test_services.py` — reachability of backend :8091, static :8090, Calibre, and ABS (FAIL, not skip, when down; ABS group skips if `absEnabled` is false).
-  - `test_api.py` — every `/api` read route + self-cleaning CRUD round-trips for highlights/progress/requests.
+  - `test_api.py` — every `/api` read route + self-cleaning CRUD round-trips for highlights/progress.
   - `test_audiobooks.py` — play→sync→close lifecycle and the HLS proxy chain (manifest + `.ts` via the backend, asserts CORS `*` and that track URLs never point at raw ABS :13378). Skipped when ABS is off.
 - HTTP tests hit the **running** services — start the backend + static server first. The old `backend/test-server.sh` is stale (hardcodes the wrong port 5000); prefer `run-tests.sh`.
 
@@ -331,10 +299,10 @@ Debug builds are pulled over HTTP and installed in-place — never via `adb inst
 - Not force-closing the app → serves stale cached JS forever
 - Making 10 changes and testing once → impossible to debug which one broke it
 
-**When stuck for >5 minutes:** `git checkout .` and start over with a smaller change. See `RECOVERY.md`.
+**When stuck for >5 minutes:** `git checkout .` and start over with a smaller change. See `docs/RECOVERY.md`.
 
 ### Offline Support Implementation
-**DO NOT implement offline support without following `OFFLINE_PLAN.md` in the repo root.** The phased approach is mandatory - attempting to do it all at once will break the app.
+**DO NOT implement offline support without following `docs/OFFLINE_PLAN.md`.** The phased approach is mandatory - attempting to do it all at once will break the app.
 
 ## Agent Behavior Rules
 
@@ -353,16 +321,16 @@ When working with integrations or external systems:
 - ❌ "I'll assume the format is auto-detected correctly"
 
 ### Required Research Steps:
-- ✅ "Let me check the GreatReads code at ../GreatReads/ to understand the chain structure"
+- ✅ "Let me check the vendored GreatReads code at `greatreads/` to understand the chain structure"
 - ✅ "Let me look at the database schema to see what fields exist"
 - ✅ "Let me trace through the actual code flow to understand how this works"
 
 ### GreatReads Integration Specifics
 
 When working with GreatReads integration:
-- **Primary reference**: `GREATREADS_INTEGRATION.md` in this repo (comprehensive integration guide)
-- **Source code**: `GREATREADS_SOURCE/` symlink or `../GreatReads/` directory
-- **Chain system docs**: `GREATREADS_CHAIN_REFERENCE.md` symlink or `../GreatReads/CHAIN_SYSTEM_ANALYSIS.md`
+- **Primary reference**: the "GreatReads Integration (upstream API contract)" section in this file
+- **Source code**: vendored in-repo at `greatreads/` (was the external `../GreatReads/`)
+- **Chain system docs**: `greatreads/CHAIN_SYSTEM_ANALYSIS.md`
 - **ALWAYS verify** field names and data structures against the actual GreatReads schema before writing code
 - **Chain structure**: Uses `id_previous` linked lists, NOT status queries or rank ordering
 
@@ -403,5 +371,5 @@ Style rules for edits to this file:
 - Keep additions terse and bullet-shaped — match the surrounding density. No marketing prose, no "we should consider…" hedging.
 - Never duplicate something already documented elsewhere in the file; cross-reference instead.
 - If a section becomes wrong, *fix it in place*. Do not append "UPDATE 2026-XX-XX: …" notes.
-- Do **not** create new root-level `*.md` documentation files. This file is the doc.
+- Do **not** scatter new `*.md` docs into the repo root — this file is the canonical doc; longer-form reference docs go in `docs/`.
 - If you discover the file is wrong but the user's request is unrelated, mention it once and offer to fix it; don't silently rewrite half the doc.

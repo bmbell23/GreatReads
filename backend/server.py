@@ -76,14 +76,6 @@ AUTO_BOOKMARK_LIMIT_PER_BOOK = 10
 PROGRESS_FILE = os.path.join(DATA_DIR, 'progress.json')
 _progress_lock = threading.Lock()
 
-# Feature-request / TODO list surfaced by the in-app "Requests" page. Same
-# file-on-disk pattern. Shape on disk: list of request items (see
-# /api/requests below for the item shape). Seeded from REQUESTS_SEED on
-# first run so a fresh checkout has the initial backlog.
-REQUESTS_FILE = os.path.join(DATA_DIR, 'requests.json')
-_requests_lock = threading.Lock()
-REQUEST_STATUSES = ('Backlog', 'Requested', 'In Progress', 'Done')
-
 # Manual audiobook<->ebook links for the edge cases auto-matching misses
 # (multi-part sets whose parts don't share a title/author, divergent author
 # spellings, etc). Optional — absent file means "no manual overrides". Three
@@ -135,35 +127,6 @@ _summaries_lock = threading.Lock()
 # adding a set JSON is picked up without a restart.
 _summaries_cache = {'sig': None, 'sets': {}, 'book_index': {}}
 
-def _normalize_sections(raw):
-    """Coerce a client-supplied `sections` value into the on-disk shape:
-    list of {id, title, body}. Drops malformed entries silently rather than
-    erroring — the requests UI is single-user and we'd rather not lose a
-    long edit to a schema nit. Returns None if input is not a list at all,
-    so callers can distinguish "field omitted" from "field cleared to []"."""
-    if not isinstance(raw, list):
-        return None
-    out = []
-    for s in raw:
-        if not isinstance(s, dict):
-            continue
-        sid = str(s.get('id') or uuid.uuid4())
-        title = str(s.get('title') or 'Untitled').strip() or 'Untitled'
-        body = s.get('body') or ''
-        if not isinstance(body, str):
-            body = str(body)
-        out.append({'id': sid, 'title': title, 'body': body})
-    return out
-REQUESTS_SEED = [
-    {'title': 'Adding physical book pages',
-     'body':  'Adding physical book pages'},
-    {'title': 'Adding reading speed tracking',
-     'body':  'Adding reading speed tracking'},
-    {'title': 'Making bookmarks be line-specific',
-     'body':  'Making bookmarks be line-specific'},
-    {'title': "Considering a book's \"end\" to be 100% and not include appendix (100%+)",
-     'body':  "Considering a book's \"end\" to be 100% and not include appendix (100%+)"},
-]
 
 # Single source of truth for the app version, bumped by `gvc` (see
 # ../dotfiles/bashrc/conf.d/20-functions.sh — gvc auto-increments the
@@ -298,14 +261,6 @@ def _ensure_highlights_table(conn):
         ' data    TEXT NOT NULL,'    # full JSON highlight/bookmark record
         ' created INTEGER)')         # epoch ms (denormalized for ORDER BY)
 
-def _ensure_requests_table(conn):
-    conn.execute(
-        'CREATE TABLE IF NOT EXISTS ereader_requests ('
-        ' id      TEXT PRIMARY KEY,'
-        ' data    TEXT NOT NULL,'    # full JSON request record (incl. comments/sections)
-        ' status  TEXT,'             # denormalized for status filters
-        ' updated INTEGER)')         # epoch ms (denormalized for ORDER BY)
-
 def _load_progress_json():
     if not os.path.exists(PROGRESS_FILE):
         return {}
@@ -425,107 +380,6 @@ def _gr_set_current_percent(book_key, record):
             conn.close()
     except Exception as e:
         print(f'GreatReads current_percent update failed for {book_key}: {e}')
-
-def _seed_requests():
-    """Materialise REQUESTS_SEED into the requests list. Called only when
-    requests.json doesn't exist on disk yet."""
-    now = int(time.time() * 1000)
-    return [{
-        'id':       str(uuid.uuid4()),
-        'title':    s['title'],
-        'body':     s.get('body', ''),
-        'status':   'Backlog',
-        'comments': [],
-        'created':  now,
-        'updated':  now,
-    } for s in REQUESTS_SEED]
-
-# Feature requests now live in the GreatReads SQLite DB (Story 3), same as
-# progress/highlights. requests.json is kept as a best-effort backup/fallback and
-# auto-migrated on first load. On a truly fresh install (no DB rows, no JSON) the
-# initial backlog (REQUESTS_SEED) is materialised once.
-def _load_requests_json():
-    """Read requests.json. Returns None if the file is absent (so the caller can
-    distinguish 'no file → seed' from 'empty list')."""
-    if not os.path.exists(REQUESTS_FILE):
-        return None
-    try:
-        with open(REQUESTS_FILE, 'r') as f:
-            data = json.load(f)
-            return data if isinstance(data, list) else []
-    except Exception as e:
-        print(f"⚠️  Could not load requests JSON: {e}")
-        return []
-
-def _load_requests():
-    """Return [record]. Reads the DB; migrates a legacy requests.json; seeds the
-    initial backlog when there's neither DB rows nor a JSON file. JSON fallback."""
-    try:
-        conn = _gr_db()
-        try:
-            _ensure_requests_table(conn)
-            rows = conn.execute('SELECT data FROM ereader_requests').fetchall()
-        finally:
-            conn.close()
-        out = []
-        for r in rows:
-            try:
-                out.append(json.loads(r['data']))
-            except Exception:
-                pass
-        if out:
-            return out
-        # Table empty → migrate from JSON, or seed the backlog on a fresh install.
-        legacy = _load_requests_json()
-        if legacy is None:
-            print("Seeding initial requests backlog…")
-            legacy = _seed_requests()
-        elif legacy:
-            print(f"Migrating {len(legacy)} request(s) from JSON into the DB…")
-        if legacy:
-            _save_requests(legacy)
-        return legacy
-    except Exception as e:
-        print(f"⚠️  Requests DB unavailable, using JSON fallback: {e}")
-        legacy = _load_requests_json()
-        return legacy if legacy is not None else _seed_requests()
-
-def _save_requests(items):
-    """Persist the full requests list. DB is primary; requests.json is also written
-    as a best-effort backup so a save can't lose data."""
-    try:
-        conn = _gr_db()
-        try:
-            _ensure_requests_table(conn)
-            with conn:
-                ids = [str(it['id']) for it in items if it.get('id')]
-                if ids:
-                    ph = ','.join('?' * len(ids))
-                    conn.execute(
-                        f'DELETE FROM ereader_requests WHERE id NOT IN ({ph})', ids)
-                else:
-                    conn.execute('DELETE FROM ereader_requests')
-                for it in items:
-                    iid = it.get('id')
-                    if not iid:
-                        continue
-                    conn.execute(
-                        'INSERT INTO ereader_requests(id,data,status,updated) '
-                        'VALUES(?,?,?,?) ON CONFLICT(id) DO UPDATE SET '
-                        'data=excluded.data, status=excluded.status, updated=excluded.updated',
-                        (str(iid), json.dumps(it), it.get('status'),
-                         it.get('updated') or 0))
-        finally:
-            conn.close()
-    except Exception as e:
-        print(f"⚠️  Requests DB write failed (JSON backup still written): {e}")
-    try:
-        tmp = REQUESTS_FILE + '.tmp'
-        with open(tmp, 'w') as f:
-            json.dump(items, f, indent=2)
-        os.replace(tmp, REQUESTS_FILE)
-    except Exception as e:
-        print(f"⚠️  Requests JSON backup write failed: {e}")
 
 def get_calibre_books(limit=None, offset=0, query=None):
     """Fetch books from Calibre Content Server"""
@@ -2530,117 +2384,6 @@ def greatreads_start_next():
         return jsonify({'error': 'GreatReads API error', 'detail': str(e)}), 502
     return jsonify({'success': True, 'readingId': reading_id, 'startDate': start_date})
 
-
-# ---------- Feature requests / TODO list ----------
-# Backing store for the in-app "Requests" page (web/requests.html). One JSON
-# file on disk, same atomic-write pattern as highlights/progress. Item shape:
-#   { id, title, body, status, comments: [{ts, author, text}],
-#     created: epoch_ms, updated: epoch_ms }
-# status is one of REQUEST_STATUSES. "Requested" is the bucket that the next
-# Augment/agent session should pick up (see .augment-guidelines).
-
-@app.route('/api/requests', methods=['GET'])
-def list_requests():
-    """List all requests, newest-updated first. Optional ?status= filter."""
-    status_filter = request.args.get('status')
-    with _requests_lock:
-        items = _load_requests()
-    if status_filter:
-        items = [it for it in items if it.get('status') == status_filter]
-    items.sort(key=lambda x: x.get('updated', 0), reverse=True)
-    return jsonify({'items': items, 'total': len(items)})
-
-@app.route('/api/requests', methods=['POST'])
-def create_request():
-    """Create a new request. Defaults to Backlog if status is omitted.
-
-    Optional `sections` field — list of {id?, title, body} where body is
-    HTML produced by the rich-text editor. When present it supersedes the
-    legacy single-string `body`; both are persisted for back-compat so
-    older clients keep rendering something."""
-    body = request.get_json(silent=True) or {}
-    title = (body.get('title') or '').strip()
-    if not title:
-        return jsonify({'error': 'title is required'}), 400
-    status = body.get('status') or 'Backlog'
-    if status not in REQUEST_STATUSES:
-        return jsonify({'error': f'status must be one of {REQUEST_STATUSES}'}), 400
-    now = int(time.time() * 1000)
-    sections = _normalize_sections(body.get('sections'))
-    item = {
-        'id':       str(uuid.uuid4()),
-        'title':    title,
-        'body':     body.get('body') or '',
-        'sections': sections if sections is not None else [],
-        'status':   status,
-        'comments': [],
-        'created':  now,
-        'updated':  now,
-    }
-    with _requests_lock:
-        items = _load_requests()
-        items.append(item)
-        _save_requests(items)
-    return jsonify(item), 201
-
-@app.route('/api/requests/<item_id>', methods=['PUT'])
-def update_request(item_id):
-    """Partial update — allows mutating title, body, status, sections."""
-    body = request.get_json(silent=True) or {}
-    allowed = ('title', 'body', 'status')
-    if 'status' in body and body['status'] not in REQUEST_STATUSES:
-        return jsonify({'error': f'status must be one of {REQUEST_STATUSES}'}), 400
-    sections = None
-    if 'sections' in body:
-        sections = _normalize_sections(body.get('sections'))
-        if sections is None:
-            return jsonify({'error': 'sections must be a list'}), 400
-    with _requests_lock:
-        items = _load_requests()
-        for it in items:
-            if it.get('id') == item_id:
-                for k in allowed:
-                    if k in body:
-                        it[k] = body[k]
-                if sections is not None:
-                    it['sections'] = sections
-                it['updated'] = int(time.time() * 1000)
-                _save_requests(items)
-                return jsonify(it)
-    return jsonify({'error': 'not found'}), 404
-
-@app.route('/api/requests/<item_id>', methods=['DELETE'])
-def delete_request(item_id):
-    with _requests_lock:
-        items = _load_requests()
-        new_items = [it for it in items if it.get('id') != item_id]
-        if len(new_items) == len(items):
-            return jsonify({'error': 'not found'}), 404
-        _save_requests(new_items)
-    return jsonify({'deleted': item_id})
-
-@app.route('/api/requests/<item_id>/comments', methods=['POST'])
-def add_request_comment(item_id):
-    """Append a comment to a request (used for iteration / replies).
-    Body: { text: str, author?: str }. Author defaults to 'user'."""
-    body = request.get_json(silent=True) or {}
-    text = (body.get('text') or '').strip()
-    if not text:
-        return jsonify({'error': 'text is required'}), 400
-    comment = {
-        'ts':     int(time.time() * 1000),
-        'author': body.get('author') or 'user',
-        'text':   text,
-    }
-    with _requests_lock:
-        items = _load_requests()
-        for it in items:
-            if it.get('id') == item_id:
-                it.setdefault('comments', []).append(comment)
-                it['updated'] = comment['ts']
-                _save_requests(items)
-                return jsonify(it), 201
-    return jsonify({'error': 'not found'}), 404
 
 @app.route('/api/health', methods=['GET'])
 def health_check():

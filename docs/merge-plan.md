@@ -1,18 +1,18 @@
 # Epic: Merge GreatReads into Ereader → one unified book app
 
-**Status:** Planning (no code changes yet). Living doc — work spans multiple sessions.
-**Last updated:** 2026-06-14
+**Status:** In progress — Stories 0–3 shipped. Living doc — work spans multiple sessions.
+**Last updated:** 2026-06-15
 **Repo:** this one (Ereader). To be renamed **GreatReads** once the merge is real (§ Story 9).
 
 **One-line goal:** Fold the GreatReads library/TBR manager into the Ereader reader/player so
 we ship a single "book manager + reader + audiobook player" app, incrementally, **without
 ever breaking the working Ereader app.**
 
-> Related docs: **[`GREATREADS_MERGE_SCOPING.md`](GREATREADS_MERGE_SCOPING.md)** (file-level
+> Related docs: **[`merge-scoping.md`](merge-scoping.md)** (file-level
 > execution detail for each Story — read this when implementing),
-> `GREATREADS_INTEGRATION.md` (the *current remote-sync* contract, to be retired in Story 2),
-> `GREATREADS_CHAIN_REFERENCE.md` / `CHAIN_SYSTEM_ANALYSIS.md` (chain internals),
-> `OFFLINE_PLAN.md` (offline thinking), `RECOVERY.md`.
+> the GreatReads integration contract (now in `.augment/rules/ereader-guidelines.md`),
+> `greatreads/CHAIN_SYSTEM_ANALYSIS.md` (vendored chain internals),
+> `OFFLINE_PLAN.md`, `RECOVERY.md` (both in this `docs/` dir).
 
 ---
 
@@ -116,7 +116,7 @@ as its own service **so that** all further work happens in one repo with no remo
 > **copied** DB and **read-only** Calibre/ABS mounts — never the production `greatreads_app`
 > container or its data dir. Bare-metal is the Story-4 end state, not now. Full commands and
 > the required scheduler kill-switch are in
-> [`GREATREADS_MERGE_SCOPING.md`](GREATREADS_MERGE_SCOPING.md#story-0).
+> [`merge-scoping.md`](merge-scoping.md#story-0).
 
 ### Scope / sub-tasks
 1. Copy `GreatReads/src/greatreads/`, `migrations/`, `pyproject.toml`, `scripts/`, templates
@@ -294,6 +294,54 @@ Progress/highlights live in SQLite; reader/player use it; JSON retired to backup
 **As** the maintainer **I want** a single FastAPI backend **so that** there's one stack, one
 process, one dependency tree (D1/D4).
 
+> **Plain-language context (added 2026-06-15):** Flask and FastAPI are both Python web
+> frameworks (the program that answers `GET /api/...`). Today the unified app runs **two** of
+> them — Ereader's **Flask** (bare-metal, :8091: reader/player/library/highlights/progress) and
+> GreatReads' **FastAPI** (container, :8092: TBR/shelves/chains/stats). "Collapse Flask" = rewrite
+> Ereader's 48 Flask routes as FastAPI routes and delete the Flask app, leaving **one** backend.
+> Benefit: one process/deploy/dependency-tree, and Ereader could call GreatReads logic directly
+> instead of over HTTP. **This is the lowest-urgency story — nothing is broken without it; it's
+> tech-debt cleanup, do it when there's appetite for engine work.**
+
+### Why this is XL / high-risk (verified against the code, 2026-06-15)
+1. It rewrites the code that runs the **actual reader/player** — a regression breaks the core app
+   (2,716 LOC, 48 endpoints in `backend/server.py`).
+2. **Streaming endpoints** are the hard part — they pipe bytes as they arrive, not tidy JSON:
+   the audiobook **HLS proxy** (`server.py:1973`, streams `.ts` segments from ABS with a 12×
+   retry/poll loop while ABS transcodes), **ebook download** (`server.py:1352`, 10–500 MB files),
+   and `/api/fetch`. Must stream (never buffer → OOM); the sync→async rewrite must redo the
+   retry/timeout logic. Highest chance of subtle bugs (stuttering audio, hung downloads).
+3. **Async traps that don't exist in Flask:** ~13 `threading.Lock`/caches and every sync
+   `requests.get` (Calibre/ABS/GreatReads) must become async (`asyncio.Lock` / `httpx`) or be
+   offloaded — a sync lock or sync file-read in an async handler **freezes the whole server** for
+   all users, not just one.
+4. **Contract fidelity:** the frontend hardcodes `http://100.69.184.113:8091/api` and reads exact
+   JSON field names, cache headers, and status codes. Any drift breaks the UI **silently**.
+
+### THE key decision (the original plan glossed over this) — resolve before any code
+Ereader's Flask backend reaches **Calibre (:8083) and Audiobookshelf (:13378) over HTTP on the
+host**; it needs their *live* APIs (search, covers, downloads, the audiobook stream). But the
+GreatReads **container** reaches Calibre/ABS only as **read-only SQLite file mounts**, never their
+live API. A container can't reach the host's `localhost:8083` by default, so "move Ereader's routes
+into the container" hits a wall. Three ways out:
+- **A. Unify bare-metal** — run the merged FastAPI app as a host process (like Flask is now).
+  Simplest networking (localhost just works); loses GreatReads' container isolation. **(Recommended.)**
+- **B. Container + host networking** — keep it containerized, give it host-gateway access to
+  Calibre/ABS + the ABS token. Keeps the container; adds Docker-networking complexity.
+- **C. Don't fully merge** — leave the streaming proxies in a thin Flask service, port only the
+  simple routes. Defeats the "delete Flask" goal.
+
+### Safe phased approach (never a big-bang rewrite)
+1. **Build a contract-test harness first** — script that calls all 48 endpoints on live Flask and
+   snapshots every response (JSON shape, headers, status). This is the "did I break it?" oracle.
+2. **Stand up FastAPI routes alongside Flask** on a temp port; port in **easy→hard** order:
+   easy (health/version, requests, highlights, progress — already SQLite) → medium (library/
+   series/saga, covers, search) → **hard last** (download stream, then the HLS proxy, its own
+   sub-task with large-file + slow-network tests).
+3. Convert `requests`→`httpx`, `threading.Lock`→`asyncio.Lock`, offload file/DB I/O.
+4. **Diff new vs old** with the harness until byte-identical; flip the frontend; keep Flask
+   runnable on a branch for instant rollback; delete Flask only after a full regression pass.
+
 ### Scope / sub-tasks
 1. Port Ereader's Flask routes into the FastAPI app as routers, preserving exact paths/shapes
    the frontend expects:
@@ -336,12 +384,26 @@ the unified product feels like one Android app, not a website embedded in a read
 This story is large; it's broken into sub-stories 5a–5g, each independently shippable. The
 concrete defects driving them are enumerated in **§ Android Readiness Diagnosis**.
 
-- **5a — Vendor frontend assets locally (offline + reliability).** Bundle Bootstrap, Font
-  Awesome, axios, SortableJS into local static files; remove all CDN `<link>/<script>` from
-  `base.html`. *Highest priority* — today the app is dead without internet. (Diagnosis A1.)
-- **5b — App chrome & navigation.** Replace/augment the Bootstrap top-navbar+hamburger with an
-  app-style **bottom tab bar** (or fold GreatReads pages into Ereader's existing nav), drop
-  desktop flourishes (MT header clock, `d-none d-lg-*` bits). (Diagnosis A4, A9.)
+- **5a — Vendor frontend assets locally (offline + reliability).** *What a CDN is:* GreatReads'
+  pages currently fetch their UI libraries from third-party internet servers (jsdelivr/cloudflare)
+  at page-load. With no/poor internet those fetches fail and the page breaks (no styling, dead
+  buttons, no drag, blank charts). Ereader already bundles everything locally, so the embedded
+  GreatReads half is the app's "glass jaw." *Exact inventory (verified):* **7 libraries** —
+  Bootstrap 5.3.0 CSS+JS (`base.html:38,178`), Font Awesome 6.4.0 (`base.html:41`), axios 1.5.0
+  (`base.html:181`), SortableJS 1.15.0 (`base.html:184`), Chart.js 4.4.0 (`stats.html:7`,
+  `journal.html:7`), html2canvas 1.4.1 (`journal.html:9`). *Plan:* download the 7 into
+  `greatreads/src/greatreads/static/vendor/` (incl. Font Awesome's webfonts), swap the 8 tags
+  across 3 templates to local `url_for('static', ...)` paths (same pattern GR already uses — works
+  under the `/greatreads/` proxy automatically), verify every page offline. **Low risk:** purely
+  additive, no JS changes (code uses globals `bootstrap`/`axios`/`Sortable`/`Chart`), trivially
+  reversible. No SRI hashes to strip. (Diagnosis A1.) **~1 session.**
+- **5b — Unified hamburger navigation (the *recommended next step* — see § Story 5b detail below).**
+  Today the two halves have **separate menus** and getting from deep in GreatReads back to reading
+  means hammering the back button. Make **both** menus carry the same full link set (cross-linking
+  across the `/greatreads/` proxy boundary) so any destination is one tap from anywhere. Done
+  carefully/additively, no page deletions yet. Drops the redundant GreatReads "Home" and "Logout"
+  (auth is bypassed), folds "About" into Settings. Full target menu + file-level steps in the
+  dedicated **§ Story 5b — Unified navigation** section after Story 9. (Diagnosis A4, A9.)
 - **5c — Safe-area & WebView fit.** Add `viewport-fit=cover`, `env(safe-area-inset-*)` padding,
   `theme-color`, and a **web app manifest** so it renders correctly under notches/cutouts the
   way Ereader's WebView (SHORT_EDGES + immersive) expects. (Diagnosis A2, A3.)
@@ -385,6 +447,46 @@ pages; offline-safe for its own assets.
 
 ---
 
+## Story 7 — Infrastructure / process consolidation (carefully)
+**Size:** M · **User-visible:** no · **Depends on:** Story 4 · **Non-blocking**
+
+**As** the maintainer **I want** the running pieces collapsed from three to one (or two) **so that**
+there's one thing to deploy, monitor, and keep alive.
+
+**Current topology (verified 2026-06-15) — it's NOT "3 containers":**
+| Port | Piece | How it runs |
+|---|---|---|
+| 8090 | Ereader **web** (static HTML/JS + the `/greatreads/` reverse proxy) | bare-metal `web/serve.py` |
+| 8091 | Ereader **API** (Flask) | bare-metal `backend/server.py` |
+| 8092 | GreatReads (FastAPI) | Docker container `greatreads_ereader` |
+
+So today it's **1 container + 2 bare-metal processes**. The two Ereader processes are a historical
+split: a dumb static-file server (8090) out front, a separate Flask API (8091) behind it. (The old
+:8007 prod container `greatreads_app` is already stopped/removed — Story 2.)
+
+### Target & sub-tasks (sequence after Story 4 lands)
+1. **Fold the static server into the backend.** Once the API is FastAPI (Story 4), serve
+   `web/*.html` + assets via FastAPI `StaticFiles` (keep `Cache-Control: no-store` the WebView
+   relies on) and retire `web/serve.py` (the `/greatreads/` proxy goes away too if everything is
+   one app/origin). → collapses 8090+8091 into one process.
+2. **Decide container vs bare-metal for the merged app** (this is Story 4's A/B/C decision — keep
+   it consistent). End state is **one** process serving the API, the reader/player assets, and the
+   GreatReads pages.
+3. **One Dockerfile / one compose service** (or one bare-metal run script) for the whole app;
+   delete the now-unused `web/serve.py`, the second venv, and the dual-process launch wiring.
+4. **Keep the DB + backups exactly as-is** — one SQLite file, the daily `backup-db.sh` cron stays.
+
+### Risk → mitigation
+- *Static-serving regressions (cache headers, APK asset paths, WebView quirks)* → port the exact
+  headers `serve.py` sets; regression-test the reader/player in the real WebView before deleting
+  `serve.py`. *Depends entirely on Story 4* — don't start until the backend is unified and stable.
+
+### Definition of Done
+One process (one container **or** one bare-metal app) serves everything; `web/serve.py` and the
+second process are gone; reader/player/library/GreatReads all pass a WebView regression.
+
+---
+
 ## Story 9 — Rename the repo to GreatReads (product identity)
 **Size:** S · **Depends on:** Stories 0–4 substantially done · **Non-blocking**
 
@@ -393,6 +495,80 @@ rename. At rename time: GitHub repo rename (auto-redirects old URLs) · update `
 Android **package id / app name / icons** in `simple-app/` · fix hardcoded paths and the
 `GREATREADS_SOURCE` / `GREATREADS_CHAIN_REFERENCE.md` symlinks · purge references to
 `http://100.69.184.113:8007`. Do it whenever convenient after the backends merge.
+
+---
+
+# § Story 5b — Unified hamburger navigation (detailed plan)
+
+**Goal:** one consistent menu across both halves so navigation feels like one app and you never
+have to back-button your way out of GreatReads to get back to reading. **Constraint:** careful,
+additive, non-breaking — no page deletions in this story (that's later consolidation).
+
+### The two menus today (verified 2026-06-15)
+- **Ereader** — `#menu-popup` in `web/index.html`, five buttons wired in JS:
+  `📚 GreatReads`→`/greatreads/`, `✏️ Highlights`→in-page overlay, `🔖 Bookmarks`→in-page overlay,
+  `⚙️ Settings`→in-page overlay, `ℹ️ About`→`/about.html`. (The `📋 Requests` button was removed
+  2026-06-15.) **Note:** Highlights/Bookmarks/Settings are *overlays inside index.html*, not
+  standalone pages — reachable directly only from the home screen.
+- **GreatReads** — Bootstrap navbar in `templates/base.html:51-118`: Home, TBR, Journal, Library,
+  Books, Stats, Settings, Logout (+ a desktop-only MT clock). Links use `url_for(...)` so they
+  resolve correctly under the `/greatreads/` proxy.
+
+### Target unified menu (both menus carry this same set)
+| Item | Destination | Lives in |
+|---|---|---|
+| **Home** | `/` (Ereader home) | Ereader index.html |
+| **TBR** | `/greatreads/tbr` | GreatReads |
+| **Journal** | `/greatreads/journal` | GreatReads |
+| **Manage Library** | `/greatreads/library` (relabel GR "Library") | GreatReads |
+| **Books** | `/greatreads/books` | GreatReads |
+| **Stats** | `/greatreads/stats` | GreatReads |
+| **Highlights** | Ereader highlights overlay (from a GR page: `/?view=highlights`) | Ereader |
+| **Bookmarks** | Ereader bookmarks overlay (from a GR page: `/?view=bookmarks`) | Ereader |
+| **Settings** | Ereader settings overlay; **About folded in here** | Ereader |
+
+Dropped: GreatReads **"Home"** (Ereader Home is THE home), **"Logout"** (auth is bypassed),
+standalone **"About"** (moves into Settings), and **"Requests"** (the in-app Requests feature was
+removed entirely 2026-06-15 — superseded by GitHub issues #1–#9). "Library" (Ereader's current
+reading library / home grid) stays as **Home**; "Manage Library" is the GreatReads management view.
+
+### Why "both menus get the full set" (the pragmatic v1)
+The two menus live in two codebases (Ereader static HTML vs GreatReads Jinja `base.html`) on two
+origins bridged by the `/greatreads/` proxy. A *single shared* menu component is the eventual goal
+(needs a shared shell — pairs with Story 5g theme unification). For now we **replicate the same
+links in both** so every destination is one tap from anywhere. This is the "verbose overkill but
+good payoff" first step the user asked for, and it directly fixes the back-back-back problem.
+
+### Careful, staged sub-steps (each independently shippable + testable)
+1. **5b-1 — Ereader menu gains the GreatReads destinations.** Add TBR / Journal / Manage Library /
+   Books / Stats buttons (→ `/greatreads/...`) to `#menu-popup`; relabel/keep the rest. Purely
+   additive to `web/index.html` — zero backend change, easy rollback. *Smallest first step.*
+2. **5b-2 — Cross-page entry for Highlights/Bookmarks.** Make the overlays openable via a URL param
+   (`/?view=highlights`) so the menu item works from a GreatReads page, not just the home grid.
+3. **5b-3 — GreatReads navbar gains the Ereader destinations.** In `base.html`: add Home (→ `/`),
+   Highlights/Bookmarks (→ `/?view=...`); relabel Library → "Manage Library"; remove Logout; drop
+   the GR "Home" duplicate. Keep it behind the existing Bootstrap navbar for now (visual
+   unification is Story 5g).
+4. **5b-4 — Fold About into Settings** (Ereader settings overlay gets an "About" section; drop the
+   standalone `ℹ️ About` button). `about.html` can stay as a deep link until later cleanup.
+5. **5b-5 — Consistency pass:** same order, same labels/icons in both menus; verify every link
+   resolves both directions (Ereader↔GreatReads) in the WebView, and that back-navigation is no
+   longer required to reach reading.
+
+### Risk → mitigation
+- *Broken/looping links across the proxy boundary* → test each link both directions in the real
+  WebView; the proxy already rewrites `url_for` correctly (Story 1). *Overlay-from-other-page not
+  opening* → 5b-2 gates 5b-3's Highlights/Bookmarks items. **Additive only; nothing is removed that
+  has no replacement. Risk: low.**
+
+### Definition of Done
+From any Ereader page **or** any GreatReads page, the same menu offers every destination and each
+works in one tap (no back-button chains). No functionality lost; visual polish deferred to 5g.
+
+> **Related: Story 5g — Theme/design unification.** Once the menus carry the same links, align the
+> GreatReads "bookish" Bootstrap look with Ereader's dark immersive theme (shared CSS variables,
+> fonts, and eventually a single shared menu component) so the two halves look like one app. That's
+> the (b) "consolidate design/UI elements" half of the user's request; 5b is the (a) navigation half.
 
 ---
 
