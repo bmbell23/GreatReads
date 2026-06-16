@@ -805,9 +805,16 @@ function openLibraryEbook(calibreId, titleEnc) {
     const v = Date.now();
     window.location.href = `/reader.html?v=${v}&id=${encodeURIComponent(calibreId)}&format=epub&title=${titleEnc}`;
 }
-function openLibraryAudio(absId, titleEnc, authorEnc) {
+// calibreId (optional) links a matching ebook so the player can offer in-book
+// search / read-while-listening (dual-format). Passed through as bookId+hasEbook,
+// mirroring the Ereader home's openPlayer().
+function openLibraryAudio(absId, titleEnc, authorEnc, calibreId) {
     const v = Date.now();
-    window.location.href = `/player.html?v=${v}&absId=${encodeURIComponent(absId)}&title=${titleEnc}&author=${authorEnc}`;
+    let url = `/player.html?v=${v}&absId=${encodeURIComponent(absId)}&title=${titleEnc}&author=${authorEnc}`;
+    if (calibreId) {
+        url += `&bookId=${encodeURIComponent(calibreId)}&format=epub&hasEbook=1`;
+    }
+    window.location.href = url;
 }
 
 function createBookCard(book) {
@@ -912,7 +919,7 @@ function openBookActions(bookId) {
                 </div>` : ''}
                 ${canListen ? `<div class="col">
                     <button type="button" class="open-type-btn open-type-audio"
-                            onclick="openLibraryAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}')">
+                            onclick="openLibraryAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}', '${book.calibre_id || ''}')">
                         <i class="fas fa-headphones fa-2x mb-2"></i><div class="fw-bold">Listen</div>
                     </button>
                 </div>` : ''}

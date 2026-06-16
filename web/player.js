@@ -71,6 +71,26 @@ function setMsg(text) {
     el.classList.remove('hidden');
 }
 
+// Lightweight auto-dismissing toast (bottom-centre). Created lazily so we don't
+// need a dedicated element in the markup.
+let _toastTimer = null;
+function toast(msg) {
+    let el = $('player-toast');
+    if (!el) {
+        el = document.createElement('div');
+        el.id = 'player-toast';
+        el.style.cssText = 'position:fixed;left:50%;bottom:96px;transform:translateX(-50%);'
+            + 'background:#212529;color:#fff;padding:10px 16px;border-radius:20px;font-size:14px;'
+            + 'box-shadow:0 4px 16px rgba(0,0,0,0.25);z-index:200;opacity:0;transition:opacity .2s;'
+            + 'max-width:80vw;text-align:center;pointer-events:none;';
+        document.body.appendChild(el);
+    }
+    el.textContent = msg;
+    requestAnimationFrame(() => { el.style.opacity = '1'; });
+    clearTimeout(_toastTimer);
+    _toastTimer = setTimeout(() => { el.style.opacity = '0'; }, 1800);
+}
+
 // Paint the filled portion of a range input with the brand gradient up to the
 // thumb, leaving the rest as the dark track. Called whenever the value changes.
 function fillRange(el) {
@@ -105,7 +125,9 @@ async function init() {
     $('author').textContent = AUTHOR;
     $('now-playing').textContent = TITLE;
     if (ABS_ID) $('cover').src = `${API_URL}/audiobooks/${encodeURIComponent(ABS_ID)}/cover`;
-    if (HAS_EBOOK) $('search-btn').classList.remove('hidden');
+    // Always offer search. It opens the matching ebook to search; for audio-only
+    // books (no linked ebook) the handler explains there's nothing to search.
+    $('search-btn').classList.remove('hidden');
     applySpeed(loadSavedSpeed());
     if (!ABS_ID) { setMsg('No audiobook specified.'); return; }
 
@@ -391,7 +413,7 @@ $('back-btn').addEventListener('click', () => { doClose(); history.length > 1 ? 
 const readerOverlay = $('reader-overlay');
 const readerFrame = $('reader-frame');
 function openReader(withSearch) {
-    if (!HAS_EBOOK) return;
+    if (!HAS_EBOOK) { toast('No linked ebook to search for this audiobook'); return; }
     $('ro-title').textContent = TITLE;
     readerFrame.src = `reader.html?id=${encodeURIComponent(EBOOK_ID)}`
         + `&format=${encodeURIComponent(EBOOK_FORMAT || 'epub')}`
