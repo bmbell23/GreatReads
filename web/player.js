@@ -653,9 +653,10 @@ async function renderBookmarks() {
     // Same format badge SVGs as the book-cover badges in index.html, scaled to 13 px.
     const ICON_EBOOK = '<svg width="13" height="13" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#0066CC"/><rect x="2" y="2.5" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="4.9" width="7" height="1.2" rx="0.6" fill="white"/><rect x="2" y="7.3" width="5" height="1.2" rx="0.6" fill="white"/></svg>';
     const ICON_AUDIO = '<svg width="13" height="13" viewBox="0 0 11 11" xmlns="http://www.w3.org/2000/svg"><rect width="11" height="11" rx="2" fill="#FF6600"/><path d="M1.8 7 A3.7 4.5 0 0 1 9.2 7" stroke="white" stroke-width="1.3" fill="none" stroke-linecap="round"/><rect x="1.2" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/><rect x="8.3" y="6.5" width="1.5" height="3" rx="0.5" fill="white"/></svg>';
-    // Manual bookmarks: white icon. Auto-saved: brand-gradient tint.
-    const BM_ICON_MANUAL = '<img src="assets/bookmark.png" style="width:13px;height:13px;filter:invert(1);vertical-align:middle;margin-right:5px;" aria-hidden="true">';
-    const BM_ICON_AUTO   = '<img src="assets/bookmark.png" style="width:13px;height:13px;filter:invert(1) sepia(1) saturate(5) hue-rotate(240deg);vertical-align:middle;margin-right:5px;" aria-hidden="true">';
+    // Manual bookmarks: neutral dark icon. Auto-saved: brand-purple tint.
+    // (Light surface now — black glyph reads directly; no invert.)
+    const BM_ICON_MANUAL = '<img src="assets/bookmark.png" style="width:13px;height:13px;opacity:0.7;vertical-align:middle;margin-right:5px;" aria-hidden="true">';
+    const BM_ICON_AUTO   = '<img src="assets/bookmark.png" style="width:13px;height:13px;filter:invert(28%) sepia(83%) saturate(1700%) hue-rotate(258deg) brightness(90%);vertical-align:middle;margin-right:5px;" aria-hidden="true">';
 
     const manual = items.filter(n => n.type !== 'auto-bookmark');
     const auto   = items.filter(n => n.type === 'auto-bookmark');

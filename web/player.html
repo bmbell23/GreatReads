@@ -11,34 +11,39 @@
     <link rel="icon" type="image/png" sizes="32x32" href="/icon-32.png">
     <style>
         /* Bi-pride / brand palette — blue → purple → pink, sampled from the
-           GreatReads wordmark so the player matches the rest of the app. */
+           GreatReads wordmark so the player matches the rest of the app.
+           Light surface + brand accents to match the GreatReads site chrome. */
         :root {
             --brand-blue: #4067EF;
             --brand-purple: #8640C0;
             --brand-pink: #C940B0;
             --brand-grad: linear-gradient(90deg, #4067EF 0%, #8640C0 50%, #C940B0 100%);
-            --bg: #121212;
-            --track: #2f2f33;
+            --bg: #f8f9fa;
+            --surface: #ffffff;
+            --track: #e3e6ea;
+            --text: #212529;
+            --muted: #6c757d;
+            --border: #e9ecef;
         }
         * { margin: 0; padding: 0; box-sizing: border-box; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background:
-                radial-gradient(120% 60% at 50% -10%, rgba(134,64,192,0.18), transparent 60%),
+                radial-gradient(120% 60% at 50% -10%, rgba(134,64,192,0.12), transparent 60%),
                 var(--bg);
-            color: #fff; overflow: hidden;
+            color: var(--text); overflow: hidden;
             height: 100vh; display: flex; flex-direction: column;
             padding: env(safe-area-inset-top) env(safe-area-inset-right)
                      env(safe-area-inset-bottom) env(safe-area-inset-left);
         }
         .top-bar { display: flex; align-items: center; gap: 8px; padding: 12px 14px; }
         .icon-btn {
-            background: none; border: none; color: #fff; font-size: 22px;
+            background: none; border: none; color: var(--text); font-size: 22px;
             cursor: pointer; padding: 6px; line-height: 1; border-radius: 8px;
         }
-        .icon-btn:active { background: #2a2a2a; }
+        .icon-btn:active { background: var(--border); }
         .icon-btn.hidden { display: none; }
-        .top-bar .now { font-size: 13px; color: #aaa; overflow: hidden;
+        .top-bar .now { font-size: 13px; color: var(--muted); overflow: hidden;
             text-overflow: ellipsis; white-space: nowrap; flex: 1; }
         .stage { flex: 1; display: flex; flex-direction: column; align-items: center;
             justify-content: center; padding: 8px 24px 4px; gap: 16px; min-height: 0; }
@@ -48,13 +53,13 @@
         .stage-main { display: contents; }
         .cover {
             width: min(78vw, 340px); max-height: 46vh; aspect-ratio: 1/1; border-radius: 16px;
-            object-fit: cover; box-shadow: 0 12px 40px rgba(0,0,0,0.55),
-                0 0 0 1px rgba(255,255,255,0.04);
+            object-fit: cover; box-shadow: 0 12px 40px rgba(134,64,192,0.20),
+                0 0 0 1px rgba(0,0,0,0.06);
             background: var(--brand-grad);
         }
         .meta { text-align: center; max-width: 92%; }
         .meta .title { font-size: 20px; font-weight: 700; line-height: 1.3; }
-        .meta .author { font-size: 14px; color: #aaa; margin-top: 4px; }
+        .meta .author { font-size: 14px; color: var(--muted); margin-top: 4px; }
         .chapter { font-size: 13px; color: var(--brand-pink); margin-top: 6px; min-height: 18px;
             font-weight: 600;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90vw; }
@@ -64,7 +69,7 @@
         .bar-block { display: flex; flex-direction: column; gap: 4px; }
         .bar-head { display: flex; justify-content: space-between; align-items: baseline;
             font-size: 11px; letter-spacing: 0.3px; }
-        .bar-head .lbl { color: #888; text-transform: uppercase; font-weight: 700; font-size: 10px; }
+        .bar-head .lbl { color: var(--muted); text-transform: uppercase; font-weight: 700; font-size: 10px; }
         .bar-head .pct { color: var(--brand-pink); font-weight: 700; }
         .seek {
             -webkit-appearance: none; appearance: none; width: 100%; height: 8px;
@@ -74,15 +79,15 @@
         /* The filled portion is painted via a JS-set background gradient stop. */
         .seek::-webkit-slider-thumb {
             -webkit-appearance: none; width: 16px; height: 16px; border-radius: 50%;
-            background: #fff; cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.5);
-            border: 2px solid var(--brand-purple);
+            background: var(--brand-purple); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.25);
+            border: 2px solid #fff;
         }
         .seek::-moz-range-thumb {
-            width: 14px; height: 14px; border-radius: 50%; background: #fff;
-            border: 2px solid var(--brand-purple); cursor: pointer;
+            width: 14px; height: 14px; border-radius: 50%; background: var(--brand-purple);
+            border: 2px solid #fff; cursor: pointer;
         }
         .seek.chapter { height: 6px; }
-        .times { display: flex; justify-content: space-between; font-size: 11px; color: #9a9a9a; }
+        .times { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); }
 
         /* ---- Transport ---- */
         .controls { display: flex; align-items: center; justify-content: center; gap: 16px; margin-top: 2px;
@@ -91,13 +96,14 @@
            .controls spans the bar width, so right:0 reaches the far right edge. */
         #bm-add { position: absolute; right: 0; top: 50%; transform: translateY(-50%); }
         .controls .icon-btn { font-size: 26px; position: relative; }
-        /* PNG icons for search / bookmark — inverted to white for the dark bg */
-        .icon-png { width: 24px; height: 24px; filter: invert(1); display: block; }
+        /* PNG icons for search / bookmark — brightness(0) forces the glyph dark
+           regardless of the source PNG's colour, so they read on the light bar. */
+        .icon-png { width: 24px; height: 24px; display: block; filter: brightness(0); opacity: 0.72; }
         /* Bookmark-add: same png + a small "+" badge so it reads as "add" */
         .bm-add-wrap { position: relative; display: inline-block; }
         .bm-add-plus { position: absolute; bottom: -4px; right: -5px;
-            font-size: 12px; font-weight: 900; line-height: 1; color: white;
-            text-shadow: 0 0 3px rgba(0,0,0,0.7); pointer-events: none; }
+            font-size: 12px; font-weight: 900; line-height: 1; color: var(--brand-pink);
+            text-shadow: 0 0 3px rgba(255,255,255,0.9); pointer-events: none; }
         .play-btn {
             width: 74px; height: 74px; border-radius: 50%;
             background: var(--brand-grad);
@@ -109,7 +115,7 @@
             /* PNGs are dark glyphs; invert to white so they read on the gradient. */
             filter: invert(1) brightness(1.6); }
         .play-btn:active { transform: scale(0.95); }
-        .skip-label { font-size: 12px; color: #bbb; display: block; margin-top: 2px; font-weight: 600; }
+        .skip-label { font-size: 12px; color: var(--muted); display: block; margin-top: 2px; font-weight: 600; }
 
         /* ---- Bottom bar: speed slider ---- */
         .bottom-bar { display: flex; align-items: center; gap: 14px;
@@ -117,46 +123,49 @@
             margin-bottom: calc(60px + env(safe-area-inset-bottom, 0px)); }
         .speed-wrap { flex: 1; display: flex; align-items: center; gap: 10px; }
         .speed-pill { flex-shrink: 0; min-width: 52px; text-align: center; font-size: 13px;
-            font-weight: 700; color: #fff; background: rgba(134,64,192,0.28);
-            border: 1px solid rgba(201,64,176,0.4); border-radius: 99px; padding: 4px 8px; }
+            font-weight: 700; color: var(--brand-purple); background: rgba(134,64,192,0.12);
+            border: 1px solid rgba(134,64,192,0.30); border-radius: 99px; padding: 4px 8px; }
         #speed {
             -webkit-appearance: none; appearance: none; flex: 1; height: 6px;
             border-radius: 99px; outline: none; cursor: pointer; background: var(--track);
         }
         #speed::-webkit-slider-thumb {
             -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
-            background: var(--brand-pink); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.5); }
+            background: var(--brand-pink); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.25); }
         #speed::-moz-range-thumb {
             width: 16px; height: 16px; border-radius: 50%; background: var(--brand-pink);
             border: none; cursor: pointer; }
-        .text-btn { background: #2a2a2a; border: none; color: #fff; border-radius: 8px;
+        .text-btn { background: var(--surface); border: 1px solid var(--border); color: var(--brand-purple);
+            font-weight: 600; border-radius: 8px;
             padding: 8px 14px; font-size: 14px; cursor: pointer; flex-shrink: 0; }
+        .text-btn:active { background: var(--border); }
 
         /* Chapter drawer */
-        .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+        .drawer-backdrop { position: fixed; inset: 0; background: rgba(0,0,0,0.4);
             display: none; z-index: 50; align-items: flex-end; }
         .drawer-backdrop.open { display: flex; }
-        .drawer { width: 100%; max-height: 70vh; background: #1e1e1e;
-            border-radius: 16px 16px 0 0; display: flex; flex-direction: column; }
-        .drawer h3 { padding: 16px; font-size: 15px; border-bottom: 1px solid #2a2a2a; }
+        .drawer { width: 100%; max-height: 70vh; background: var(--surface);
+            border-radius: 16px 16px 0 0; display: flex; flex-direction: column;
+            box-shadow: 0 -8px 30px rgba(0,0,0,0.15); }
+        .drawer h3 { padding: 16px; font-size: 15px; border-bottom: 1px solid var(--border); }
         .drawer-list { overflow-y: auto; padding: 8px 0 calc(8px + env(safe-area-inset-bottom,0px)); }
         .ch-row { padding: 12px 16px; font-size: 14px; cursor: pointer; display: flex;
             justify-content: space-between; gap: 12px; }
-        .ch-row:active { background: #2a2a2a; }
+        .ch-row:active { background: var(--bg); }
         .ch-row.active { color: var(--brand-pink); font-weight: 600; }
-        .ch-row .ch-time { color: #888; font-size: 12px; flex-shrink: 0; }
+        .ch-row .ch-time { color: var(--muted); font-size: 12px; flex-shrink: 0; }
 
         /* Bookmark rows */
         .bm-row { padding: 12px 16px; display: flex; align-items: center; gap: 12px; cursor: pointer; }
-        .bm-row:active { background: #2a2a2a; }
+        .bm-row:active { background: var(--bg); }
         .bm-row .bm-main { flex: 1; min-width: 0; }
         .bm-row .bm-label { font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .bm-row .bm-sub { font-size: 12px; color: #888; margin-top: 2px;
+        .bm-row .bm-sub { font-size: 12px; color: var(--muted); margin-top: 2px;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-        .bm-row .bm-del { flex-shrink: 0; background: none; border: none; color: #777;
+        .bm-row .bm-del { flex-shrink: 0; background: none; border: none; color: #adb5bd;
             font-size: 20px; line-height: 1; padding: 4px 6px; cursor: pointer; border-radius: 6px; }
-        .bm-row .bm-del:active { background: #3a2a2a; color: #d04040; }
-        .bm-empty { color: #777; padding: 20px 16px; text-align: center; font-size: 14px; }
+        .bm-row .bm-del:active { background: #f8d7da; color: #dc3545; }
+        .bm-empty { color: var(--muted); padding: 20px 16px; text-align: center; font-size: 14px; }
         .bm-sec { padding: 12px 16px 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.5px;
             text-transform: uppercase; color: #8640C0; }
 
@@ -165,9 +174,9 @@
             display: none; flex-direction: column; }
         .reader-overlay.open { display: flex; }
         .reader-overlay .ro-bar { display: flex; align-items: center; gap: 10px;
-            padding: calc(env(safe-area-inset-top,0px) + 8px) 12px 8px; background: #181818;
-            border-bottom: 1px solid #262626; }
-        .reader-overlay .ro-bar .ro-title { flex: 1; font-size: 13px; color: #ccc;
+            padding: calc(env(safe-area-inset-top,0px) + 8px) 12px 8px; background: var(--surface);
+            border-bottom: 1px solid var(--border); }
+        .reader-overlay .ro-bar .ro-title { flex: 1; font-size: 13px; color: var(--muted);
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
         .reader-overlay .ro-mini { display: flex; align-items: center; gap: 8px; font-size: 12px;
             color: var(--brand-pink); }
@@ -175,7 +184,7 @@
 
         .overlay-msg {
             position: fixed; inset: 0; display: flex; align-items: center;
-            justify-content: center; text-align: center; padding: 32px; color: #ccc;
+            justify-content: center; text-align: center; padding: 32px; color: var(--muted);
             font-size: 15px; background: var(--bg); z-index: 80;
         }
         .overlay-msg.hidden { display: none; }

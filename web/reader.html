@@ -333,7 +333,10 @@
             bottom: 0;
             left: 0;
             right: 0;
-            background: rgba(0, 0, 0, 0.95);
+            background: rgba(255, 255, 255, 0.98);
+            color: #212529;
+            border-top: 1px solid #e9ecef;
+            box-shadow: 0 -8px 30px rgba(0, 0, 0, 0.15);
             /* Extra top padding so the absolutely-positioned .menu-close (top:10px)
                doesn't end up under the Android status bar when the menu grows tall
                enough to push its top edge to the screen top.  Same pattern on the
@@ -361,7 +364,7 @@
             flex-wrap: wrap;
         }
         .control-btn {
-            background: #2196F3;
+            background: #8640C0;
             border: none;
             padding: 12px 24px;
             border-radius: 8px;
@@ -372,9 +375,10 @@
             min-width: 120px;
         }
         /* Icon-only square button (TOC, dual-page). PNG assets are black on
-           transparent, so invert() flips them to white for the dark menu. */
+           transparent; invert() flips them to white to read on the brand-purple
+           button. */
         .icon-btn {
-            background: #2196F3;
+            background: #8640C0;
             border: none;
             padding: 0;
             border-radius: 8px;
@@ -395,8 +399,8 @@
             opacity: 0.95;
             pointer-events: none;
         }
-        .icon-btn:active { background: #1976D2; }
-        .icon-btn.active { background: #0d47a1; }
+        .icon-btn:active { background: #6f2da3; }
+        .icon-btn.active { background: #5a2585; }
         /* Dual-page toggle is only meaningful on an unfolded foldable. When
            the phone is folded (or any narrow viewport) the button is greyed
            out and ignores taps. */
@@ -428,11 +432,33 @@
            EPUB only — shown by setupNavigation(). Semi-transparent so it
            doesn't fight the text; solidifies on press. Sits above content
            but below all overlays. */
-        #search-btn {
+        /* Floating Table-of-Contents button — sits between the hamburger and
+           search. brightness(0) forces the glyph dark regardless of the source
+           PNG's colour, so it reads on the light page. */
+        #reader-toc-btn {
             position: fixed;
             /* Same row as #menu-btn; offset right by btn width (28px) + gap (10px). */
             top: 26px;
             left: 78px;
+            width: 28px;
+            height: 28px;
+            border-radius: 6px;
+            background: transparent;
+            border: none;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 11500;
+            cursor: pointer;
+            -webkit-tap-highlight-color: transparent;
+        }
+        #reader-toc-btn img { width: 20px; height: 20px; filter: brightness(0); opacity: 0.5; display: block; }
+        #reader-toc-btn:active img { opacity: 0.85; }
+        #search-btn {
+            position: fixed;
+            /* Same row; offset right of the TOC button (78 + 28 + 10). */
+            top: 26px;
+            left: 116px;
             width: 28px;
             height: 28px;
             border-radius: 6px;
@@ -445,11 +471,11 @@
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
         }
-        #search-btn img { width: 18px; height: 18px; filter: invert(1); opacity: 0.45; display: block; }
+        #search-btn img { width: 18px; height: 18px; filter: brightness(0); opacity: 0.5; display: block; }
         #search-btn:active img { opacity: 0.9; }
         /* In-book search overlay rows. */
         .search-section {
-            color: #7aa7d8;
+            color: #8640C0;
             font-size: 12px;
             font-weight: 700;
             letter-spacing: 0.6px;
@@ -458,35 +484,35 @@
         }
         .search-row {
             padding: 12px 10px;
-            border-bottom: 1px solid #2a2a2a;
+            border-bottom: 1px solid #e9ecef;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
         }
-        .search-row:active { background: #2a2a2a; }
+        .search-row:active { background: #f1f3f5; }
         .search-row .ch {
             font-size: 11px;
-            color: #6fae8a;
+            color: #198754;
             font-style: italic;
             margin-bottom: 4px;
         }
-        .search-snip { font-size: 14px; line-height: 1.5; color: #ddd; }
+        .search-snip { font-size: 14px; line-height: 1.5; color: #212529; }
         .search-snip .hit {
-            background: #b8860b;
-            color: #fff;
+            background: #ffe08a;
+            color: #212529;
             border-radius: 3px;
             padding: 0 2px;
         }
         .search-hist-row {
             padding: 11px 10px;
-            border-bottom: 1px solid #242424;
-            color: #bbb;
+            border-bottom: 1px solid #e9ecef;
+            color: #495057;
             cursor: pointer;
             display: flex;
             align-items: center;
             gap: 10px;
             -webkit-tap-highlight-color: transparent;
         }
-        .search-hist-row:active { background: #2a2a2a; }
+        .search-hist-row:active { background: #f1f3f5; }
         /* Setting block: label on the left, control on the right. */
         .setting-group {
             display: flex;
@@ -495,7 +521,7 @@
             width: 100%;
         }
         .setting-label {
-            color: #ccc;
+            color: #6c757d;
             font-size: 13px;
             letter-spacing: 0.3px;
             text-transform: uppercase;
@@ -513,9 +539,9 @@
         /* Text-align segmented buttons. SVG strokes inherit currentColor so
            the active state's contrast comes "for free" from the bg flip. */
         .align-btn {
-            background: #2a2a2a;
+            background: #f1f3f5;
             border: none;
-            color: #ccc;
+            color: #495057;
             width: 44px;
             height: 40px;
             border-radius: 6px;
@@ -526,13 +552,13 @@
             -webkit-tap-highlight-color: transparent;
         }
         .align-btn svg { width: 20px; height: 20px; display: block; }
-        .align-btn:active { background: #3a3a3a; }
-        .align-btn.active { background: #2196F3; color: #fff; }
-        /* Native <select> styled to fit the dark menu. */
+        .align-btn:active { background: #e9ecef; }
+        .align-btn.active { background: #8640C0; color: #fff; }
+        /* Native <select> styled to fit the light menu. */
         .font-select {
-            background: #2a2a2a;
-            color: #fff;
-            border: 1px solid #444;
+            background: #fff;
+            color: #212529;
+            border: 1px solid #ced4da;
             border-radius: 6px;
             padding: 8px 10px;
             font-size: 14px;
@@ -540,16 +566,16 @@
             min-width: 0;
         }
         .add-font-btn {
-            background: #2a2a2a;
-            color: #ccc;
-            border: 1px solid #444;
+            background: #fff;
+            color: #495057;
+            border: 1px solid #ced4da;
             border-radius: 6px;
             padding: 8px 12px;
             font-size: 13px;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
         }
-        .add-font-btn:active { background: #3a3a3a; }
+        .add-font-btn:active { background: #e9ecef; }
         /* Inline Google-Font add row. Hidden until the user taps "+ Add". */
         .add-font-row {
             display: none;
@@ -560,16 +586,16 @@
         .add-font-row.open { display: flex; }
         .add-font-row input {
             flex: 1;
-            background: #1f1f1f;
-            color: #fff;
-            border: 1px solid #444;
+            background: #fff;
+            color: #212529;
+            border: 1px solid #ced4da;
             border-radius: 6px;
             padding: 8px 10px;
             font-size: 14px;
             min-width: 0;
         }
         .add-font-row .load-btn {
-            background: #2196F3;
+            background: #8640C0;
             color: #fff;
             border: none;
             border-radius: 6px;
@@ -580,27 +606,27 @@
         /* Hyphenation pill toggle (On / Off). */
         .pill-toggle {
             display: inline-flex;
-            background: #2a2a2a;
+            background: #f1f3f5;
             border-radius: 6px;
             overflow: hidden;
         }
         .pill-toggle button {
             background: transparent;
             border: none;
-            color: #ccc;
+            color: #495057;
             padding: 8px 16px;
             font-size: 13px;
             cursor: pointer;
             -webkit-tap-highlight-color: transparent;
         }
-        .pill-toggle button.active { background: #2196F3; color: #fff; }
+        .pill-toggle button.active { background: #8640C0; color: #fff; }
         .font-slider {
             flex: 1;
             min-width: 150px;
             height: 40px;
         }
         .progress-text {
-            color: #fff;
+            color: #212529;
             font-size: 16px;
             text-align: center;
             width: 100%;
@@ -611,7 +637,7 @@
             right: 15px;
             background: none;
             border: none;
-            color: #fff;
+            color: #6c757d;
             font-size: 24px;
             cursor: pointer;
         }
@@ -754,7 +780,7 @@
             appearance: none;
             width: 100%;
             height: 6px;
-            background: #444;
+            background: #e3e6ea;
             border-radius: 3px;
             outline: none;
             margin: 8px 0;
@@ -764,15 +790,16 @@
             appearance: none;
             width: 24px;
             height: 24px;
-            background: #2196F3;
+            background: #8640C0;
             border-radius: 50%;
             cursor: pointer;
             border: 2px solid #fff;
+            box-shadow: 0 1px 4px rgba(0,0,0,0.25);
         }
         .font-slider::-moz-range-thumb {
             width: 24px;
             height: 24px;
-            background: #2196F3;
+            background: #8640C0;
             border-radius: 50%;
             cursor: pointer;
             border: 2px solid #fff;
@@ -788,7 +815,7 @@
             display: flex;
             justify-content: space-between;
             font-size: 10px;
-            color: #888;
+            color: #6c757d;
             font-family: ui-monospace, monospace;
         }
         .slider-ticks span { width: 1px; }
@@ -831,28 +858,28 @@
         .hl-popup {
             position: fixed;
             z-index: 12000;
-            background: #1f1f1f;
-            border: 1px solid #444;
+            background: #ffffff;
+            border: 1px solid #e9ecef;
             border-radius: 10px;
             padding: 6px;
             display: flex;
             gap: 4px;
-            box-shadow: 0 4px 16px rgba(0,0,0,0.6);
+            box-shadow: 0 4px 16px rgba(0,0,0,0.2);
             opacity: 1;
             transition: opacity 0.4s ease;
         }
         .hl-popup button {
             background: transparent;
             border: none;
-            color: #fff;
+            color: #212529;
             font-size: 20px;
             width: 40px;
             height: 40px;
             border-radius: 8px;
             cursor: pointer;
         }
-        .hl-popup button:hover { background: #333; }
-        .hl-popup button.danger:hover { background: #5a1e1e; }
+        .hl-popup button:hover { background: #f1f3f5; }
+        .hl-popup button.danger:hover { background: #f8d7da; }
         /* Hidden popup buttons (lookup mode hides delete/share). */
         .hl-popup button.hidden { display: none; }
 
@@ -1044,49 +1071,49 @@
             border-radius: 8px;
             cursor: pointer;
             transition: background 0.15s;
-            color: #fff;
+            color: #212529;
             -webkit-tap-highlight-color: transparent;
         }
-        .toc-row:active { background: #3a3a3a; }
+        .toc-row:active { background: #f1f3f5; }
         .toc-caret {
             flex-shrink: 0;
             width: 30px;
             text-align: center;
             font-size: 13px;
-            color: #888;
+            color: #adb5bd;
             transition: transform 0.2s;
         }
         .toc-caret.collapsed { transform: rotate(-90deg); }
         .toc-spacer { flex-shrink: 0; width: 30px; }
         .toc-label { flex: 1; line-height: 1.35; }
         .toc-label.depth-0 { font-size: 16px; font-weight: 600; }
-        .toc-label.depth-1 { font-size: 15px; font-weight: 400; color: #e0e0e0; }
-        .toc-label.depth-2 { font-size: 14px; font-weight: 400; color: #b0b0b0; }
+        .toc-label.depth-1 { font-size: 15px; font-weight: 400; color: #343a40; }
+        .toc-label.depth-2 { font-size: 14px; font-weight: 400; color: #6c757d; }
         .toc-children.collapsed { display: none; }
         /* "(N scenes)" count badge on a collapsed chapter row. */
         .toc-scene-count {
             flex-shrink: 0;
             margin-left: 10px;
             font-size: 12px;
-            color: #777;
+            color: #868e96;
             font-weight: 400;
             white-space: nowrap;
         }
         /* Opening words shown after a "Scene N" label. */
         .toc-scene-preview {
-            color: #777;
+            color: #868e96;
             font-weight: 400;
             font-style: italic;
         }
         .toc-scene-preview::before { content: " — "; }
         /* The chapter / scene the reader is currently in. */
         .toc-row.toc-current {
-            background: #1f3147;
-            box-shadow: inset 3px 0 0 #4a90d9;
+            background: #f3effb;
+            box-shadow: inset 3px 0 0 #8640C0;
         }
-        .toc-row.toc-current .toc-label { color: #fff; font-weight: 600; }
+        .toc-row.toc-current .toc-label { color: #5a2585; font-weight: 600; }
         .toc-row.toc-current .toc-scene-count,
-        .toc-row.toc-current .toc-scene-preview { color: #9bc2e6; }
+        .toc-row.toc-current .toc-scene-preview { color: #8640C0; }
 
         /* Scene jump-list appended to a chapter summary: the detected
            scene/POV breaks for that chapter, each a tap-to-jump link into the
@@ -1094,10 +1121,10 @@
         .summary-scenes {
             margin-top: 22px;
             padding-top: 16px;
-            border-top: 1px solid #333;
+            border-top: 1px solid #e9ecef;
         }
         .summary-scenes-title {
-            color: #8a8a8a;
+            color: #6c757d;
             font-size: 12px;
             letter-spacing: .04em;
             text-transform: uppercase;
@@ -1109,27 +1136,27 @@
             gap: 10px;
             width: 100%;
             text-align: left;
-            background: #242424;
+            background: #f1f3f5;
             border: none;
             border-radius: 8px;
             padding: 11px 14px;
             margin-bottom: 8px;
-            color: #e6e6e6;
+            color: #212529;
             font-size: 15px;
             line-height: 1.4;
             cursor: pointer;
         }
-        .summary-scene-row:active { background: #2f2f2f; }
+        .summary-scene-row:active { background: #e9ecef; }
         .summary-scene-num {
             flex: 0 0 auto;
-            color: #4a90d9;
+            color: #8640C0;
             font-weight: 600;
             white-space: nowrap;
         }
-        .summary-scene-num::after { content: " →"; color: #4a90d9; }
+        .summary-scene-num::after { content: " →"; color: #8640C0; }
         .summary-scene-preview {
             flex: 1 1 auto;
-            color: #b8b8b8;
+            color: #6c757d;
             font-style: italic;
             overflow: hidden;
             text-overflow: ellipsis;
@@ -1141,13 +1168,13 @@
         .summary-scene-link {
             display: inline;
             margin-left: 8px;
-            color: #4a90d9;
+            color: #8640C0;
             font-weight: 600;
             font-size: 0.82em;
             white-space: nowrap;
             cursor: pointer;
         }
-        .summary-scene-link:active { color: #6fb0ec; }
+        .summary-scene-link:active { color: #b066e0; }
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
@@ -1162,7 +1189,10 @@
     <!-- Hamburger button (top-left). Always visible; opens Reading Options. -->
     <button id="menu-btn" title="Reading options" onclick="toggleMenu()">☰</button>
 
-    <!-- Floating in-book search button (right of menu btn). Shown only for EPUB by
+    <!-- Floating Table-of-Contents button (right of menu btn). Always visible. -->
+    <button id="reader-toc-btn" title="Table of contents" onclick="toggleTOC()"><img src="assets/toc.png" alt="Contents"></button>
+
+    <!-- Floating in-book search button (right of TOC btn). Shown only for EPUB by
          setupNavigation(); opens the full-screen search overlay below. -->
     <button id="search-btn" title="Search this book" onclick="openSearch()"><img src="assets/search.png" alt="Search"></button>
 
@@ -1214,7 +1244,7 @@
 
     <div class="reader-controls" id="reader-controls">
         <button class="menu-close" onclick="toggleMenu()">✕</button>
-        <h3 style="color: #fff; margin: 0 0 10px 0;">Reading Options</h3>
+        <h3 style="color: #212529; margin: 0 0 10px 0;">Reading Options</h3>
 
         <div class="control-row">
             <div class="slider-row">
@@ -1251,7 +1281,7 @@
                    autocomplete="off" autocorrect="off" autocapitalize="none" spellcheck="false">
             <button class="load-btn" onclick="submitAddGoogleFont()">Load</button>
         </div>
-        <div id="add-font-hint" style="display:none;font-size:11px;color:#888;padding:0 4px 6px;line-height:1.4;">
+        <div id="add-font-hint" style="display:none;font-size:11px;color:#6c757d;padding:0 4px 6px;line-height:1.4;">
             Paste a Google Fonts URL (e.g. <em>fonts.google.com/specimen/Lora</em>) or type the exact font name (e.g. <em>Lora</em>, <em>Merriweather</em>, <em>Source Serif 4</em>).
         </div>
 
@@ -1286,9 +1316,6 @@
         <div class="control-row">
             <button class="icon-btn" id="btn-dual-page" title="Dual page" onclick="toggleDualPage()">
                 <img src="assets/dual-page.png" alt="">
-            </button>
-            <button class="icon-btn" title="Table of contents" onclick="toggleTOC()">
-                <img src="assets/toc.png" alt="">
             </button>
             <!-- Chapter summary — hidden by setSummaryButtonVisible() until a
                  matching summary set is found for this book. -->
@@ -1344,13 +1371,18 @@
     </div>
 
     <!-- Full-screen TOC overlay -->
-    <div id="toc-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #0c0c0c; z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
+    <div id="toc-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #f8f9fa; z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
         <div style="max-width: 800px; margin: 0 auto;">
-            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                <h2 style="color: #fff; margin: 0;">Table of Contents</h2>
-                <button onclick="toggleTOC()" style="background: #333; color: #fff; border: none; padding: 10px 20px; border-radius: 8px; font-size: 18px; cursor: pointer;">✕ Close</button>
+            <div style="display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 20px;">
+                <h2 style="color: #212529; margin: 0;">Table of Contents</h2>
+                <div style="display: flex; gap: 8px; flex: 0 0 auto;">
+                    <!-- Jump to chapter summaries — shown only when a summary set
+                         matches this book (toggled with btn-summary). -->
+                    <button id="toc-summary-btn" onclick="closeTOCThenSummary()" title="Chapter summaries" style="display:none;background:#8640C0;color:#fff;border:none;padding:10px 16px;border-radius:8px;font-size:16px;cursor:pointer;">📖 Summaries</button>
+                    <button onclick="toggleTOC()" style="background: #f1f3f5; color: #495057; border: 1px solid #e9ecef; padding: 10px 20px; border-radius: 8px; font-size: 18px; cursor: pointer;">✕ Close</button>
+                </div>
             </div>
-            <div id="toc-list" style="background: #222; border-radius: 12px; padding: 20px;"></div>
+            <div id="toc-list" style="background: #fff; border: 1px solid #e9ecef; border-radius: 12px; padding: 20px;"></div>
         </div>
     </div>
 
@@ -1359,29 +1391,29 @@
          for a single reached chapter, with prev/next within reached chapters and
          a "Story so far" mode that concatenates every chapter up to the current
          one. Content + navigation are built by openSummary() / renderSummary(). -->
-    <div id="summary-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #0c0c0c; z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px calc(env(safe-area-inset-bottom, 0px) + 24px) 20px;">
+    <div id="summary-overlay" style="display: none; position: fixed; top: 0; left: 0; right: 0; bottom: 0; background: #f8f9fa; z-index: 10000; overflow-y: auto; padding: calc(env(safe-area-inset-top, 0px) + 20px) 20px calc(env(safe-area-inset-bottom, 0px) + 24px) 20px;">
         <div style="max-width: 760px; margin: 0 auto;">
             <div style="display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 8px;">
                 <div style="min-width:0;">
-                    <div id="summary-set" style="color:#8a8a8a;font-size:12px;letter-spacing:.04em;text-transform:uppercase;"></div>
-                    <h2 id="summary-heading" style="color:#fff;margin:2px 0 0 0;font-size:22px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;"></h2>
+                    <div id="summary-set" style="color:#6c757d;font-size:12px;letter-spacing:.04em;text-transform:uppercase;"></div>
+                    <h2 id="summary-heading" style="color:#212529;margin:2px 0 0 0;font-size:22px;line-height:1.2;overflow:hidden;text-overflow:ellipsis;"></h2>
                 </div>
-                <button onclick="closeSummary()" style="flex:0 0 auto;background:#333;color:#fff;border:none;padding:10px 16px;border-radius:8px;font-size:16px;cursor:pointer;">✕</button>
+                <button onclick="closeSummary()" style="flex:0 0 auto;background:#f1f3f5;color:#495057;border:1px solid #e9ecef;padding:10px 16px;border-radius:8px;font-size:16px;cursor:pointer;">✕</button>
             </div>
             <!-- Mode toggle: single chapter vs cumulative recap -->
             <div style="display:flex;gap:8px;margin:10px 0 16px 0;">
                 <button id="summary-mode-chapter" onclick="setSummaryMode('chapter')"
-                        style="flex:1;padding:9px;border:none;border-radius:8px;cursor:pointer;font-size:14px;background:#2196F3;color:#fff;">This chapter</button>
+                        style="flex:1;padding:9px;border:none;border-radius:8px;cursor:pointer;font-size:14px;background:#8640C0;color:#fff;">This chapter</button>
                 <button id="summary-mode-recap" onclick="setSummaryMode('recap')"
-                        style="flex:1;padding:9px;border:none;border-radius:8px;cursor:pointer;font-size:14px;background:#2a2a2a;color:#ccc;">Story so far</button>
+                        style="flex:1;padding:9px;border:none;border-radius:8px;cursor:pointer;font-size:14px;background:#f1f3f5;color:#495057;">Story so far</button>
             </div>
-            <div id="summary-body" style="background:#1c1c1c;border-radius:12px;padding:20px 22px;color:#e6e6e6;font-size:17px;line-height:1.6;"></div>
+            <div id="summary-body" style="background:#fff;border:1px solid #e9ecef;border-radius:12px;padding:20px 22px;color:#212529;font-size:17px;line-height:1.6;"></div>
             <!-- Prev/next within reached chapters (chapter mode only) -->
             <div id="summary-nav" style="display:flex;justify-content:space-between;gap:10px;margin-top:16px;">
                 <button id="summary-prev" onclick="summaryStep(-1)"
-                        style="padding:11px 16px;border:none;border-radius:8px;cursor:pointer;font-size:15px;background:#2a2a2a;color:#fff;">◄ Prev</button>
+                        style="padding:11px 16px;border:none;border-radius:8px;cursor:pointer;font-size:15px;background:#f1f3f5;color:#495057;">◄ Prev</button>
                 <button id="summary-next" onclick="summaryStep(1)"
-                        style="padding:11px 16px;border:none;border-radius:8px;cursor:pointer;font-size:15px;background:#2a2a2a;color:#fff;">Next ►</button>
+                        style="padding:11px 16px;border:none;border-radius:8px;cursor:pointer;font-size:15px;background:#f1f3f5;color:#495057;">Next ►</button>
             </div>
         </div>
     </div>
@@ -1389,12 +1421,12 @@
     <!-- Full-screen in-book search overlay. Opened by #search-btn. Shows the
          recent-search history until a query is run, then exact + similar
          (fuzzy) results, each tappable to jump to that spot in the book. -->
-    <div id="search-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0c0c0c;z-index:11000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 16px) 16px 24px 16px;">
+    <div id="search-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#f8f9fa;z-index:11000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 16px) 16px 24px 16px;">
         <div style="max-width:760px;margin:0 auto;">
             <div style="display:flex;gap:8px;align-items:center;margin-bottom:8px;">
                 <input id="search-input" type="search" placeholder="Search this book…" autocomplete="off" autocapitalize="off" autocorrect="off"
-                       style="flex:1;min-width:0;padding:12px 14px;border-radius:10px;border:1px solid #444;background:#1b1b1b;color:#fff;font-size:16px;">
-                <button onclick="closeSearch()" style="flex:0 0 auto;background:#333;color:#fff;border:none;padding:12px 14px;border-radius:10px;font-size:16px;cursor:pointer;">✕</button>
+                       style="flex:1;min-width:0;padding:12px 14px;border-radius:10px;border:1px solid #ced4da;background:#fff;color:#212529;font-size:16px;">
+                <button onclick="closeSearch()" style="flex:0 0 auto;background:#f1f3f5;color:#495057;border:1px solid #e9ecef;padding:12px 14px;border-radius:10px;font-size:16px;cursor:pointer;">✕</button>
             </div>
             <div id="search-results"></div>
         </div>
@@ -1402,13 +1434,13 @@
 
     <!-- Bookmarks / highlights navigation overlay. Same shell for both;
          the title and list contents are swapped in by JS. -->
-    <div id="navlist-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#0c0c0c;z-index:10000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
+    <div id="navlist-overlay" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:#f8f9fa;z-index:10000;overflow-y:auto;padding:calc(env(safe-area-inset-top, 0px) + 20px) 20px 20px 20px;">
         <div style="max-width:800px;margin:0 auto;">
             <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
-                <h2 id="navlist-title" style="color:#fff;margin:0;">Bookmarks</h2>
-                <button onclick="closeNavList()" style="background:#333;color:#fff;border:none;padding:10px 20px;border-radius:8px;font-size:18px;cursor:pointer;">✕ Close</button>
+                <h2 id="navlist-title" style="color:#212529;margin:0;">Bookmarks</h2>
+                <button onclick="closeNavList()" style="background:#f1f3f5;color:#495057;border:1px solid #e9ecef;padding:10px 20px;border-radius:8px;font-size:18px;cursor:pointer;">✕ Close</button>
             </div>
-            <div id="navlist-body" style="background:#222;border-radius:12px;padding:8px;"></div>
+            <div id="navlist-body" style="background:#fff;border:1px solid #e9ecef;border-radius:12px;padding:8px;"></div>
         </div>
     </div>
 
@@ -6363,7 +6395,7 @@
                 const h = document.createElement('div');
                 h.style.cssText = `padding:10px 12px 4px;font-size:11px;font-weight:700;
                     letter-spacing:0.6px;text-transform:uppercase;color:${color};
-                    border-bottom:1px solid #2a2a2a;`;
+                    border-bottom:1px solid #e9ecef;`;
                 h.textContent = label;
                 return h;
             }
@@ -6398,14 +6430,14 @@
             const hasAuto   = autoSorted.length > 0;
 
             if (!hasManual && !hasAuto) {
-                body.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center;font-size:16px;">No bookmarks yet</div>';
+                body.innerHTML = '<div style="color:#6c757d;padding:20px;text-align:center;font-size:16px;">No bookmarks yet</div>';
             } else {
                 body.appendChild(sectionHeader('📌  Manual Bookmarks', '#d04040'));
                 if (hasManual) {
                     for (const bm of manualSorted) appendBmRow(bm, deleteBookmarkFromList);
                 } else {
                     const empty = document.createElement('div');
-                    empty.style.cssText = 'color:#666;padding:12px 14px;font-size:14px;font-style:italic;';
+                    empty.style.cssText = 'color:#868e96;padding:12px 14px;font-size:14px;font-style:italic;';
                     empty.textContent = 'No manual bookmarks';
                     body.appendChild(empty);
                 }
@@ -6415,7 +6447,7 @@
                     for (const bm of autoSorted) appendBmRow(bm, deleteAutoBookmarkFromList);
                 } else {
                     const empty = document.createElement('div');
-                    empty.style.cssText = 'color:#666;padding:12px 14px;font-size:14px;font-style:italic;';
+                    empty.style.cssText = 'color:#868e96;padding:12px 14px;font-size:14px;font-style:italic;';
                     empty.textContent = 'No automatic bookmarks yet';
                     body.appendChild(empty);
                 }
@@ -6429,7 +6461,7 @@
             document.getElementById('navlist-title').textContent = 'Highlights';
             body.innerHTML = '';
             if (!highlights || highlights.length === 0) {
-                body.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center;font-size:16px;">No highlights yet</div>';
+                body.innerHTML = '<div style="color:#6c757d;padding:20px;text-align:center;font-size:16px;">No highlights yet</div>';
             } else {
                 const items = highlights.slice().sort((a, b) => (a.anchor || 0) - (b.anchor || 0));
                 for (const hl of items) {
@@ -6452,16 +6484,16 @@
         }
         function buildNavRow({ primary, secondary, onOpen, onDelete }) {
             const row = document.createElement('div');
-            row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:12px 10px;border-bottom:1px solid #2a2a2a;';
+            row.style.cssText = 'display:flex;align-items:flex-start;gap:8px;padding:12px 10px;border-bottom:1px solid #e9ecef;';
             const main = document.createElement('div');
-            main.style.cssText = 'flex:1;min-width:0;color:#ddd;cursor:pointer;';
-            main.innerHTML = `<div style="font-size:14px;line-height:1.4;color:#fff;">${escapeHtml(primary)}</div>
-                              <div style="font-size:11px;color:#888;margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(secondary)}</div>`;
+            main.style.cssText = 'flex:1;min-width:0;color:#212529;cursor:pointer;';
+            main.innerHTML = `<div style="font-size:14px;line-height:1.4;color:#212529;">${escapeHtml(primary)}</div>
+                              <div style="font-size:11px;color:#6c757d;margin-top:4px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${escapeHtml(secondary)}</div>`;
             main.addEventListener('click', () => { closeNavList(); onOpen(); });
             const del = document.createElement('button');
             del.textContent = '\u2715';
             del.title = 'Delete';
-            del.style.cssText = 'background:#333;color:#aaa;border:none;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:14px;flex:0 0 auto;';
+            del.style.cssText = 'background:#f1f3f5;color:#868e96;border:1px solid #e9ecef;padding:6px 10px;border-radius:6px;cursor:pointer;font-size:14px;flex:0 0 auto;';
             del.addEventListener('click', (e) => { e.stopPropagation(); onDelete(); });
             row.appendChild(main);
             row.appendChild(del);
@@ -6603,7 +6635,7 @@
             const el = document.getElementById('search-results');
             if (!el) return;
             if (!exact.length && !fuzzy.length) {
-                el.innerHTML = '<div style="color:#aaa;padding:24px;text-align:center;font-size:15px;">No matches for \u201c' + escapeHtml(query) + '\u201d</div>';
+                el.innerHTML = '<div style="color:#6c757d;padding:24px;text-align:center;font-size:15px;">No matches for \u201c' + escapeHtml(query) + '\u201d</div>';
                 return;
             }
             let html = '';
@@ -6717,7 +6749,7 @@
             const h = getSearchHistory();
             el.innerHTML = '';
             if (!h.length) {
-                el.innerHTML = '<div style="color:#777;padding:24px;text-align:center;font-size:14px;">Type a word or phrase to search this book.</div>';
+                el.innerHTML = '<div style="color:#6c757d;padding:24px;text-align:center;font-size:14px;">Type a word or phrase to search this book.</div>';
                 return;
             }
             const hdr = document.createElement('div');
@@ -6754,6 +6786,8 @@
             if (sbtn) sbtn.style.display = 'none';
             const mbtn = document.getElementById('menu-btn');
             if (mbtn) mbtn.style.display = 'none';
+            const tbtn = document.getElementById('reader-toc-btn');
+            if (tbtn) tbtn.style.display = 'none';
             // Drop out of immersive mode so the soft keyboard lays out correctly.
             try { if (window.Android && window.Android.showSystemBars) window.Android.showSystemBars(); } catch (_) {}
             loadSearchHistory();
@@ -6768,6 +6802,8 @@
             if (sbtn) sbtn.style.display = 'flex';
             const mbtn = document.getElementById('menu-btn');
             if (mbtn) mbtn.style.display = 'flex';
+            const tbtn = document.getElementById('reader-toc-btn');
+            if (tbtn) tbtn.style.display = 'flex';
             try { if (window.Android && window.Android.hideSystemBars) window.Android.hideSystemBars(); } catch (_) {}
             consumeOverlayBack();
         }
@@ -6852,9 +6888,17 @@
             setSummaryButtonVisible(!!bookSummaries);
         }
 
+        let _summaryAvailable = false;
         function setSummaryButtonVisible(show) {
+            _summaryAvailable = !!show;
             const b = document.getElementById('btn-summary');
             if (b) b.style.display = show ? '' : 'none';
+        }
+        // Close the TOC, then open the chapter-summary overlay (called from the
+        // Summaries button in the TOC header).
+        function closeTOCThenSummary() {
+            toggleTOC();
+            openSummary();
         }
 
         // The summary chapter matching a reader chapter title, or null.
@@ -6916,7 +6960,7 @@
             _summaryMode = mode;
             const chBtn = document.getElementById('summary-mode-chapter');
             const rcBtn = document.getElementById('summary-mode-recap');
-            const on = '#2196F3', onText = '#fff', off = '#2a2a2a', offText = '#ccc';
+            const on = '#8640C0', onText = '#fff', off = '#f1f3f5', offText = '#495057';
             chBtn.style.background = mode === 'chapter' ? on : off;
             chBtn.style.color      = mode === 'chapter' ? onText : offText;
             rcBtn.style.background = mode === 'recap' ? on : off;
@@ -6945,7 +6989,7 @@
                 body.innerHTML = '';
                 _summaryChapters.forEach((c, i) => {
                     const h = document.createElement('h3');
-                    h.style.cssText = 'color:#fff;margin:18px 0 8px 0;font-size:17px;border-bottom:1px solid #333;padding-bottom:6px;';
+                    h.style.cssText = 'color:#212529;margin:18px 0 8px 0;font-size:17px;border-bottom:1px solid #e9ecef;padding-bottom:6px;';
                     if (i === 0) h.style.marginTop = '0';
                     h.textContent = c.title;
                     body.appendChild(h);
@@ -7093,10 +7137,14 @@
                 tocList.innerHTML = '';
                 _tocRows = [];
                 if (!tocTree || tocTree.length === 0) {
-                    tocList.innerHTML = '<div style="color:#aaa;padding:20px;text-align:center;font-size:16px;">No table of contents available</div>';
+                    tocList.innerHTML = '<div style="color:#6c757d;padding:20px;text-align:center;font-size:16px;">No table of contents available</div>';
                 } else {
                     renderTocTree(tocTree, tocList, 0);
                 }
+                // Surface the "Summaries" shortcut only when this book has a
+                // matching summary set (mirrors the in-menu summary button).
+                const sumBtn = document.getElementById('toc-summary-btn');
+                if (sumBtn) sumBtn.style.display = _summaryAvailable ? '' : 'none';
                 tocOverlay.style.display = 'block';
                 // Reveal + center the chapter/scene we're currently reading.
                 // Must run after display:block so scrollIntoView can measure.
