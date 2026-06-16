@@ -521,8 +521,7 @@
             margin: 20px;
             border-radius: 8px;
         }
-        /* Single-row-header overlays (settings, series detail) need less top pad. */
-        .overlay.settings-overlay,
+        /* Single-row-header overlays (series detail) need less top pad. */
         #series-overlay { padding-top: 60px; }
         /* Series card: book-count chip bottom-left of the cover. */
         .series-count {
@@ -631,12 +630,19 @@
         </div>
     </div>
 
+    <!-- Unified menu: same destination set + order as the GreatReads navbar
+         (base.html). Reader-side items first (Home / Highlights / Bookmarks),
+         then the GreatReads library-management pages, then Settings. -->
     <div class="menu-popup" id="menu-popup">
-        <button id="menu-greatreads">📚 GreatReads</button>
+        <button id="menu-home">🏠 Home</button>
         <button id="menu-highlights">✏️ Highlights</button>
         <button id="menu-bookmarks">🔖 Bookmarks</button>
+        <button id="menu-tbr">📋 TBR</button>
+        <button id="menu-journal">📖 Journal</button>
+        <button id="menu-library">📚 Library</button>
+        <button id="menu-books">📕 Books</button>
+        <button id="menu-stats">📊 Stats</button>
         <button id="menu-settings">⚙️ Settings</button>
-        <button id="menu-about">ℹ️ About</button>
     </div>
 
     <!-- Per-book context menu (right-click on desktop, long-press on touch).
@@ -753,63 +759,6 @@
                     Mark as Finished
                 </button>
             </div>
-        </div>
-    </div>
-
-    <!-- Settings overlay -->
-    <div class="overlay settings-overlay" id="settings-overlay">
-        <div class="overlay-header">
-            <div class="overlay-header-row">
-                <button class="icon-btn" onclick="closeSettings()" title="Back">←</button>
-                <div class="overlay-title">Settings</div>
-            </div>
-        </div>
-        <div class="overlay-list">
-            <!-- Display section -->
-            <div class="setting-section">Display</div>
-            <div class="setting-row">
-                <span class="setting-row-label">Keep screen awake while reading</span>
-                <label class="toggle-switch" title="Keep screen on">
-                    <input type="checkbox" id="setting-keep-awake">
-                    <span class="toggle-track"><span class="toggle-thumb"></span></span>
-                </label>
-            </div>
-
-            <!-- Reading section — page-time sample thresholds for the
-                 reader's WPM / time-remaining metrics. Samples outside this
-                 window are discarded as accidental swipes or phone-down time. -->
-            <div class="setting-section">Reading</div>
-            <div class="setting-row">
-                <span class="setting-row-label">Minimum seconds per page<br>
-                    <span class="setting-hint" style="margin:0;">Faster page turns are ignored (accidental swipes).</span>
-                </span>
-                <input type="number" id="setting-reading-min-sec" min="1" max="3600" step="1"
-                       style="width:80px;padding:8px;background:#2a2a2a;border:none;border-radius:8px;color:#fff;font-size:14px;text-align:right;">
-            </div>
-            <div class="setting-row">
-                <span class="setting-row-label">Maximum seconds per page<br>
-                    <span class="setting-hint" style="margin:0;">Longer pauses are ignored (phone put down).</span>
-                </span>
-                <input type="number" id="setting-reading-max-sec" min="1" max="3600" step="1"
-                       style="width:80px;padding:8px;background:#2a2a2a;border:none;border-radius:8px;color:#fff;font-size:14px;text-align:right;">
-            </div>
-
-            <!-- Lookup URLs section -->
-            <div class="setting-section">Lookup URLs</div>
-            <div class="setting-url-row">
-                <label class="setting-url-label" for="setting-dict-url">Dictionary URL pattern</label>
-                <input type="text" id="setting-dict-url"
-                       placeholder="https://www.merriam-webster.com/dictionary/{word}">
-                <div class="setting-hint">Use <code>{word}</code> where the highlighted text goes.</div>
-            </div>
-            <div class="setting-url-row">
-                <label class="setting-url-label" for="setting-wiki-url">Wiki / fandom URL pattern</label>
-                <input type="text" id="setting-wiki-url"
-                       placeholder="https://en.wikipedia.org/wiki/Special:Search?search={word}">
-                <div class="setting-hint">Use <code>{word}</code> as the placeholder. Per-fandom wikis work — e.g. <code>https://redrising.fandom.com/wiki/Special:Search?query={word}</code></div>
-            </div>
-
-            <button class="setting-save-btn" onclick="saveSettings()">Save Settings</button>
         </div>
     </div>
 
@@ -2256,13 +2205,10 @@
             }
         });
 
-        // ---------- GreatReads (vendored library/TBR app, served same-origin) ----------
-        document.getElementById('menu-greatreads').addEventListener('click', () => {
-            menuPopup.classList.remove('open');
-            window.location.href = '/greatreads/';
-        });
-
-        // ---------- Highlights & Bookmarks overlay ----------
+        // ---------- Unified menu wiring ----------
+        // Highlights/Bookmarks open in-page overlays; everything else navigates.
+        // The GreatReads pages are served same-origin under /greatreads/ via the
+        // proxy, so plain location.href works in both the browser and the WebView.
         document.getElementById('menu-highlights').addEventListener('click', () => {
             menuPopup.classList.remove('open');
             openOverlay('highlight');
@@ -2271,75 +2217,28 @@
             menuPopup.classList.remove('open');
             openOverlay('bookmark');
         });
-        document.getElementById('menu-settings').addEventListener('click', () => {
-            menuPopup.classList.remove('open');
-            openSettings();
-        });
-        document.getElementById('menu-about').addEventListener('click', () => {
-            menuPopup.classList.remove('open');
-            window.location.href = '/about.html';
+        const MENU_NAV = {
+            'menu-home':     '/',
+            'menu-tbr':      '/greatreads/tbr',
+            'menu-journal':  '/greatreads/journal',
+            'menu-library':  '/greatreads/library',
+            'menu-books':    '/greatreads/books',
+            'menu-stats':    '/greatreads/stats',
+            'menu-settings': '/greatreads/settings',
+        };
+        Object.entries(MENU_NAV).forEach(([id, href]) => {
+            document.getElementById(id).addEventListener('click', () => {
+                menuPopup.classList.remove('open');
+                window.location.href = href;
+            });
         });
 
-        // ---------- Settings overlay ----------
-        const DICT_KEY = 'ereader.lookup.dict';
-        const WIKI_KEY = 'ereader.lookup.wiki';
-        const DICT_DEFAULT = 'https://www.merriam-webster.com/dictionary/{word}';
-        const WIKI_DEFAULT = 'https://en.wikipedia.org/wiki/Special:Search?search={word}';
+        // ---------- Keep-awake setting ----------
+        // Reader settings (keep-awake, page-time thresholds, lookup URLs) now live
+        // on the consolidated GreatReads Settings page, which persists them to these
+        // same localStorage keys (same origin via the /greatreads/ proxy). The
+        // library page only needs to READ keep-awake to honour it while browsing.
         const KEEP_AWAKE_KEY = 'ereader.settings.keepAwake';
-        // Page-sample thresholds mirrored by reader.html — same keys, same
-        // defaults. The reader reads these on init; we only need to write.
-        const READING_MIN_KEY = 'ereader.settings.readingMinSec';
-        const READING_MAX_KEY = 'ereader.settings.readingMaxSec';
-        const READING_MIN_DEFAULT = 10;
-        const READING_MAX_DEFAULT = 120;
-
-        function openSettings() {
-            // Populate fields from localStorage
-            document.getElementById('setting-keep-awake').checked =
-                localStorage.getItem(KEEP_AWAKE_KEY) === '1';
-            document.getElementById('setting-dict-url').value =
-                localStorage.getItem(DICT_KEY) || '';
-            document.getElementById('setting-wiki-url').value =
-                localStorage.getItem(WIKI_KEY) || '';
-            const mn = parseInt(localStorage.getItem(READING_MIN_KEY), 10);
-            const mx = parseInt(localStorage.getItem(READING_MAX_KEY), 10);
-            document.getElementById('setting-reading-min-sec').value =
-                (Number.isFinite(mn) && mn > 0) ? mn : READING_MIN_DEFAULT;
-            document.getElementById('setting-reading-max-sec').value =
-                (Number.isFinite(mx) && mx > 0) ? mx : READING_MAX_DEFAULT;
-            document.getElementById('settings-overlay').classList.add('open');
-        }
-        function closeSettings() {
-            document.getElementById('settings-overlay').classList.remove('open');
-        }
-        function saveSettings() {
-            // Keep awake toggle — save immediately
-            const keepAwake = document.getElementById('setting-keep-awake').checked;
-            localStorage.setItem(KEEP_AWAKE_KEY, keepAwake ? '1' : '0');
-            // Lookup URLs — save (or reset to default if blank)
-            const dict = document.getElementById('setting-dict-url').value.trim() || DICT_DEFAULT;
-            const wiki = document.getElementById('setting-wiki-url').value.trim() || WIKI_DEFAULT;
-            localStorage.setItem(DICT_KEY, dict);
-            localStorage.setItem(WIKI_KEY, wiki);
-            // Reading thresholds — clamp to a sane range, fall back to defaults
-            // on garbage input. min must be < max or the filter rejects every
-            // sample, so enforce that here too.
-            let mn = parseInt(document.getElementById('setting-reading-min-sec').value, 10);
-            let mx = parseInt(document.getElementById('setting-reading-max-sec').value, 10);
-            if (!Number.isFinite(mn) || mn < 1)  mn = READING_MIN_DEFAULT;
-            if (!Number.isFinite(mx) || mx < 1)  mx = READING_MAX_DEFAULT;
-            if (mn >= mx) { mn = READING_MIN_DEFAULT; mx = READING_MAX_DEFAULT; }
-            localStorage.setItem(READING_MIN_KEY, String(mn));
-            localStorage.setItem(READING_MAX_KEY, String(mx));
-            closeSettings();
-        }
-        // Auto-save the toggle the instant it's flipped (no need to hit Save for that)
-        // and apply it immediately so the user sees the effect without having to
-        // open a book first.
-        document.getElementById('setting-keep-awake').addEventListener('change', (e) => {
-            localStorage.setItem(KEEP_AWAKE_KEY, e.target.checked ? '1' : '0');
-            applyWakeLock();
-        });
 
         // ---------- Screen wake lock ----------
         // Mirrors the logic in reader.html so the library page also honours the
@@ -2501,6 +2400,16 @@
         // any in-progress book that wouldn't be in the first page yet gets
         // prepended to the grid (and progress bars update) right away.
         ensureProgressBooksLoaded();
+
+        // Deep-link entry for the unified menu: open the Highlights/Bookmarks
+        // overlay directly when arriving from a GreatReads navbar link
+        // (e.g. /?view=highlights). Lets those menu items work from any
+        // GreatReads page, not just the home grid.
+        (function () {
+            const view = new URLSearchParams(location.search).get('view');
+            if (view === 'highlights') openOverlay('highlight');
+            else if (view === 'bookmarks') openOverlay('bookmark');
+        })();
     </script>
 </body>
 </html>

@@ -50,7 +50,7 @@
     {% if current_user %}
     <nav class="navbar navbar-expand-lg navbar-dark bookish-header">
         <div class="container">
-            <a class="navbar-brand bookish-brand" href="{{ url_for('root') }}">
+            <a class="navbar-brand bookish-brand" href="/">
                 <i class="fas fa-book-open me-2"></i>
                 <span class="brand-text">GreatReads</span>
             </a>
@@ -61,10 +61,25 @@
 
             <div class="collapse navbar-collapse" id="navbarNav">
                 <ul class="navbar-nav ms-auto">
+                    <!-- Reader-side destinations (live in Ereader, served same-origin
+                         under / via the proxy). Home is THE home; Highlights/Bookmarks
+                         deep-link into the Ereader overlays with ?view=. -->
                     <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="{{ url_for('root') }}">
+                        <a class="nav-link bookish-nav-link" href="/">
                             <i class="fas fa-home"></i>
                             <span class="nav-text">Home</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link bookish-nav-link" href="/?view=highlights">
+                            <i class="fas fa-highlighter"></i>
+                            <span class="nav-text">Highlights</span>
+                        </a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link bookish-nav-link" href="/?view=bookmarks">
+                            <i class="fas fa-bookmark"></i>
+                            <span class="nav-text">Bookmarks</span>
                         </a>
                     </li>
                     <li class="nav-item">
@@ -102,18 +117,6 @@
                             <i class="fas fa-cog"></i>
                             <span class="nav-text">Settings</span>
                         </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="#" onclick="logout(); return false;">
-                            <i class="fas fa-sign-out-alt"></i>
-                            <span class="nav-text">Logout</span>
-                        </a>
-                    </li>
-                    <li class="nav-item d-none d-lg-flex align-items-center ps-2">
-                        <span id="header-clock" class="text-white-50 small" style="font-variant-numeric: tabular-nums; min-width: 7ch; text-align: right; font-size: 0.75rem; line-height: 1.2;">
-                            <span id="header-clock-time">--:-- --</span>
-                            <br><span class="text-white-25" style="font-size: 0.65rem;">MT</span>
-                        </span>
                     </li>
                 </ul>
             </div>

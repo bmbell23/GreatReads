@@ -217,6 +217,62 @@
             </div>
         </div>
 
+        <!-- Reader Card (Ereader reader settings — stored in this browser/device,
+             shared same-origin with the reader via localStorage) -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-book-open me-2"></i>
+                    Reader
+                </h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-4">
+                    Settings for the EPUB / PDF reader. Stored on this device.
+                </p>
+
+                <form id="reader-settings-form">
+                    <div class="form-check form-switch mb-4">
+                        <input class="form-check-input" type="checkbox" id="readerKeepAwake">
+                        <label class="form-check-label" for="readerKeepAwake">
+                            Keep screen awake while reading
+                        </label>
+                    </div>
+
+                    <div class="row">
+                        <div class="col-sm-6 mb-3">
+                            <label for="readerMinSec" class="form-label">Minimum seconds per page</label>
+                            <input type="number" class="form-control" id="readerMinSec" min="1" max="3600" step="1">
+                            <div class="form-text">Faster page turns are ignored (accidental swipes).</div>
+                        </div>
+                        <div class="col-sm-6 mb-3">
+                            <label for="readerMaxSec" class="form-label">Maximum seconds per page</label>
+                            <input type="number" class="form-control" id="readerMaxSec" min="1" max="3600" step="1">
+                            <div class="form-text">Longer pauses are ignored (phone put down).</div>
+                        </div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="readerDictUrl" class="form-label">Dictionary URL pattern</label>
+                        <input type="text" class="form-control" id="readerDictUrl"
+                               placeholder="https://www.merriam-webster.com/dictionary/{word}">
+                        <div class="form-text">Use <code>{word}</code> where the highlighted text goes.</div>
+                    </div>
+
+                    <div class="mb-3">
+                        <label for="readerWikiUrl" class="form-label">Wiki / fandom URL pattern</label>
+                        <input type="text" class="form-control" id="readerWikiUrl"
+                               placeholder="https://en.wikipedia.org/wiki/Special:Search?search={word}">
+                        <div class="form-text">Use <code>{word}</code> as the placeholder. Per-fandom wikis work too.</div>
+                    </div>
+
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-2"></i>Save Reader Settings
+                    </button>
+                </form>
+            </div>
+        </div>
+
         <!-- Change Password Card -->
         <div class="card mb-4">
             <div class="card-header">
@@ -282,6 +338,112 @@
                     Note: These settings only affect future estimates. Existing readings with manual
                     overrides will not be changed.
                 </p>
+            </div>
+        </div>
+
+        <!-- About Card (folded in from the former standalone Ereader About page) -->
+        <div class="card mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0">
+                    <i class="fas fa-info-circle me-2"></i>
+                    About
+                </h5>
+                <button class="btn btn-sm btn-outline-secondary" type="button"
+                        data-bs-toggle="collapse" data-bs-target="#about-body"
+                        aria-expanded="false" aria-controls="about-body">
+                    Details
+                </button>
+            </div>
+            <div class="card-body">
+                <div class="mb-3">
+                    <div class="d-flex justify-content-between border-bottom py-1">
+                        <span class="text-muted">App version</span>
+                        <span class="font-monospace" id="about-version">…</span>
+                    </div>
+                    <div class="d-flex justify-content-between border-bottom py-1">
+                        <span class="text-muted">Web build</span>
+                        <span class="font-monospace" id="about-build">…</span>
+                    </div>
+                    <div class="d-flex justify-content-between py-1">
+                        <span class="text-muted">Reader backend</span>
+                        <span class="font-monospace">100.69.184.113:8091</span>
+                    </div>
+                </div>
+                <p class="mb-0">
+                    A minimal Calibre-backed EPUB / PDF reader. Source of truth for the book
+                    library is a Calibre Content Server; this app is a read-only client that adds
+                    highlights, bookmarks, progress sync, and a reading-speed estimator.
+                </p>
+
+                <div class="collapse mt-3" id="about-body">
+                    <h6 class="text-muted text-uppercase mt-3">Reading Speed</h6>
+                    <p>The metrics row at the bottom of the EPUB reader (WPM, average seconds per
+                    page, chapter / book time remaining) is driven by a rolling buffer of recent
+                    page-turn samples. Here's what's in that buffer and how it's filtered.</p>
+
+                    <p><strong>What gets measured:</strong> each page turn records
+                    <code>{ ms: time on page, words: words-per-page }</code>. <code>words</code>
+                    comes from Calibre's <code>#word_count</code> column divided by the current
+                    paginated page count; if a book has no word count the reader falls back to
+                    averaging raw per-page time. The per-page timer pauses when the WebView is
+                    hidden, so background time isn't charged to the page.</p>
+
+                    <p><strong>Stage 1 — absolute window (insert-time):</strong> any sample with
+                    <code>ms</code> outside the Minimum/Maximum seconds-per-page window configured
+                    above is dropped at the page turn and never enters the buffer. This catches
+                    accidental swipes and phone-down time.</p>
+
+                    <p><strong>Stage 2 — MAD-based outlier rejection (compute-time):</strong> at
+                    every metrics tick, buffered samples are filtered against the buffer's own
+                    distribution with a robust modified-z-score test:</p>
+                    <pre class="bg-dark text-info p-2 rounded small mb-2">M = 0.6745 · (x − median) / MAD
+where MAD = median(|xᵢ − median|)
+
+Reject the sample if  |M| &gt; 3.5</pre>
+                    <p>This is the Iglewicz &amp; Hoaglin test (threshold ≈ p &lt; 0.001). MAD is
+                    used instead of standard deviation because the deviation is itself inflated by
+                    the outliers you're trying to detect — the median and MAD barely move when a
+                    single anomalous value appears. The stage-2 filter is a pass-through until the
+                    buffer holds at least 5 samples.</p>
+
+                    <p><strong>Why ms-per-word, not raw ms:</strong> when a word count is
+                    available Stage 2 filters on <code>ms / words</code>, so toggling dual-page
+                    mode or changing font size (both of which change words-per-page) doesn't make
+                    steady reading look anomalous. The displayed average projects ms-per-word back
+                    to ms-per-page using the <em>current</em> words-per-page.</p>
+
+                    <p><strong>Buffer mechanics:</strong> FIFO ring of the last 30 samples
+                    (~15–30 min of reading), persisted in <code>progress.json</code> per book so a
+                    fresh install resumes your calibrated speed. EPUB only — PDFs don't populate
+                    this.</p>
+
+                    <p class="mb-0"><strong>Derived metrics:</strong></p>
+                    <pre class="bg-dark text-info p-2 rounded small mb-0">WPM            = 60000 / msPerWord
+avg sec/page   = msPerWord × words-per-page  (or raw mean ms)
+book remain    = (totalPages − pageIndex) × avg
+chapter remain = (chapterEnd − pageIndex) × avg</pre>
+                </div>
+            </div>
+        </div>
+
+        <!-- Account Card (clock + logout, moved out of the top navbar) -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-user-circle me-2"></i>
+                    Account
+                </h5>
+            </div>
+            <div class="card-body">
+                <div class="d-flex align-items-center justify-content-between mb-3">
+                    <span class="text-muted">Current time (Mountain Time)</span>
+                    <span id="header-clock" class="font-monospace" style="font-variant-numeric: tabular-nums;">
+                        <span id="header-clock-time">--:-- --</span> <span class="text-muted">MT</span>
+                    </span>
+                </div>
+                <button type="button" class="btn btn-outline-danger" onclick="logout()">
+                    <i class="fas fa-sign-out-alt me-2"></i>Logout
+                </button>
             </div>
         </div>
     </div>
@@ -572,6 +734,81 @@ document.getElementById('password-form').addEventListener('submit', async functi
         document.getElementById('password-error-message').style.display = 'block';
     }
 });
+
+// ---------- Ereader reader settings ----------
+// These persist to localStorage and are read directly by the reader (reader.html)
+// on load. GreatReads is served same-origin through the /greatreads/ proxy, so the
+// keys written here are the same storage the reader sees.
+(function () {
+    const DICT_KEY = 'ereader.lookup.dict';
+    const WIKI_KEY = 'ereader.lookup.wiki';
+    const KEEP_AWAKE_KEY = 'ereader.settings.keepAwake';
+    const READING_MIN_KEY = 'ereader.settings.readingMinSec';
+    const READING_MAX_KEY = 'ereader.settings.readingMaxSec';
+    const DICT_DEFAULT = 'https://www.merriam-webster.com/dictionary/{word}';
+    const WIKI_DEFAULT = 'https://en.wikipedia.org/wiki/Special:Search?search={word}';
+    const READING_MIN_DEFAULT = 10;
+    const READING_MAX_DEFAULT = 120;
+
+    const form = document.getElementById('reader-settings-form');
+    if (!form) return;
+
+    function load() {
+        document.getElementById('readerKeepAwake').checked =
+            localStorage.getItem(KEEP_AWAKE_KEY) === '1';
+        document.getElementById('readerDictUrl').value = localStorage.getItem(DICT_KEY) || '';
+        document.getElementById('readerWikiUrl').value = localStorage.getItem(WIKI_KEY) || '';
+        const mn = parseInt(localStorage.getItem(READING_MIN_KEY), 10);
+        const mx = parseInt(localStorage.getItem(READING_MAX_KEY), 10);
+        document.getElementById('readerMinSec').value =
+            (Number.isFinite(mn) && mn > 0) ? mn : READING_MIN_DEFAULT;
+        document.getElementById('readerMaxSec').value =
+            (Number.isFinite(mx) && mx > 0) ? mx : READING_MAX_DEFAULT;
+    }
+
+    form.addEventListener('submit', function (e) {
+        e.preventDefault();
+        localStorage.setItem(KEEP_AWAKE_KEY,
+            document.getElementById('readerKeepAwake').checked ? '1' : '0');
+        const dict = document.getElementById('readerDictUrl').value.trim() || DICT_DEFAULT;
+        const wiki = document.getElementById('readerWikiUrl').value.trim() || WIKI_DEFAULT;
+        localStorage.setItem(DICT_KEY, dict);
+        localStorage.setItem(WIKI_KEY, wiki);
+        // Clamp to a sane range; min must be < max or the reader's filter rejects
+        // every sample, so enforce that here too.
+        let mn = parseInt(document.getElementById('readerMinSec').value, 10);
+        let mx = parseInt(document.getElementById('readerMaxSec').value, 10);
+        if (!Number.isFinite(mn) || mn < 1) mn = READING_MIN_DEFAULT;
+        if (!Number.isFinite(mx) || mx < 1) mx = READING_MAX_DEFAULT;
+        if (mn >= mx) { mn = READING_MIN_DEFAULT; mx = READING_MAX_DEFAULT; }
+        localStorage.setItem(READING_MIN_KEY, String(mn));
+        localStorage.setItem(READING_MAX_KEY, String(mx));
+        document.getElementById('readerMinSec').value = mn;
+        document.getElementById('readerMaxSec').value = mx;
+        if (window.GreatReads && GreatReads.showToast) {
+            GreatReads.showToast('Reader settings saved!', 'success');
+        }
+    });
+
+    load();
+})();
+
+// ---------- About: live version / build meta from the Ereader backend ----------
+(function () {
+    const API = 'http://100.69.184.113:8091';
+    const vEl = document.getElementById('about-version');
+    const bEl = document.getElementById('about-build');
+    if (!vEl || !bEl) return;
+
+    fetch(`${API}/api/version`, { cache: 'no-store' })
+        .then(r => r.json())
+        .then(v => { vEl.textContent = (v && v.version) ? v.version : '?'; })
+        .catch(() => { vEl.textContent = '?'; });
+    fetch(`${API}/api/build-stamp`, { cache: 'no-store' })
+        .then(r => r.json())
+        .then(b => { bEl.textContent = (b && b.stamp) ? b.stamp : '?'; })
+        .catch(() => { bEl.textContent = '?'; });
+})();
 </script>
 {% endblock %}
 
