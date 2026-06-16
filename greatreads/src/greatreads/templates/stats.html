@@ -8,19 +8,14 @@
 {% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="page-header-bookish mb-4">
-            <div class="page-header-icon">
-                <i class="fas fa-chart-bar"></i>
-            </div>
-            <div class="page-header-content">
-                <h1 class="page-header-title">Reading Statistics</h1>
-                <p class="page-header-subtitle">Insights into your reading journey</p>
-            </div>
-        </div>
+<!-- Header: title + icon on one row (matches Library/TBR/Journal) -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-chart-bar"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Reading Statistics</h1></div>
     </div>
 </div>
+<style>.page-header-bookish { padding-top: 0; padding-bottom: 0; }</style>
 
 <!-- Filters -->
 <div class="row mb-4">

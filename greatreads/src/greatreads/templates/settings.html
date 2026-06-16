@@ -3,19 +3,14 @@
 {% block title %}Settings - GreatReads{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="page-header-bookish mb-4">
-            <div class="page-header-icon">
-                <i class="fas fa-cog"></i>
-            </div>
-            <div class="page-header-content">
-                <h1 class="page-header-title">Settings</h1>
-                <p class="page-header-subtitle">Configure your reading preferences</p>
-            </div>
-        </div>
+<!-- Header: title + icon on one row (matches Library/TBR/Journal) -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-cog"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Settings</h1></div>
     </div>
 </div>
+<style>.page-header-bookish { padding-top: 0; padding-bottom: 0; }</style>
 
 <div class="row">
     <div class="col-lg-8">
@@ -328,6 +323,20 @@
                 <a href="{{ url_for('books_page') }}" class="btn btn-outline-primary">
                     <i class="fas fa-arrow-up-right-from-square me-2"></i>Open Books manager
                 </a>
+
+                <hr class="my-3">
+                <p class="text-muted mb-2">
+                    <strong>Import</strong> — your library auto-syncs from Calibre and Audiobookshelf
+                    every few minutes, so you rarely need this. Use it to pull in new items immediately.
+                </p>
+                <div class="d-flex gap-2 flex-wrap">
+                    <a href="{{ url_for('library_page') }}?import=calibre" class="btn btn-outline-secondary">
+                        <i class="fas fa-book-open me-2 text-primary"></i>Import from Calibre
+                    </a>
+                    <a href="{{ url_for('library_page') }}?import=abs" class="btn btn-outline-secondary">
+                        <i class="fas fa-headphones me-2 text-success"></i>Import from Audiobookshelf
+                    </a>
+                </div>
             </div>
         </div>
 

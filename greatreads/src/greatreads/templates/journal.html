@@ -10,127 +10,90 @@
 {% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="page-header-bookish mb-4">
-            <div class="page-header-icon">
-                <i class="fas fa-book-reader"></i>
-            </div>
-            <div class="page-header-content">
-                <h1 class="page-header-title mb-0">Reading Journal</h1>
-            </div>
-            <div class="ms-auto">
-                <button class="btn btn-primary" onclick="showReportModal()">
-                    <i class="fas fa-chart-bar me-2"></i>Generate Report
-                </button>
-            </div>
-        </div>
+<!-- Header: title + actions on one row -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-book-reader"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Reading Journal</h1></div>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-primary" onclick="showReportModal()">
+            <i class="fas fa-chart-bar me-1"></i>Generate Report
+        </button>
     </div>
 </div>
 
-<!-- Search Bar -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body py-2">
-                <div class="d-flex gap-2 align-items-end flex-wrap">
-                    <div class="flex-grow-1" style="min-width: 200px;">
-                        <label for="searchInput" class="form-label mb-1 small">Search</label>
-                        <input type="text" class="form-control" id="searchInput" placeholder="Search books by title, author, or series...">
-                    </div>
-                    <div>
-                        <label for="sortSelect" class="form-label mb-1 small">Sort</label>
-                        <select class="form-select" id="sortSelect">
-                            <option value="date_finished">Date Finished</option>
-                            <option value="title">Title</option>
-                            <option value="author">Author</option>
-                            <option value="series">Series</option>
-                            <option value="word_count">Word Count</option>
-                            <option value="page_count">Page Count</option>
-                        </select>
-                    </div>
-                    <button class="btn btn-outline-secondary btn-sm px-2" onclick="clearFilters()" title="Clear all filters">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-            </div>
-        </div>
+<!-- Search + Sort on one row (no labels; clear is a floating X inside search) -->
+<div class="d-flex gap-2 align-items-center mb-2">
+    <div class="position-relative flex-grow-1">
+        <input type="text" class="form-control" id="searchInput" autocomplete="off"
+               placeholder="Search by title, author, or series…">
+        <button type="button" class="lib-search-clear" id="searchClear" onclick="clearFilters()"
+                title="Clear" aria-label="Clear" style="display:none;">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+    <div class="dropdown flex-shrink-0">
+        <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Sort">
+            <i class="fas fa-sort-amount-up me-1" id="sortDirIcon"></i><span id="sortLabel">Date Finished</span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end" id="sortMenu"></ul>
     </div>
 </div>
 
-<!-- Compact Statistics -->
-<div class="row mb-3">
-    <div class="col-12">
-        <div class="card compact-stats">
-            <div class="card-body py-3">
-                <div class="row text-center">
-                    <!-- Status filters (left on mobile) -->
-                    <div class="col-6 col-md-2 order-0">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="read-status"
-                             data-filter-value="all"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-book text-primary mb-1"></i>
-                            <small class="text-muted">Total</small>
-                            <strong class="text-primary" id="totalBooks">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-2 order-md-1">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="year-filter"
-                             data-filter-value="2025"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-calendar text-success mb-1"></i>
-                            <small class="text-muted">2025</small>
-                            <strong class="text-success" id="year2025Count">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-4 order-md-2">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="year-filter"
-                             data-filter-value="2024"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-calendar text-info mb-1"></i>
-                            <small class="text-muted">2024</small>
-                            <strong class="text-info" id="year2024Count">-</strong>
-                        </div>
-                    </div>
-                    <!-- Media filters (right on mobile) -->
-                    <div class="col-6 col-md-2 order-1 order-md-3">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="ebook"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-tablet-alt mb-1" style="color: #0066CC;"></i>
-                            <small class="text-muted">Ebook</small>
-                            <strong id="ebookCount" style="color: #0066CC;">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-3 order-md-4">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="physical"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-book mb-1" style="color: #6B4BA3;"></i>
-                            <small class="text-muted">Physical</small>
-                            <strong id="physicalCount" style="color: #6B4BA3;">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-5 order-md-5">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="audio"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-headphones mb-1" style="color: #FF6600;"></i>
-                            <small class="text-muted">Audio</small>
-                            <strong id="audioCount" style="color: #FF6600;">-</strong>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+<!-- Stat / format filter chips (one tight row) -->
+<div class="d-flex flex-nowrap justify-content-center align-items-center stat-chips mb-3">
+    <div class="stat-chip stat-chip-static text-primary" title="Total entries">
+        <i class="fas fa-book"></i><strong id="totalBooks">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#0066CC;" title="Ebook"
+         data-filter-type="media-type" data-filter-value="ebook" onclick="toggleFilter(this)">
+        <i class="fas fa-tablet-alt"></i><strong id="ebookCount">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#6B4BA3;" title="Physical"
+         data-filter-type="media-type" data-filter-value="physical" onclick="toggleFilter(this)">
+        <i class="fas fa-book"></i><strong id="physicalCount">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#FF6600;" title="Audio"
+         data-filter-type="media-type" data-filter-value="audio" onclick="toggleFilter(this)">
+        <i class="fas fa-headphones"></i><strong id="audioCount">-</strong>
     </div>
 </div>
+
+<style>
+/* ---- Compact top area (mirrors the Library / TBR pages) ---- */
+.page-header-bookish { padding-top: 0; padding-bottom: 0; }
+
+.stat-chips { gap: 6px; row-gap: 6px; }
+.stat-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 999px;
+    background: #f1f3f5; cursor: pointer; user-select: none;
+    border: 2px solid transparent; transition: all 0.12s; line-height: 1;
+}
+.stat-chip i { font-size: 0.9rem; }
+.stat-chip strong { font-size: 0.9rem; }
+.stat-chip:hover { background: #e9ecef; }
+.stat-chip.active { border-color: currentColor; background: #fff; }
+/* Total is a count, not a filter — no pointer / hover. */
+.stat-chip-static { cursor: default; }
+.stat-chip-static:hover { background: #f1f3f5; }
+
+#searchInput { padding-right: 38px; }
+.lib-search-clear {
+    position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+    width: 30px; height: 30px; border: none; background: transparent;
+    color: #adb5bd; cursor: pointer; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+}
+.lib-search-clear:hover { color: #6c757d; background: #f1f3f5; }
+
+@media (max-width: 575.98px) {
+    .stat-chips { gap: 4px; }
+    .stat-chip { padding: 3px 6px; gap: 3px; }
+    .stat-chip i, .stat-chip strong { font-size: 0.78rem; }
+}
+</style>
 
 <div class="row">
     <div class="col-12">
@@ -142,36 +105,6 @@
 
         <!-- Journal List -->
         <div id="journal-container" class="d-none">
-            <div class="alert alert-info">
-                <i class="fas fa-info-circle me-2"></i>
-                <strong>Click on any card</strong> to view or edit reading details.
-            </div>
-
-            <!-- Multi-select toolbar -->
-            <div id="multi-select-toolbar" class="alert alert-warning d-none mb-3">
-                <div class="d-flex justify-content-between align-items-center">
-                    <div>
-                        <i class="fas fa-check-square me-2"></i>
-                        <strong><span id="selected-count">0</span> selected</strong>
-                    </div>
-                    <div>
-                        <button class="btn btn-sm btn-outline-secondary me-2" onclick="toggleSelectMode()">
-                            <i class="fas fa-times me-1"></i>Cancel
-                        </button>
-                        <button class="btn btn-sm btn-danger" onclick="deleteSelectedReadings()">
-                            <i class="fas fa-trash me-1"></i>Delete Selected
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Select mode toggle button -->
-            <div class="mb-3">
-                <button id="select-mode-btn" class="btn btn-sm btn-outline-primary" onclick="toggleSelectMode()">
-                    <i class="fas fa-check-square me-1"></i>Select Multiple
-                </button>
-            </div>
-
             <div id="journal-list">
                 <!-- Reading cards will be inserted here -->
             </div>
@@ -509,9 +442,49 @@ let allReadings = [];
 let filteredReadings = [];
 let activeFilters = {
     readStatus: null,
-    mediaType: null,
-    yearFilter: null
+    mediaType: null
 };
+
+// Sort state — one control handles field + direction (no separate reverse button).
+let sortAscending = false;   // default: newest finished first
+let currentSort = 'date_finished';
+const SORT_FIELDS = [
+    ['date_finished', 'Date Finished'],
+    ['author', 'Author'],
+    ['page_count', 'Page Count'],
+    ['series', 'Series'],
+    ['title', 'Title'],
+    ['word_count', 'Word Count'],
+];
+
+function getDefaultSortDirection(sortField) {
+    // Fields that should default to descending (high to low / newest first)
+    const descendingDefaults = ['date_finished', 'word_count', 'page_count'];
+    return !descendingDefaults.includes(sortField);
+}
+
+// Pick a field (or flip direction if it's already active), then re-render + sort.
+function selectSort(field) {
+    if (currentSort === field) sortAscending = !sortAscending;
+    else { currentSort = field; sortAscending = getDefaultSortDirection(field); }
+    renderSortUI();
+    applyFilters();
+}
+
+// Reflect the current field + direction on the button and in the menu (a caret
+// marks the active field and which way it's sorted).
+function renderSortUI() {
+    const cur = SORT_FIELDS.find(f => f[0] === currentSort) || SORT_FIELDS[0];
+    document.getElementById('sortLabel').textContent = cur[1];
+    document.getElementById('sortDirIcon').className =
+        (sortAscending ? 'fas fa-sort-amount-down-alt' : 'fas fa-sort-amount-up') + ' me-1';
+    document.getElementById('sortMenu').innerHTML = SORT_FIELDS.map(([val, label]) => {
+        const active = val === currentSort;
+        const caret = active ? `<i class="fas ${sortAscending ? 'fa-caret-up' : 'fa-caret-down'} ms-3"></i>` : '';
+        return `<li><a class="dropdown-item d-flex justify-content-between align-items-center ${active ? 'active' : ''}"
+            href="#" data-sort="${val}">${label}${caret}</a></li>`;
+    }).join('');
+}
 
 // Fuzzy search function
 function fuzzyMatch(text, search) {
@@ -536,8 +509,7 @@ function toggleFilter(element) {
     const filterValue = element.dataset.filterValue;
 
     const filterKey = filterType === 'read-status' ? 'readStatus' :
-                      filterType === 'media-type' ? 'mediaType' :
-                      filterType === 'year-filter' ? 'yearFilter' : filterType;
+                      filterType === 'media-type' ? 'mediaType' : filterType;
 
     if (activeFilters[filterKey] === filterValue) {
         activeFilters[filterKey] = null;
@@ -556,8 +528,6 @@ function toggleFilter(element) {
 // Apply filters and sorting
 function applyFilters() {
     const search = document.getElementById('searchInput').value.toLowerCase().trim();
-    const sortSelect = document.getElementById('sortSelect');
-    const sort = sortSelect ? sortSelect.value : 'date_finished';
 
     filteredReadings = allReadings.filter(reading => {
         const book = reading.book;
@@ -574,13 +544,6 @@ function applyFilters() {
             }
         }
 
-        // Year filter
-        if (activeFilters.yearFilter) {
-            const finishedDate = new Date(reading.date_finished_actual);
-            const finishedYear = finishedDate.getFullYear();
-            if (finishedYear.toString() !== activeFilters.yearFilter) return false;
-        }
-
         // Media filter
         if (activeFilters.mediaType) {
             const mediaType = activeFilters.mediaType.charAt(0).toUpperCase() + activeFilters.mediaType.slice(1);
@@ -590,33 +553,44 @@ function applyFilters() {
         return true;
     });
 
-    // Apply sorting
+    // Apply sorting — one control manages field + direction (mirrors Library).
+    // Each case computes an ascending-base comparison; direction is applied once.
     filteredReadings.sort((a, b) => {
-        switch (sort) {
+        let result = 0;
+        switch (currentSort) {
             case 'date_finished':
-                return new Date(b.date_finished_actual) - new Date(a.date_finished_actual);
+                result = new Date(a.date_finished_actual) - new Date(b.date_finished_actual);
+                break;
             case 'title':
-                return a.book.title.localeCompare(b.book.title);
+                result = a.book.title.localeCompare(b.book.title);
+                break;
             case 'author':
-                return a.book.author_sorted.localeCompare(b.book.author_sorted);
-            case 'series':
+                result = a.book.author_sorted.localeCompare(b.book.author_sorted);
+                break;
+            case 'series': {
                 // Sort by universe, then series, then series_number
                 const aUniverse = a.book.universe || '';
                 const bUniverse = b.book.universe || '';
                 if (aUniverse !== bUniverse) {
-                    return aUniverse.localeCompare(bUniverse);
+                    result = aUniverse.localeCompare(bUniverse);
+                } else if ((a.book.series || '') !== (b.book.series || '')) {
+                    result = (a.book.series || '').localeCompare(b.book.series || '');
+                } else {
+                    result = (a.book.series_number || 0) - (b.book.series_number || 0);
                 }
-                if (a.book.series !== b.book.series) {
-                    return (a.book.series || '').localeCompare(b.book.series || '');
-                }
-                return (a.book.series_number || 0) - (b.book.series_number || 0);
+                break;
+            }
             case 'word_count':
-                return (b.book.word_count || 0) - (a.book.word_count || 0);
+                result = (a.book.word_count || 0) - (b.book.word_count || 0);
+                break;
             case 'page_count':
-                return (b.book.page_count || 0) - (a.book.page_count || 0);
+                result = (a.book.page_count || 0) - (b.book.page_count || 0);
+                break;
             default:
-                return new Date(b.date_finished_actual) - new Date(a.date_finished_actual);
+                result = new Date(a.date_finished_actual) - new Date(b.date_finished_actual);
+                break;
         }
+        return sortAscending ? result : -result;
     });
 
     displayReadings(filteredReadings);
@@ -625,9 +599,10 @@ function applyFilters() {
 // Clear filters
 function clearFilters() {
     document.getElementById('searchInput').value = '';
+    const x = document.getElementById('searchClear');
+    if (x) x.style.display = 'none';
     activeFilters.readStatus = null;
     activeFilters.mediaType = null;
-    activeFilters.yearFilter = null;
 
     document.querySelectorAll('.stat-filter').forEach(el => {
         el.classList.remove('active');
@@ -639,15 +614,11 @@ function clearFilters() {
 // Update stats
 function updateStats(readings) {
     const total = readings.length;
-    const year2025 = readings.filter(r => new Date(r.date_finished_actual).getFullYear() === 2025).length;
-    const year2024 = readings.filter(r => new Date(r.date_finished_actual).getFullYear() === 2024).length;
     const ebook = readings.filter(r => r.media === 'Ebook').length;
     const physical = readings.filter(r => r.media === 'Physical').length;
     const audio = readings.filter(r => r.media === 'Audio').length;
 
     document.getElementById('totalBooks').textContent = total;
-    document.getElementById('year2025Count').textContent = year2025;
-    document.getElementById('year2024Count').textContent = year2024;
     document.getElementById('ebookCount').textContent = ebook;
     document.getElementById('physicalCount').textContent = physical;
     document.getElementById('audioCount').textContent = audio;
@@ -670,12 +641,23 @@ function debounce(func, wait) {
 document.addEventListener('DOMContentLoaded', function() {
     loadJournalReadings();
 
-    // Setup event listeners
-    document.getElementById('searchInput').addEventListener('input', debounce(applyFilters, 300));
-    const sortSelect = document.getElementById('sortSelect');
-    if (sortSelect) {
-        sortSelect.addEventListener('change', applyFilters);
-    }
+    // Search: debounced filtering + toggle the floating clear (X) icon.
+    const search = document.getElementById('searchInput');
+    const debApply = debounce(applyFilters, 300);
+    search.addEventListener('input', () => {
+        document.getElementById('searchClear').style.display = search.value ? 'flex' : 'none';
+        debApply();
+    });
+
+    // Sort dropdown: clicking a field selects it; clicking the active field flips
+    // direction (no separate reverse button).
+    document.getElementById('sortMenu').addEventListener('click', (e) => {
+        const a = e.target.closest('[data-sort]');
+        if (!a) return;
+        e.preventDefault();
+        selectSort(a.dataset.sort);
+    });
+    renderSortUI();
 });
 
 async function loadJournalReadings() {
@@ -733,13 +715,8 @@ function createReadingCard(reading, index) {
     const isReread = isReadingAReread(reading);
 
     return `
-        <div class="card reading-card ${statusClass} ${borderClass} mb-3 fade-in" data-reading-id="${reading.id}" onclick="handleCardClick(event, ${reading.id})">
+        <div class="card reading-card ${statusClass} ${borderClass} mb-3 fade-in" data-reading-id="${reading.id}" onclick="editReading(${reading.id})">
             <div class="card-body">
-                <!-- Selection checkbox (hidden by default) -->
-                <div class="form-check position-absolute" style="top: 10px; right: 10px; display: none;" data-select-checkbox>
-                    <input class="form-check-input reading-select-checkbox" type="checkbox" value="${reading.id}"
-                           onclick="event.stopPropagation(); updateSelectedCount();" style="width: 20px; height: 20px; cursor: pointer;">
-                </div>
                 <div class="row">
                     <div class="col-auto">
                         <div class="tbr-book-cover">
@@ -859,103 +836,6 @@ function editReading(readingId) {
 
 function refreshReadings() {
     loadJournalReadings();
-}
-
-// Multi-select functionality
-let selectModeActive = false;
-
-function toggleSelectMode() {
-    selectModeActive = !selectModeActive;
-    const toolbar = document.getElementById('multi-select-toolbar');
-    const selectBtn = document.getElementById('select-mode-btn');
-    const checkboxes = document.querySelectorAll('[data-select-checkbox]');
-
-    if (selectModeActive) {
-        // Show checkboxes and toolbar
-        checkboxes.forEach(cb => cb.style.display = 'block');
-        toolbar.classList.remove('d-none');
-        selectBtn.innerHTML = '<i class="fas fa-times me-1"></i>Cancel Selection';
-        selectBtn.classList.remove('btn-outline-primary');
-        selectBtn.classList.add('btn-outline-secondary');
-    } else {
-        // Hide checkboxes and toolbar, uncheck all
-        checkboxes.forEach(cb => {
-            cb.style.display = 'none';
-            cb.querySelector('input').checked = false;
-        });
-        toolbar.classList.add('d-none');
-        selectBtn.innerHTML = '<i class="fas fa-check-square me-1"></i>Select Multiple';
-        selectBtn.classList.remove('btn-outline-secondary');
-        selectBtn.classList.add('btn-outline-primary');
-        updateSelectedCount();
-    }
-}
-
-function handleCardClick(event, readingId) {
-    if (selectModeActive) {
-        // In select mode, toggle the checkbox
-        event.stopPropagation();
-        const card = event.currentTarget;
-        const checkbox = card.querySelector('.reading-select-checkbox');
-        checkbox.checked = !checkbox.checked;
-        updateSelectedCount();
-    } else {
-        // Normal mode, edit the reading
-        editReading(readingId);
-    }
-}
-
-function updateSelectedCount() {
-    const checkedBoxes = document.querySelectorAll('.reading-select-checkbox:checked');
-    document.getElementById('selected-count').textContent = checkedBoxes.length;
-}
-
-async function deleteSelectedReadings() {
-    const checkedBoxes = document.querySelectorAll('.reading-select-checkbox:checked');
-    const selectedIds = Array.from(checkedBoxes).map(cb => parseInt(cb.value));
-
-    if (selectedIds.length === 0) {
-        GreatReads.showToast('No readings selected', 'warning');
-        return;
-    }
-
-    const confirmMsg = `Are you sure you want to delete ${selectedIds.length} reading${selectedIds.length > 1 ? 's' : ''}? This action cannot be undone.`;
-    if (!confirm(confirmMsg)) {
-        return;
-    }
-
-    try {
-        GreatReads.showToast(`Deleting ${selectedIds.length} reading${selectedIds.length > 1 ? 's' : ''}...`, 'info');
-
-        // Delete each reading
-        let successCount = 0;
-        let errorCount = 0;
-
-        for (const readingId of selectedIds) {
-            try {
-                await GreatReads.apiCall(`/readings/${readingId}`, { method: 'DELETE' });
-                successCount++;
-            } catch (error) {
-                console.error(`Failed to delete reading ${readingId}:`, error);
-                errorCount++;
-            }
-        }
-
-        // Show result
-        if (errorCount === 0) {
-            GreatReads.showToast(`Successfully deleted ${successCount} reading${successCount > 1 ? 's' : ''}!`, 'success');
-        } else {
-            GreatReads.showToast(`Deleted ${successCount} reading${successCount > 1 ? 's' : ''}, ${errorCount} failed`, 'warning');
-        }
-
-        // Exit select mode and refresh
-        toggleSelectMode();
-        refreshReadings();
-
-    } catch (error) {
-        console.error('Error deleting readings:', error);
-        GreatReads.showToast('Failed to delete readings', 'error');
-    }
 }
 
 function showErrorState() {

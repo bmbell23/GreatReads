@@ -3,118 +3,61 @@
 {% block title %}Library - GreatReads{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <div class="page-header-bookish">
-                <div class="page-header-icon">
-                    <i class="fas fa-book"></i>
-                </div>
-                <div class="page-header-content">
-                    <h1 class="page-header-title mb-0">Library</h1>
-                </div>
-            </div>
-            <div class="d-flex gap-2 flex-wrap justify-content-end">
-                <a href="{{ url_for('bookshelves_page') }}" class="btn btn-outline-primary">
-                    <i class="fas fa-th-large me-1"></i>Bookshelves
-                </a>
-                <div class="dropdown">
-                    <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown">
-                        <i class="fas fa-file-import me-1"></i>Import
-                    </button>
-                    <ul class="dropdown-menu dropdown-menu-end">
-                        <li><a class="dropdown-item" href="#" onclick="openImportModal('calibre'); return false;">
-                            <i class="fas fa-book-open me-2 text-primary"></i>Import from Calibre
-                        </a></li>
-                        <li><a class="dropdown-item" href="#" onclick="openImportModal('abs'); return false;">
-                            <i class="fas fa-headphones me-2 text-success"></i>Import from Audiobookshelf
-                        </a></li>
-                    </ul>
-                </div>
-                <button class="btn btn-primary" onclick="addNewBook()">
-                    <i class="fas fa-plus me-1"></i>Add Book
-                </button>
-            </div>
-        </div>
+<!-- Header: title + actions on one row -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-book"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Library</h1></div>
+    </div>
+    <div class="d-flex gap-2">
+        <a href="{{ url_for('bookshelves_page') }}" class="btn btn-outline-primary">
+            <i class="fas fa-th-large me-1"></i>Bookshelves
+        </a>
+        <button class="btn btn-primary" onclick="addNewBook()">
+            <i class="fas fa-plus me-1"></i>Add Book
+        </button>
     </div>
 </div>
 
-<!-- Search Bar -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body py-2">
-                <div class="d-flex gap-2 align-items-end flex-wrap">
-                    <div class="flex-grow-1" style="min-width: 200px;">
-                        <label for="searchInput" class="form-label mb-1 small">Search</label>
-                        <input type="text" class="form-control" id="searchInput" placeholder="Search books by title, author, or series...">
-                    </div>
-                    <div>
-                        <label for="sortSelect" class="form-label mb-1 small">Sort</label>
-                        <div class="d-flex gap-1">
-                            <select class="form-select" id="sortSelect">
-                                <option value="title">Title</option>
-                                <option value="author" selected>Author</option>
-                                <option value="date_published">Publication Date</option>
-                                <option value="series">Series</option>
-                                <option value="word_count">Word Count</option>
-                                <option value="page_count">Page Count</option>
-                                <option value="read_count">Times Read</option>
-                            </select>
-                            <button class="btn btn-outline-secondary" id="sortDirectionBtn" onclick="toggleSortDirection()" title="Toggle sort direction">
-                                <i class="fas fa-sort-amount-down" id="sortDirectionIcon"></i>
-                            </button>
-                            <button class="btn btn-outline-secondary" onclick="clearFilters()" title="Clear search and filters">
-                                <i class="fas fa-times"></i>
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+<!-- Search + Sort on one row (no labels; clear is a floating X inside search) -->
+<div class="d-flex gap-2 align-items-center mb-2">
+    <div class="position-relative flex-grow-1">
+        <input type="text" class="form-control" id="searchInput" autocomplete="off"
+               placeholder="Search by title, author, or series…">
+        <button type="button" class="lib-search-clear" id="searchClear" onclick="clearFilters()"
+                title="Clear" aria-label="Clear" style="display:none;">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+    <div class="dropdown flex-shrink-0">
+        <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Sort">
+            <i class="fas fa-sort-amount-down-alt me-1" id="sortDirIcon"></i><span id="sortLabel">Author</span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end" id="sortMenu"></ul>
     </div>
 </div>
 
-<!-- Compact Library Statistics -->
-<div class="row mb-3">
-    <div class="col-12">
-        <div class="card compact-stats">
-            <div class="card-body py-2">
-                <div class="d-flex flex-wrap justify-content-center align-items-center stat-chips">
-                    <!-- Read-status filters (single-select) -->
-                    <div class="stat-group">
-                        <div class="stat-filter stat-chip text-primary" title="All books"
-                             data-filter-type="read-status" data-filter-value="all" onclick="toggleFilter(this)">
-                            <i class="fas fa-book"></i><strong id="totalBooks">-</strong>
-                        </div>
-                        <div class="stat-filter stat-chip text-success" title="Read"
-                             data-filter-type="read-status" data-filter-value="read" onclick="toggleFilter(this)">
-                            <i class="fas fa-check-circle"></i><strong id="readBooks">-</strong>
-                        </div>
-                        <div class="stat-filter stat-chip text-info" title="Unread"
-                             data-filter-type="read-status" data-filter-value="unread" onclick="toggleFilter(this)">
-                            <i class="fas fa-list"></i><strong id="unreadBooks">-</strong>
-                        </div>
-                    </div>
-                    <span class="vr mx-1 d-none d-md-block"></span>
-                    <!-- Media filters (multi-select; AND) -->
-                    <div class="stat-group">
-                        <div class="stat-filter stat-chip" style="color:#0066CC;" title="Owns ebook"
-                             data-filter-type="media-type" data-filter-value="ebook" onclick="toggleFilter(this)">
-                            <i class="fas fa-tablet-alt"></i><strong id="ebookCount">-</strong>
-                        </div>
-                        <div class="stat-filter stat-chip" style="color:#6B4BA3;" title="Owns physical"
-                             data-filter-type="media-type" data-filter-value="physical" onclick="toggleFilter(this)">
-                            <i class="fas fa-book"></i><strong id="physicalCount">-</strong>
-                        </div>
-                        <div class="stat-filter stat-chip" style="color:#FF6600;" title="Owns audiobook"
-                             data-filter-type="media-type" data-filter-value="audio" onclick="toggleFilter(this)">
-                            <i class="fas fa-headphones"></i><strong id="audioCount">-</strong>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+<!-- Stat / format filter chips (one tight row) -->
+<div class="d-flex flex-nowrap justify-content-center align-items-center stat-chips mb-3">
+    <div class="stat-filter stat-chip text-success" title="Read"
+         data-filter-type="read-status" data-filter-value="read" onclick="toggleFilter(this)">
+        <i class="fas fa-check-circle"></i><strong id="readBooks">-</strong>
+    </div>
+    <div class="stat-filter stat-chip text-info" title="Unread"
+         data-filter-type="read-status" data-filter-value="unread" onclick="toggleFilter(this)">
+        <i class="fas fa-list"></i><strong id="unreadBooks">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#0066CC;" title="Owns ebook"
+         data-filter-type="media-type" data-filter-value="ebook" onclick="toggleFilter(this)">
+        <i class="fas fa-tablet-alt"></i><strong id="ebookCount">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#6B4BA3;" title="Owns physical"
+         data-filter-type="media-type" data-filter-value="physical" onclick="toggleFilter(this)">
+        <i class="fas fa-book"></i><strong id="physicalCount">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#FF6600;" title="Owns audiobook"
+         data-filter-type="media-type" data-filter-value="audio" onclick="toggleFilter(this)">
+        <i class="fas fa-headphones"></i><strong id="audioCount">-</strong>
     </div>
 </div>
 
@@ -573,6 +516,18 @@
     box-shadow: 0 2px 6px rgba(0,0,0,0.45);
     border: 1.5px solid rgba(255,255,255,0.85);
 }
+/* Read exactly once → solid-green check (matches the read-card glow). */
+.lib-read-once { background: #198754; color: #fff; }
+
+/* Smaller cards on phones → scale the cover badges down to match. */
+@media (max-width: 575.98px) {
+    .lib-readcount { width: 1.45rem; height: 1.45rem; font-size: 0.6rem !important; top: 5px; left: 5px; border-width: 1px; }
+    .lib-media { font-size: 0.82rem; gap: 4px; padding: 3px 6px; bottom: 5px; left: 5px; }
+    /* Squeeze the filter chips so all six fit one row on phones. */
+    .stat-chips { gap: 4px; }
+    .stat-chip { padding: 3px 6px; gap: 3px; }
+    .stat-chip i, .stat-chip strong { font-size: 0.78rem; }
+}
 
 /* Owned-media icons, bottom-left over the cover (bigger, color-coded). */
 .lib-media {
@@ -610,21 +565,30 @@
 .open-secondary { display: flex; flex-direction: column; gap: 5px; }
 .open-secondary .btn { text-align: left; }
 
-/* Compact, label-less stat/filter chips */
-.stat-chips { gap: 8px; row-gap: 8px; }
-/* Each group (read-status / formats) stays together; on phones they wrap onto
-   their own lines so it reads as 3 over 3. */
-.stat-group { display: flex; gap: 8px; justify-content: center; }
+/* Compact, label-less stat/filter chips — tight enough to fit one row on phones */
+.stat-chips { gap: 6px; row-gap: 6px; }
 .stat-chip {
-    display: inline-flex; align-items: center; gap: 6px;
-    padding: 5px 12px; border-radius: 999px;
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 999px;
     background: #f1f3f5; cursor: pointer; user-select: none;
     border: 2px solid transparent; transition: all 0.12s; line-height: 1;
 }
-.stat-chip i { font-size: 0.95rem; }
-.stat-chip strong { font-size: 0.95rem; }
+.stat-chip i { font-size: 0.9rem; }
+.stat-chip strong { font-size: 0.9rem; }
 .stat-chip:hover { background: #e9ecef; }
 .stat-chip.active { border-color: currentColor; background: #fff; }
+
+/* Floating clear (X) inside the search box */
+#searchInput { padding-right: 38px; }
+.lib-search-clear {
+    position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+    width: 30px; height: 30px; border: none; background: transparent;
+    color: #adb5bd; cursor: pointer; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+}
+.lib-search-clear:hover { color: #6c757d; background: #f1f3f5; }
+/* Trim the page header so it aligns with the action buttons */
+.page-header-bookish { padding-top: 0; padding-bottom: 0; }
 
 /* Book-detail rows in the cover popup */
 .open-details { font-size: 0.85rem; }
@@ -662,18 +626,28 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('GreatReads is now available, loading library data...');
         loadLibraryData();
         setupEventListeners();
+        // Deep-link from Settings → open the import modal directly.
+        const imp = new URLSearchParams(location.search).get('import');
+        if (imp === 'calibre' || imp === 'abs') openImportModal(imp);
     });
 });
 
 function setupEventListeners() {
-    // Search input
-    document.getElementById('searchInput').addEventListener('input', debounce(applyFilters, 300));
-
-    // Sort select (if it exists)
-    const sortSelect = document.getElementById('sortSelect');
-    if (sortSelect) {
-        sortSelect.addEventListener('change', applyFilters);
-    }
+    const search = document.getElementById('searchInput');
+    const debApply = debounce(applyFilters, 300);
+    search.addEventListener('input', () => {
+        document.getElementById('searchClear').style.display = search.value ? 'flex' : 'none';
+        debApply();
+    });
+    // Sort dropdown: clicking a field selects it; clicking the active field flips
+    // direction (no separate reverse button).
+    document.getElementById('sortMenu').addEventListener('click', (e) => {
+        const a = e.target.closest('[data-sort]');
+        if (!a) return;
+        e.preventDefault();
+        selectSort(a.dataset.sort);
+    });
+    renderSortUI();
 }
 
 // ---- Ereader reading progress (cross-origin, same feed the Ereader home uses) ----
@@ -739,6 +713,9 @@ function sortAuthorEreaderStyle(list) {
         if (ai !== bi) return ai - bi;
         return (a.date_published || '').localeCompare(b.date_published || '');
     });
+    // Descending flips the author ordering (Z→A); in-progress books still float
+    // at the top, newest first.
+    if (!sortAscending) rest.reverse();
     return inProgress.concat(rest);
 }
 
@@ -780,7 +757,6 @@ async function loadLibraryData() {
 }
 
 function displayStats(stats) {
-    document.getElementById('totalBooks').textContent = stats.total_books;
     document.getElementById('readBooks').textContent = stats.read_books;
     document.getElementById('unreadBooks').textContent = stats.unread_books;
 
@@ -855,7 +831,11 @@ function createBookCard(book) {
                      onclick="openBookActions(${book.id})"
                      oncontextmenu="openBookActions(${book.id}); return false;">
                     ${coverInner}
-                    ${(book.read_count || 0) > 1 ? `<span class="read-count-badge read-count-${Math.min(book.read_count, 15)} lib-readcount" title="Read ${book.read_count}×">×${book.read_count}</span>` : ''}
+                    ${(book.read_count || 0) >= 2
+                        ? `<span class="read-count-badge read-count-${Math.min(book.read_count, 15)} lib-readcount" title="Read ${book.read_count}×">×${book.read_count}</span>`
+                        : (book.read_count || 0) === 1
+                            ? `<span class="lib-readcount lib-read-once" title="Read once"><i class="fas fa-check"></i></span>`
+                            : ''}
                     ${mediaIcons ? `<span class="lib-media">${mediaIcons}</span>` : ''}
                 </div>
             </div>
@@ -942,9 +922,18 @@ function openBookActions(bookId) {
             <i class="fas fa-book me-1"></i>Tracked book — no ebook or audiobook file linked.
         </div>`;
 
+    // Highlights link — shown only when the book has any (count filled async below).
+    const hlLink = book.calibre_id ? `
+                <a id="hlActionBtn" class="btn btn-sm btn-outline-secondary d-none"
+                   href="/greatreads/highlights?book=${book.calibre_id}&title=${titleEnc}">
+                    <i class="fas fa-highlighter me-2" style="color:#e0a800;"></i>Highlights
+                    <span id="hlCount" class="badge bg-secondary ms-auto">0</span>
+                </a>` : '';
+
     const secondary = `
         <div class="col-12">
             <div class="open-secondary">
+                ${hlLink}
                 <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libViewDetails(${book.id})">
                     <i class="fas fa-eye me-2 text-primary"></i>View Details
                 </button>
@@ -962,6 +951,19 @@ function openBookActions(bookId) {
 
     document.getElementById('openBookOptions').innerHTML = locationCard + big + details + secondary;
     bootstrap.Modal.getOrCreateInstance(document.getElementById('openBookModal')).show();
+
+    // Fill the highlights count (reveal the link only if there are any).
+    if (book.calibre_id) {
+        fetch(`${EREADER_API}/highlights?type=highlight&bookId=${encodeURIComponent(book.calibre_id)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => {
+                const n = d && Array.isArray(d.items) ? d.items.length : 0;
+                const btn = document.getElementById('hlActionBtn');
+                const cnt = document.getElementById('hlCount');
+                if (btn && n > 0) { cnt.textContent = n; btn.classList.remove('d-none'); }
+            })
+            .catch(() => {});
+    }
 }
 
 function hideOpenBookModal() {
@@ -1055,15 +1057,7 @@ function fuzzyMatch(text, search) {
 
 function applyFilters() {
     const search = document.getElementById('searchInput').value.toLowerCase().trim();
-    const sortSelect = document.getElementById('sortSelect');
-    const sort = sortSelect ? sortSelect.value : 'title';
-
-    // Reset sort direction to default when sort field changes
-    if (lastSortField !== sort) {
-        sortAscending = getDefaultSortDirection(sort);
-        updateSortDirectionIcon();
-        lastSortField = sort;
-    }
+    const sort = currentSort;  // field + direction managed by the sort dropdown
 
     filteredBooks = allBooks.filter(book => {
         // Search filter - fuzzy search across title, author, and series
@@ -1159,8 +1153,10 @@ function applyFilters() {
 }
 
 function clearFilters() {
-    // Clear search input
+    // Clear search input + hide the floating X
     document.getElementById('searchInput').value = '';
+    const x = document.getElementById('searchClear');
+    if (x) x.style.display = 'none';
 
     // Clear stat badge filters
     activeFilters.readStatus = null;
@@ -1651,9 +1647,19 @@ let activeFilters = {
     mediaTypes: []     // any of 'ebook','physical','audio' (multi-select, AND)
 };
 
-// Sort direction state
+// Sort state — one control handles field + direction (no separate reverse button).
 let sortAscending = true;
-let lastSortField = null;
+let currentSort = 'author';
+// Alphabetical by label.
+const SORT_FIELDS = [
+    ['author', 'Author'],
+    ['page_count', 'Page Count'],
+    ['date_published', 'Publication Date'],
+    ['series', 'Series'],
+    ['read_count', 'Times Read'],
+    ['title', 'Title'],
+    ['word_count', 'Word Count'],
+];
 
 function getDefaultSortDirection(sortField) {
     // Fields that should default to descending (high to low)
@@ -1661,21 +1667,27 @@ function getDefaultSortDirection(sortField) {
     return !descendingDefaults.includes(sortField);
 }
 
-function updateSortDirectionIcon() {
-    const icon = document.getElementById('sortDirectionIcon');
-    if (sortAscending) {
-        icon.className = 'fas fa-sort-amount-down';
-    } else {
-        icon.className = 'fas fa-sort-amount-up';
-    }
+// Pick a field (or flip direction if it's already active), then re-render + sort.
+function selectSort(field) {
+    if (currentSort === field) sortAscending = !sortAscending;
+    else { currentSort = field; sortAscending = getDefaultSortDirection(field); }
+    renderSortUI();
+    applyFilters();
 }
 
-function toggleSortDirection() {
-    sortAscending = !sortAscending;
-    updateSortDirectionIcon();
-
-    // Re-apply filters with new sort direction
-    applyFilters();
+// Reflect the current field + direction on the button and in the menu (a caret
+// marks the active field and which way it's sorted).
+function renderSortUI() {
+    const cur = SORT_FIELDS.find(f => f[0] === currentSort) || SORT_FIELDS[0];
+    document.getElementById('sortLabel').textContent = cur[1];
+    document.getElementById('sortDirIcon').className =
+        (sortAscending ? 'fas fa-sort-amount-down-alt' : 'fas fa-sort-amount-up') + ' me-1';
+    document.getElementById('sortMenu').innerHTML = SORT_FIELDS.map(([val, label]) => {
+        const active = val === currentSort;
+        const caret = active ? `<i class="fas ${sortAscending ? 'fa-caret-up' : 'fa-caret-down'} ms-3"></i>` : '';
+        return `<li><a class="dropdown-item d-flex justify-content-between align-items-center ${active ? 'active' : ''}"
+            href="#" data-sort="${val}">${label}${caret}</a></li>`;
+    }).join('');
 }
 
 function toggleFilter(element) {

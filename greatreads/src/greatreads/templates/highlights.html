@@ -3,41 +3,40 @@
 {% block title %}Highlights - GreatReads{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="page-header-bookish mb-4">
-            <div class="page-header-icon">
-                <i class="fas fa-highlighter"></i>
-            </div>
-            <div class="page-header-content">
-                <h1 class="page-header-title">Highlights</h1>
-                <p class="page-header-subtitle">Everything you've highlighted and bookmarked while reading</p>
-            </div>
-        </div>
+<!-- Header: title left, Highlights/Bookmarks toggle top-right (matches the
+     action-button placement on Library/TBR/Journal) -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-highlighter"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Highlights</h1></div>
+    </div>
+    <div class="btn-group hl-subtabs flex-shrink-0" id="hl-subtabs" role="group">
+        <button type="button" class="btn btn-primary active" data-hltype="highlight">
+            <i class="fas fa-highlighter me-1"></i>Highlights
+        </button>
+        <button type="button" class="btn btn-outline-primary" data-hltype="bookmark">
+            <i class="fas fa-bookmark me-1"></i>Bookmarks
+        </button>
     </div>
 </div>
+<!-- Filled when arriving from a Library card (?book=…) to show which book. -->
+<div id="hl-filter-note" class="text-muted small mb-2"></div>
 
-<!-- Sub-tabs + search -->
-<div class="card mb-4">
-    <div class="card-body py-3">
-        <div class="d-flex flex-wrap gap-3 align-items-center">
-            <ul class="nav nav-pills hl-subtabs" id="hl-subtabs">
-                <li class="nav-item">
-                    <button class="nav-link active" data-hltype="highlight">
-                        <i class="fas fa-highlighter me-1"></i>Highlights
-                    </button>
-                </li>
-                <li class="nav-item">
-                    <button class="nav-link" data-hltype="bookmark">
-                        <i class="fas fa-bookmark me-1"></i>Bookmarks
-                    </button>
-                </li>
-            </ul>
-            <div class="flex-grow-1" style="min-width: 220px;">
-                <input type="text" class="form-control" id="hl-search"
-                       placeholder="Search highlights &amp; bookmarks…">
-            </div>
-        </div>
+<!-- Search + Sort on one row (search full-width, sort right — like the others) -->
+<div class="d-flex gap-2 align-items-center mb-3">
+    <div class="position-relative flex-grow-1">
+        <input type="text" class="form-control" id="hl-search" autocomplete="off"
+               placeholder="Search highlights &amp; bookmarks…">
+        <button type="button" class="lib-search-clear" id="hlSearchClear"
+                title="Clear" aria-label="Clear" style="display:none;">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+    <div class="dropdown flex-shrink-0">
+        <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Sort">
+            <i class="fas fa-sort-amount-up me-1" id="sortDirIcon"></i><span id="sortLabel">Recent</span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end" id="sortMenu"></ul>
     </div>
 </div>
 
@@ -51,7 +50,17 @@
 
 {% block extra_scripts %}
 <style>
-.hl-subtabs .nav-link { cursor: pointer; }
+/* Compact header + search (mirrors Library/TBR/Journal) */
+.page-header-bookish { padding-top: 0; padding-bottom: 0; }
+#hl-search { padding-right: 38px; }
+.lib-search-clear {
+    position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+    width: 30px; height: 30px; border: none; background: transparent;
+    color: #adb5bd; cursor: pointer; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+}
+.lib-search-clear:hover { color: #6c757d; background: #f1f3f5; }
+
 .hl-book-card { border-left: 4px solid var(--primary-color, #667eea); }
 .hl-book-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .hl-book-author { color: #6c757d; font-weight: 400; font-size: 0.9rem; }
@@ -68,6 +77,56 @@
 const EREADER_API = 'http://100.69.184.113:8091/api';
 let hlType = 'highlight';
 let hlDebounce = null;
+let bookFilter = null;   // calibre bookId when arriving from a Library card
+let hlItems = [];        // last-loaded items, so re-sorting doesn't refetch
+
+// Sort state — one control handles field + direction (mirrors the other pages).
+// Sorting reorders the per-book groups (highlights are grouped by book).
+let sortAscending = false;   // default: most-recently-highlighted book first
+let currentSort = 'recent';
+const SORT_FIELDS = [
+    ['recent', 'Recent'],
+    ['author', 'Author'],
+    ['count', 'Count'],
+    ['title', 'Title'],
+];
+
+function getDefaultSortDirection(sortField) {
+    // Fields that should default to descending (newest / most first)
+    const descendingDefaults = ['recent', 'count'];
+    return !descendingDefaults.includes(sortField);
+}
+
+// Pick a field (or flip direction if it's already active), then re-render.
+function selectSort(field) {
+    if (currentSort === field) sortAscending = !sortAscending;
+    else { currentSort = field; sortAscending = getDefaultSortDirection(field); }
+    renderSortUI();
+    renderHL();   // no refetch — just reorder what's loaded
+}
+
+function renderSortUI() {
+    const cur = SORT_FIELDS.find(f => f[0] === currentSort) || SORT_FIELDS[0];
+    document.getElementById('sortLabel').textContent = cur[1];
+    document.getElementById('sortDirIcon').className =
+        (sortAscending ? 'fas fa-sort-amount-down-alt' : 'fas fa-sort-amount-up') + ' me-1';
+    document.getElementById('sortMenu').innerHTML = SORT_FIELDS.map(([val, label]) => {
+        const active = val === currentSort;
+        const caret = active ? `<i class="fas ${sortAscending ? 'fa-caret-up' : 'fa-caret-down'} ms-3"></i>` : '';
+        return `<li><a class="dropdown-item d-flex justify-content-between align-items-center ${active ? 'active' : ''}"
+            href="#" data-sort="${val}">${label}${caret}</a></li>`;
+    }).join('');
+}
+
+// Reflect the active sub-tab as a filled vs outline button (top-right toggle).
+function renderSubtabs() {
+    document.querySelectorAll('#hl-subtabs [data-hltype]').forEach(b => {
+        const on = b.dataset.hltype === hlType;
+        b.classList.toggle('btn-primary', on);
+        b.classList.toggle('btn-outline-primary', !on);
+        b.classList.toggle('active', on);
+    });
+}
 
 function esc(s) {
     return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({
@@ -82,17 +141,20 @@ async function loadHL() {
         <div class="spinner-border text-secondary" role="status"></div></div>`;
     const params = new URLSearchParams({ type: hlType });
     if (q) params.set('q', q);
+    if (bookFilter) params.set('bookId', bookFilter);
     try {
         const r = await fetch(`${EREADER_API}/highlights?` + params.toString());
         if (!r.ok) throw new Error('HTTP ' + r.status);
         const data = await r.json();
-        renderHL(data.items || []);
+        hlItems = data.items || [];
+        renderHL();
     } catch (e) {
         box.innerHTML = `<div class="alert alert-danger">Failed to load: ${esc(e.message)}</div>`;
     }
 }
 
-function renderHL(items) {
+function renderHL() {
+    const items = hlItems;
     const box = document.getElementById('hl-results');
     if (!items.length) {
         const noun = hlType === 'bookmark' ? 'bookmarks' : 'highlights';
@@ -102,15 +164,34 @@ function renderHL(items) {
             No ${noun} yet. ${verb} in a book to get started.</div>`;
         return;
     }
-    // Group by book (insertion order ≈ newest-first from the API).
+    // Group by book (API order ≈ newest-first), tracking each book's most-recent
+    // timestamp so the groups can be re-ordered by the sort control.
     const groups = new Map();
     for (const it of items) {
         const bid = String(it.bookId);
-        if (!groups.has(bid)) groups.set(bid, { title: it.bookTitle || '?', author: it.bookAuthor || '', items: [] });
-        groups.get(bid).items.push(it);
+        if (!groups.has(bid)) groups.set(bid, { bid, title: it.bookTitle || '?', author: it.bookAuthor || '', recent: 0, items: [] });
+        const g = groups.get(bid);
+        g.items.push(it);
+        const ts = it.created ? new Date(it.created).getTime() : 0;
+        if (ts > g.recent) g.recent = ts;
     }
+
+    // Order the book groups by the active field + direction.
+    const ordered = Array.from(groups.values()).sort((a, b) => {
+        let result = 0;
+        switch (currentSort) {
+            case 'recent': result = a.recent - b.recent; break;
+            case 'title':  result = a.title.localeCompare(b.title); break;
+            case 'author': result = (a.author || '').localeCompare(b.author || ''); break;
+            case 'count':  result = a.items.length - b.items.length; break;
+            default:       result = a.recent - b.recent; break;
+        }
+        return sortAscending ? result : -result;
+    });
+
     let html = '';
-    for (const [bid, g] of groups) {
+    for (const g of ordered) {
+        const bid = g.bid;
         const rows = g.items.map(it => {
             const when = it.created ? new Date(it.created).toLocaleDateString() : '';
             const pg = it.page != null ? `p. ${it.page + 1}${it.total ? '/' + it.total : ''}` : '';
@@ -170,23 +251,46 @@ async function deleteHL(id) {
 }
 
 document.addEventListener('DOMContentLoaded', () => {
-    // ?view=bookmarks deep-links straight to the Bookmarks sub-tab.
-    const view = new URLSearchParams(location.search).get('view');
-    if (view === 'bookmarks') {
-        hlType = 'bookmark';
-        document.querySelectorAll('#hl-subtabs .nav-link').forEach(b =>
-            b.classList.toggle('active', b.dataset.hltype === 'bookmark'));
+    // ?book=<calibreId> (from a Library card) filters to one book; show its title
+    // and a clear-filter link in the header.
+    const qp = new URLSearchParams(location.search);
+    bookFilter = qp.get('book');
+    if (bookFilter) {
+        const t = qp.get('title') ? decodeURIComponent(qp.get('title')) : 'this book';
+        const sub = document.getElementById('hl-filter-note');
+        if (sub) sub.innerHTML = `Showing highlights for <strong>${esc(t)}</strong> · ` +
+            `<a href="{{ url_for('highlights_page') }}">show all</a>`;
     }
+    // ?view=bookmarks deep-links straight to the Bookmarks sub-tab.
+    const view = qp.get('view');
+    if (view === 'bookmarks') hlType = 'bookmark';
+    renderSubtabs();
+    renderSortUI();
+
     document.getElementById('hl-subtabs').addEventListener('click', (e) => {
-        const btn = e.target.closest('.nav-link[data-hltype]');
+        const btn = e.target.closest('[data-hltype]');
         if (!btn) return;
         hlType = btn.dataset.hltype;
-        document.querySelectorAll('#hl-subtabs .nav-link').forEach(b => b.classList.toggle('active', b === btn));
+        renderSubtabs();
         loadHL();
     });
-    document.getElementById('hl-search').addEventListener('input', () => {
+    document.getElementById('sortMenu').addEventListener('click', (e) => {
+        const a = e.target.closest('[data-sort]');
+        if (!a) return;
+        e.preventDefault();
+        selectSort(a.dataset.sort);
+    });
+    const hlSearch = document.getElementById('hl-search');
+    const hlClear = document.getElementById('hlSearchClear');
+    hlSearch.addEventListener('input', () => {
+        hlClear.style.display = hlSearch.value ? 'flex' : 'none';
         clearTimeout(hlDebounce);
         hlDebounce = setTimeout(loadHL, 250);
+    });
+    hlClear.addEventListener('click', () => {
+        hlSearch.value = '';
+        hlClear.style.display = 'none';
+        loadHL();
     });
     // Delegated actions (data attributes avoid inline-onclick quoting issues).
     document.getElementById('hl-results').addEventListener('click', (e) => {

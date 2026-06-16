@@ -3,130 +3,61 @@
 {% block title %}TBR - GreatReads{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-center mb-4">
-            <div class="page-header-bookish">
-                <div class="page-header-icon">
-                    <i class="fas fa-list"></i>
-                </div>
-                <div class="page-header-content">
-                    <h1 class="page-header-title mb-0">To Be Read</h1>
-                </div>
-            </div>
-            <div>
-                <button class="btn btn-outline-primary me-2" onclick="showReorderModal()">
-                    <i class="fas fa-sort me-1"></i>Reorder
-                </button>
-                <button class="btn btn-primary" onclick="addNewReading()">
-                    <i class="fas fa-plus me-1"></i>Add Reading
-                </button>
-            </div>
-        </div>
+<!-- Header: title + actions on one row -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-list"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">To Be Read</h1></div>
+    </div>
+    <div class="d-flex gap-2">
+        <button class="btn btn-outline-primary" onclick="showReorderModal()">
+            <i class="fas fa-sort me-1"></i>Reorder
+        </button>
+        <button class="btn btn-primary" onclick="addNewReading()">
+            <i class="fas fa-plus me-1"></i>Add Reading
+        </button>
     </div>
 </div>
 
-<!-- Search Bar -->
-<div class="row mb-4">
-    <div class="col-12">
-        <div class="card">
-            <div class="card-body py-2">
-                <div class="d-flex gap-2 align-items-end flex-wrap">
-                    <div class="flex-grow-1" style="min-width: 200px;">
-                        <label for="searchInput" class="form-label mb-1 small">Search</label>
-                        <input type="text" class="form-control" id="searchInput" placeholder="Search books by title, author, or series...">
-                    </div>
-                    <div>
-                        <label for="sortSelect" class="form-label mb-1 small">Sort</label>
-                        <select class="form-select" id="sortSelect">
-                            <option value="order">Reading Order</option>
-                            <option value="title">Title</option>
-                            <option value="author">Author</option>
-                            <option value="series">Series</option>
-                            <option value="word_count">Word Count</option>
-                            <option value="page_count">Page Count</option>
-                        </select>
-                    </div>
-                    <button class="btn btn-outline-secondary btn-sm px-2" onclick="clearFilters()" title="Clear all filters">
-                        <i class="fas fa-times"></i>
-                    </button>
-                </div>
-            </div>
-        </div>
+<!-- Search + Sort on one row (no labels; clear is a floating X inside search) -->
+<div class="d-flex gap-2 align-items-center mb-2">
+    <div class="position-relative flex-grow-1">
+        <input type="text" class="form-control" id="searchInput" autocomplete="off"
+               placeholder="Search by title, author, or series…">
+        <button type="button" class="lib-search-clear" id="searchClear" onclick="clearFilters()"
+                title="Clear" aria-label="Clear" style="display:none;">
+            <i class="fas fa-times"></i>
+        </button>
+    </div>
+    <div class="dropdown flex-shrink-0">
+        <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Sort">
+            <i class="fas fa-sort-amount-down-alt me-1" id="sortDirIcon"></i><span id="sortLabel">Reading Order</span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end" id="sortMenu"></ul>
     </div>
 </div>
 
-<!-- Compact Statistics -->
-<div class="row mb-3">
-    <div class="col-12">
-        <div class="card compact-stats">
-            <div class="card-body py-3">
-                <div class="row text-center">
-                    <!-- Status filters (left on mobile) -->
-                    <div class="col-6 col-md-2 order-0">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="read-status"
-                             data-filter-value="all"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-book text-primary mb-1"></i>
-                            <small class="text-muted">Total</small>
-                            <strong class="text-primary" id="totalBooks">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-2 order-md-1">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="read-status"
-                             data-filter-value="in_progress"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-book-open text-warning mb-1"></i>
-                            <small class="text-muted">In Progress</small>
-                            <strong class="text-warning" id="inProgressBooks">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-4 order-md-2">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="read-status"
-                             data-filter-value="not_started"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-circle text-secondary mb-1"></i>
-                            <small class="text-muted">Not Started</small>
-                            <strong class="text-secondary" id="notStartedBooks">-</strong>
-                        </div>
-                    </div>
-                    <!-- Media filters (right on mobile) -->
-                    <div class="col-6 col-md-2 order-1 order-md-3">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="ebook"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-tablet-alt mb-1" style="color: #0066CC;"></i>
-                            <small class="text-muted">Ebook</small>
-                            <strong id="ebookCount" style="color: #0066CC;">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-3 order-md-4">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="physical"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-book mb-1" style="color: #6B4BA3;"></i>
-                            <small class="text-muted">Physical</small>
-                            <strong id="physicalCount" style="color: #6B4BA3;">-</strong>
-                        </div>
-                    </div>
-                    <div class="col-6 col-md-2 order-5 order-md-5">
-                        <div class="d-flex flex-column align-items-center stat-filter"
-                             data-filter-type="media-type"
-                             data-filter-value="audio"
-                             onclick="toggleFilter(this)">
-                            <i class="fas fa-headphones mb-1" style="color: #FF6600;"></i>
-                            <small class="text-muted">Audio</small>
-                            <strong id="audioCount" style="color: #FF6600;">-</strong>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
+<!-- Stat / format filter chips (one tight row) -->
+<div class="d-flex flex-nowrap justify-content-center align-items-center stat-chips mb-3">
+    <div class="stat-filter stat-chip text-warning" title="In Progress"
+         data-filter-type="read-status" data-filter-value="in_progress" onclick="toggleFilter(this)">
+        <i class="fas fa-book-open"></i><strong id="inProgressBooks">-</strong>
+    </div>
+    <div class="stat-filter stat-chip text-secondary" title="Not Started"
+         data-filter-type="read-status" data-filter-value="not_started" onclick="toggleFilter(this)">
+        <i class="fas fa-circle"></i><strong id="notStartedBooks">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#0066CC;" title="Ebook"
+         data-filter-type="media-type" data-filter-value="ebook" onclick="toggleFilter(this)">
+        <i class="fas fa-tablet-alt"></i><strong id="ebookCount">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#6B4BA3;" title="Physical"
+         data-filter-type="media-type" data-filter-value="physical" onclick="toggleFilter(this)">
+        <i class="fas fa-book"></i><strong id="physicalCount">-</strong>
+    </div>
+    <div class="stat-filter stat-chip" style="color:#FF6600;" title="Audio"
+         data-filter-type="media-type" data-filter-value="audio" onclick="toggleFilter(this)">
+        <i class="fas fa-headphones"></i><strong id="audioCount">-</strong>
     </div>
 </div>
 
@@ -140,12 +71,6 @@
 
         <!-- TBR List -->
         <div id="tbr-container" class="d-none">
-            <div class="alert alert-info">
-                <i class="fas fa-info-circle me-2"></i>
-                <strong>Drag and drop</strong> to reorder your reading queue.
-                <strong>Click on any card</strong> to edit reading details.
-            </div>
-
             <div id="tbr-list" class="sortable-list">
                 <!-- Reading cards will be inserted here -->
             </div>
@@ -925,6 +850,39 @@
     overflow: hidden;
     text-overflow: ellipsis;
 }
+
+/* ---- Compact top area (mirrors the Library page) ---- */
+/* Trim the page header so it aligns with the action buttons */
+.page-header-bookish { padding-top: 0; padding-bottom: 0; }
+
+/* Compact, label-less stat/filter chips — tight enough to fit one row on phones */
+.stat-chips { gap: 6px; row-gap: 6px; }
+.stat-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 999px;
+    background: #f1f3f5; cursor: pointer; user-select: none;
+    border: 2px solid transparent; transition: all 0.12s; line-height: 1;
+}
+.stat-chip i { font-size: 0.9rem; }
+.stat-chip strong { font-size: 0.9rem; }
+.stat-chip:hover { background: #e9ecef; }
+.stat-chip.active { border-color: currentColor; background: #fff; }
+
+/* Floating clear (X) inside the search box */
+#searchInput { padding-right: 38px; }
+.lib-search-clear {
+    position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+    width: 30px; height: 30px; border: none; background: transparent;
+    color: #adb5bd; cursor: pointer; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+}
+.lib-search-clear:hover { color: #6c757d; background: #f1f3f5; }
+
+@media (max-width: 575.98px) {
+    .stat-chips { gap: 4px; }
+    .stat-chip { padding: 3px 6px; gap: 3px; }
+    .stat-chip i, .stat-chip strong { font-size: 0.78rem; }
+}
 </style>
 
 {% endblock %}
@@ -986,6 +944,47 @@ let activeFilters = {
     mediaType: null
 };
 
+// Sort state — one control handles field + direction (no separate reverse button).
+let sortAscending = true;
+let currentSort = 'order';
+const SORT_FIELDS = [
+    ['order', 'Reading Order'],
+    ['author', 'Author'],
+    ['page_count', 'Page Count'],
+    ['series', 'Series'],
+    ['title', 'Title'],
+    ['word_count', 'Word Count'],
+];
+
+function getDefaultSortDirection(sortField) {
+    // Fields that should default to descending (high to low)
+    const descendingDefaults = ['word_count', 'page_count'];
+    return !descendingDefaults.includes(sortField);
+}
+
+// Pick a field (or flip direction if it's already active), then re-render + sort.
+function selectSort(field) {
+    if (currentSort === field) sortAscending = !sortAscending;
+    else { currentSort = field; sortAscending = getDefaultSortDirection(field); }
+    renderSortUI();
+    applyFilters();
+}
+
+// Reflect the current field + direction on the button and in the menu (a caret
+// marks the active field and which way it's sorted).
+function renderSortUI() {
+    const cur = SORT_FIELDS.find(f => f[0] === currentSort) || SORT_FIELDS[0];
+    document.getElementById('sortLabel').textContent = cur[1];
+    document.getElementById('sortDirIcon').className =
+        (sortAscending ? 'fas fa-sort-amount-down-alt' : 'fas fa-sort-amount-up') + ' me-1';
+    document.getElementById('sortMenu').innerHTML = SORT_FIELDS.map(([val, label]) => {
+        const active = val === currentSort;
+        const caret = active ? `<i class="fas ${sortAscending ? 'fa-caret-up' : 'fa-caret-down'} ms-3"></i>` : '';
+        return `<li><a class="dropdown-item d-flex justify-content-between align-items-center ${active ? 'active' : ''}"
+            href="#" data-sort="${val}">${label}${caret}</a></li>`;
+    }).join('');
+}
+
 // Fuzzy search function
 function fuzzyMatch(text, search) {
     if (!text) return false;
@@ -1035,8 +1034,6 @@ function toggleFilter(element) {
 // Apply filters and sorting
 function applyFilters() {
     const search = document.getElementById('searchInput').value.toLowerCase().trim();
-    const sortSelect = document.getElementById('sortSelect');
-    const sort = sortSelect ? sortSelect.value : 'order';
 
     filteredReadings = allReadings.filter(reading => {
         const book = reading.book;
@@ -1068,33 +1065,44 @@ function applyFilters() {
         return true;
     });
 
-    // Apply sorting
+    // Apply sorting — one control manages field + direction (mirrors Library).
+    // Each case computes an ascending-base comparison; direction is applied once.
     filteredReadings.sort((a, b) => {
-        switch (sort) {
+        let result = 0;
+        switch (currentSort) {
             case 'order':
-                return a.reading_order - b.reading_order;
+                result = a.reading_order - b.reading_order;
+                break;
             case 'title':
-                return a.book.title.localeCompare(b.book.title);
+                result = a.book.title.localeCompare(b.book.title);
+                break;
             case 'author':
-                return a.book.author_sorted.localeCompare(b.book.author_sorted);
-            case 'series':
+                result = a.book.author_sorted.localeCompare(b.book.author_sorted);
+                break;
+            case 'series': {
                 // Sort by universe, then series, then series_number
                 const aUniverse = a.book.universe || '';
                 const bUniverse = b.book.universe || '';
                 if (aUniverse !== bUniverse) {
-                    return aUniverse.localeCompare(bUniverse);
+                    result = aUniverse.localeCompare(bUniverse);
+                } else if ((a.book.series || '') !== (b.book.series || '')) {
+                    result = (a.book.series || '').localeCompare(b.book.series || '');
+                } else {
+                    result = (a.book.series_number || 0) - (b.book.series_number || 0);
                 }
-                if (a.book.series !== b.book.series) {
-                    return (a.book.series || '').localeCompare(b.book.series || '');
-                }
-                return (a.book.series_number || 0) - (b.book.series_number || 0);
+                break;
+            }
             case 'word_count':
-                return (b.book.word_count || 0) - (a.book.word_count || 0);
+                result = (a.book.word_count || 0) - (b.book.word_count || 0);
+                break;
             case 'page_count':
-                return (b.book.page_count || 0) - (a.book.page_count || 0);
+                result = (a.book.page_count || 0) - (b.book.page_count || 0);
+                break;
             default:
-                return a.reading_order - b.reading_order;
+                result = a.reading_order - b.reading_order;
+                break;
         }
+        return sortAscending ? result : -result;
     });
 
     displayReadings(filteredReadings);
@@ -1104,9 +1112,11 @@ function applyFilters() {
 function clearFilters() {
     console.log('Clearing filters');
 
-    // Clear search input
+    // Clear search input + hide the floating X
     const searchInput = document.getElementById('searchInput');
     if (searchInput) searchInput.value = '';
+    const x = document.getElementById('searchClear');
+    if (x) x.style.display = 'none';
 
     // Reset all filter states
     activeFilters.readStatus = null;
@@ -1123,14 +1133,12 @@ function clearFilters() {
 
 // Update stats
 function updateStats(readings) {
-    const total = readings.length;
     const inProgress = readings.filter(r => r.date_started && !r.is_finished).length;
     const notStarted = readings.filter(r => !r.date_started).length;
     const ebook = readings.filter(r => r.media === 'Ebook').length;
     const physical = readings.filter(r => r.media === 'Physical').length;
     const audio = readings.filter(r => r.media === 'Audio').length;
 
-    document.getElementById('totalBooks').textContent = total;
     document.getElementById('inProgressBooks').textContent = inProgress;
     document.getElementById('notStartedBooks').textContent = notStarted;
     document.getElementById('ebookCount').textContent = ebook;
@@ -1155,12 +1163,23 @@ document.addEventListener('DOMContentLoaded', function() {
     // Load WPD speeds first, then readings (so WPD shows immediately)
     loadEffectiveWpd().then(() => loadTBRReadings());
 
-    // Setup event listeners
-    document.getElementById('searchInput').addEventListener('input', debounce(applyFilters, 300));
-    const sortSelect = document.getElementById('sortSelect');
-    if (sortSelect) {
-        sortSelect.addEventListener('change', applyFilters);
-    }
+    // Search: debounced filtering + toggle the floating clear (X) icon.
+    const search = document.getElementById('searchInput');
+    const debApply = debounce(applyFilters, 300);
+    search.addEventListener('input', () => {
+        document.getElementById('searchClear').style.display = search.value ? 'flex' : 'none';
+        debApply();
+    });
+
+    // Sort dropdown: clicking a field selects it; clicking the active field flips
+    // direction (no separate reverse button).
+    document.getElementById('sortMenu').addEventListener('click', (e) => {
+        const a = e.target.closest('[data-sort]');
+        if (!a) return;
+        e.preventDefault();
+        selectSort(a.dataset.sort);
+    });
+    renderSortUI();
 });
 
 async function loadTBRReadings() {
