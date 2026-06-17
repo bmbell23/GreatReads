@@ -3,8 +3,8 @@
 {% block title %}Statistics - GreatReads{% endblock %}
 
 {% block extra_head %}
-<!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<!-- Chart.js (vendored locally for offline support) -->
+<script src="{{ url_for('static', path='/vendor/chartjs/chart.umd.min.js') }}"></script>
 {% endblock %}
 
 {% block content %}

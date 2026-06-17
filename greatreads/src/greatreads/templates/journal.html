@@ -3,10 +3,10 @@
 {% block title %}Journal - GreatReads{% endblock %}
 
 {% block extra_head %}
-<!-- Chart.js -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
-<!-- html2canvas for report export -->
-<script src="https://cdn.jsdelivr.net/npm/html2canvas@1.4.1/dist/html2canvas.min.js"></script>
+<!-- Chart.js (vendored locally for offline support) -->
+<script src="{{ url_for('static', path='/vendor/chartjs/chart.umd.min.js') }}"></script>
+<!-- html2canvas for report export (vendored locally for offline support) -->
+<script src="{{ url_for('static', path='/vendor/html2canvas/html2canvas.min.js') }}"></script>
 {% endblock %}
 
 {% block content %}
