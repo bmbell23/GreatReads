@@ -527,8 +527,8 @@ def get_book_metadata(book_id):
             'tags': book.get('tags', []),
             'series': book.get('series', ''),
             'series_index': book.get('series_index', 0),
-            'thumbnail': f'http://{host}/api/books/{book_id}/cover{thumb_q}',
-            'cover': f'http://{host}/api/books/{book_id}/cover{cover_q}',
+            'thumbnail': f'http://{host}/api/ebooks/{book_id}/cover{thumb_q}',
+            'cover': f'http://{host}/api/ebooks/{book_id}/cover{cover_q}',
             'description': book.get('comments', ''),
             'isbn': book.get('isbn', ''),
             'asin': asin or '',
@@ -1185,7 +1185,7 @@ def match_works(calibre_items, abs_items, include_audio_only=True):
             merged.append(row)
     return merged
 
-@app.get('/api/books')
+@app.get('/api/ebooks')
 def list_books(limit: int | None = None, offset: int = 0, query: str | None = None):
     """List all available books from Calibre"""
     books, total = get_calibre_books(limit=limit, offset=offset, query=query)
@@ -1196,7 +1196,7 @@ def list_books(limit: int | None = None, offset: int = 0, query: str | None = No
         'limit': limit
     }
 
-@app.get('/api/books/{book_id}')
+@app.get('/api/ebooks/{book_id}')
 def get_book_info(book_id):
     """Get information about a specific book"""
     book = get_book_metadata(book_id)
@@ -1206,7 +1206,7 @@ def get_book_info(book_id):
     else:
         return JSONResponse({'error': 'Book not found'}, status_code=404)
 
-@app.get('/api/books/{book_id}/cover')
+@app.get('/api/ebooks/{book_id}/cover')
 def get_book_cover(book_id, type: str = 'cover'):
     """Proxy book cover from Calibre"""
     cover_type = type  # 'cover' or 'thumb'
@@ -1243,7 +1243,7 @@ def get_book_cover(book_id, type: str = 'cover'):
         placeholder = '<svg width="200" height="300" xmlns="http://www.w3.org/2000/svg"><rect fill="#333"/></svg>'
         return Response(content=placeholder, media_type='image/svg+xml')
 
-@app.get('/api/books/{book_id}/download')
+@app.get('/api/ebooks/{book_id}/download')
 def download_book(book_id, format: str | None = None):
     """Download a book file from Calibre"""
     # Get book metadata to find available formats
@@ -1324,7 +1324,7 @@ def list_audiobooks():
         'total': len(items),
     }
 
-@app.get('/api/library')
+@app.get('/api/catalog')
 def unified_library(limit: int | None = None, offset: int = 0, query: str | None = None, q: str | None = None):
     """Merged Calibre + ABS library. Ebook items keep their Calibre id (so all
     existing progress/highlight/cache keys still resolve); audio-only items use
@@ -1376,7 +1376,7 @@ def unified_library(limit: int | None = None, offset: int = 0, query: str | None
         'absEnabled': ABS_ENABLED,
     }
 
-@app.post('/api/library/refresh')
+@app.post('/api/catalog/refresh')
 def refresh_library():
     """Force the library caches to rebuild on the next request. Call this after
     importing a book into Calibre so it shows up immediately rather than after
@@ -1384,7 +1384,7 @@ def refresh_library():
     _invalidate_library_caches()
     return {'status': 'ok', 'refreshed': True}
 
-@app.get('/api/library/{book_id}')
+@app.get('/api/catalog/{book_id}')
 def unified_library_item(book_id):
     """Merged single book: the Calibre work plus any matched ABS editions, in
     the exact shape /api/library rows use. The frontend uses this to (re)load

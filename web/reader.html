@@ -1694,7 +1694,7 @@
         }
 
         async function loadPDF() {
-            const url = `${API_URL}/books/${bookId}/download?format=pdf`;
+            const url = `${API_URL}/ebooks/${bookId}/download?format=pdf`;
 
             pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
@@ -1761,7 +1761,7 @@
                     console.log('📦 Using cached blob, size:', cached.blob.size);
                     arrayBuffer = await cached.blob.arrayBuffer();
                 } else {
-                    const url = `${API_URL}/books/${bookId}/download?format=epub`;
+                    const url = `${API_URL}/ebooks/${bookId}/download?format=epub`;
                     console.log('🌐 Download URL:', url);
                     const response = await fetch(url);
                     console.log('📡 Response status:', response.status);
@@ -3481,7 +3481,7 @@
         async function loadBookWordCount() {
             if (!bookId) return;
             try {
-                const r = await fetch(`${API_URL}/books/${encodeURIComponent(bookId)}`);
+                const r = await fetch(`${API_URL}/ebooks/${encodeURIComponent(bookId)}`);
                 if (!r.ok) return;
                 const meta = await r.json();
                 if (Number.isFinite(meta.wordCount) && meta.wordCount > 0) {

@@ -888,7 +888,7 @@
                 // items use id "abs:<id>" and are appended ONCE on the first
                 // page (offset 0). Falls back to the Calibre-only list when ABS
                 // is off, so this is safe even without audiobooks configured.
-                const url = `${API_URL}/library?limit=${BATCH_SIZE}&offset=${currentOffset}`;
+                const url = `${API_URL}/catalog?limit=${BATCH_SIZE}&offset=${currentOffset}`;
                 console.log('Fetching books from:', url);
                 const response = await fetch(url);
                 if (!response.ok) throw new Error(`HTTP error! status: ${response.status}`);
@@ -942,7 +942,7 @@
             // ABS enrichment (dual-format badges) AND so audio-only audiobooks
             // can be matched: `query` drives the Calibre ebook search, `q` is
             // the raw term the backend uses to filter the audio-only list.
-            const url = `${API_URL}/library?limit=200&offset=0`
+            const url = `${API_URL}/catalog?limit=200&offset=0`
                 + `&query=${encodeURIComponent(calibreQuery)}`
                 + `&q=${encodeURIComponent(q)}`;
 
@@ -1138,7 +1138,7 @@
                 // its ebook progress keeps its audiobook editions/badges.
                 const fetched = await Promise.all(missing.map(async id => {
                     try {
-                        const r = await fetch(`${API_URL}/library/${encodeURIComponent(id)}`);
+                        const r = await fetch(`${API_URL}/catalog/${encodeURIComponent(id)}`);
                         if (!r.ok) return null;
                         const b = await r.json();
                         return (b && b.id != null) ? b : null;
