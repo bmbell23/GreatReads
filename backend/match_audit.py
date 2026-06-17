@@ -25,7 +25,7 @@ import sys
 import requests
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-import server  # noqa: E402  (reuse the real grouping/matching logic)
+import app as server  # noqa: E402  (reuse the real grouping/matching logic; app.py replaced server.py)
 
 
 def fetch(base):

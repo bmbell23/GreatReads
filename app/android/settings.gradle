@@ -1,5 +1,0 @@
-rootProject.name = 'ereader'
-apply from: file("../node_modules/@react-native/gradle-plugin/settings.gradle.kts")
-includeBuild("../node_modules/@react-native/gradle-plugin")
-
-include ':app'

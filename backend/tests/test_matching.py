@@ -1,14 +1,16 @@
 """Pure-logic unit tests for the Calibre<->ABS matching pipeline.
 
-These import server.py directly and exercise the normalization + match_works
-functions with synthetic data — no network, no running services required.
+These import the backend's app.py directly and exercise the normalization +
+match_works functions with synthetic data — no network, no running services
+required. (Imported as `server` for back-compat; app.py replaced server.py and
+carries the same helper functions verbatim.)
 """
 import os
 import sys
 import unittest
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-import server  # noqa: E402
+import app as server  # noqa: E402
 
 
 class TestNormalization(unittest.TestCase):
