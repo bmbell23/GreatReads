@@ -54,4 +54,8 @@ fi
 source venv/bin/activate
 pip install -q -r requirements.txt
 
-python server.py
+# FastAPI app (app.py) served by uvicorn. --reload keeps the auto-deploy
+# behavior the old Flask reloader provided: keep-alive.sh fast-forwards the
+# checkout and uvicorn restarts when app.py changes on disk. The Werkzeug
+# debug server (an RCE risk on a LAN-listening port) is gone entirely.
+exec uvicorn app:app --host 0.0.0.0 --port "${PORT:-8091}" --reload

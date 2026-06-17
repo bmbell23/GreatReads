@@ -4,8 +4,10 @@ Ereader Backend Server
 Serves ebook files from Calibre Content Server via REST API
 """
 
-from flask import Flask, jsonify, request, Response
-from flask_cors import CORS
+from fastapi import FastAPI, Request, Response, HTTPException
+from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.middleware.cors import CORSMiddleware
+import uvicorn
 import requests
 import os
 import json
@@ -17,8 +19,8 @@ import re
 import unicodedata
 from collections import defaultdict
 
-app = Flask(__name__)
-CORS(app)  # Enable CORS for mobile app access
+app = FastAPI()
+app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
 # Calibre Content Server configuration
 CALIBRE_URL = os.environ.get('CALIBRE_URL', 'http://localhost:8083')
@@ -57,8 +59,8 @@ PUBLIC_HOST = os.environ.get('PUBLIC_HOST', '100.69.184.113:8091')
 GREATREADS_URL = os.environ.get('GREATREADS_URL', 'http://127.0.0.1:8092').rstrip('/')
 
 # Persisted user data (highlights + bookmarks). Single JSON file on disk —
-# trivial to back up, trivial to grep. Guarded by a lock because Flask runs
-# threaded (see app.run(threaded=True) at the bottom).
+# trivial to back up, trivial to grep. Guarded by a lock because the server
+# may handle concurrent requests across worker threads.
 DATA_DIR = os.environ.get('EREADER_DATA_DIR',
                           os.path.join(os.path.dirname(__file__), 'data'))
 os.makedirs(DATA_DIR, exist_ok=True)
@@ -1153,35 +1155,31 @@ def match_works(calibre_items, abs_items, include_audio_only=True):
             merged.append(row)
     return merged
 
-@app.route('/api/books', methods=['GET'])
-def list_books():
+@app.get('/api/books')
+def list_books(limit: int | None = None, offset: int = 0, query: str | None = None):
     """List all available books from Calibre"""
-    limit = request.args.get('limit', type=int)
-    offset = request.args.get('offset', default=0, type=int)
-    query = request.args.get('query')
-
     books, total = get_calibre_books(limit=limit, offset=offset, query=query)
-    return jsonify({
+    return {
         'books': books,
         'total': total,
         'offset': offset,
         'limit': limit
-    })
+    }
 
-@app.route('/api/books/<book_id>', methods=['GET'])
+@app.get('/api/books/{book_id}')
 def get_book_info(book_id):
     """Get information about a specific book"""
     book = get_book_metadata(book_id)
 
     if book:
-        return jsonify(book)
+        return book
     else:
-        return jsonify({'error': 'Book not found'}), 404
+        return JSONResponse({'error': 'Book not found'}, status_code=404)
 
-@app.route('/api/books/<book_id>/cover', methods=['GET'])
-def get_book_cover(book_id):
+@app.get('/api/books/{book_id}/cover')
+def get_book_cover(book_id, type: str = 'cover'):
     """Proxy book cover from Calibre"""
-    cover_type = request.args.get('type', 'cover')  # 'cover' or 'thumb'
+    cover_type = type  # 'cover' or 'thumb'
 
     try:
         url = f'{CALIBRE_URL}/get/{cover_type}/{book_id}/{CALIBRE_LIBRARY}'
@@ -1203,31 +1201,30 @@ def get_book_cover(book_id):
                 <rect width="200" height="300" fill="url(#grad)"/>
                 <text x="100" y="150" text-anchor="middle" fill="white" font-size="60">📚</text>
             </svg>'''
-            return Response(placeholder, mimetype='image/svg+xml')
+            return Response(content=placeholder, media_type='image/svg+xml')
 
         response.raise_for_status()
-        res = Response(response.content, mimetype=response.headers.get('Content-Type', 'image/jpeg'))
-        # Cache covers for 30 days
-        res.headers['Cache-Control'] = 'public, max-age=2592000'
-        return res
+        return Response(content=response.content,
+                        media_type=response.headers.get('Content-Type', 'image/jpeg'),
+                        headers={'Cache-Control': 'public, max-age=2592000'})
     except Exception as e:
         print(f"Error fetching cover: {e}")
         # Return placeholder on error
         placeholder = '<svg width="200" height="300" xmlns="http://www.w3.org/2000/svg"><rect fill="#333"/></svg>'
-        return Response(placeholder, mimetype='image/svg+xml')
+        return Response(content=placeholder, media_type='image/svg+xml')
 
-@app.route('/api/books/<book_id>/download', methods=['GET'])
-def download_book(book_id):
+@app.get('/api/books/{book_id}/download')
+def download_book(book_id, format: str | None = None):
     """Download a book file from Calibre"""
     # Get book metadata to find available formats
     book = get_book_metadata(book_id)
 
     if not book:
         print(f"❌ Book {book_id} not found")
-        return jsonify({'error': 'Book not found'}), 404
+        return JSONResponse({'error': 'Book not found'}, status_code=404)
 
     # Get the requested format or use the first available
-    fmt = request.args.get('format', book['formats'][0] if book['formats'] else 'epub').lower()
+    fmt = (format if format is not None else (book['formats'][0] if book['formats'] else 'epub')).lower()
 
     print(f"📚 Download request for book {book_id}: '{book.get('title', 'Unknown')}'")
     print(f"📖 Available formats: {book['formats']}")
@@ -1235,7 +1232,7 @@ def download_book(book_id):
 
     if fmt not in [f.lower() for f in book['formats']]:
         print(f"❌ Format {fmt} not available")
-        return jsonify({'error': f'Format {fmt} not available for this book'}), 404
+        return JSONResponse({'error': f'Format {fmt} not available for this book'}, status_code=404)
 
     # Proxy the download from Calibre
     try:
@@ -1254,7 +1251,7 @@ def download_book(book_id):
                 if chunk:
                     yield chunk
 
-        return Response(
+        return StreamingResponse(
             generate(),
             headers={
                 'Content-Disposition': f'attachment; filename="{filename}"',
@@ -1263,23 +1260,21 @@ def download_book(book_id):
         )
     except Exception as e:
         print(f"Error downloading book: {e}")
-        return jsonify({'error': 'Failed to download book'}), 500
+        return JSONResponse({'error': 'Failed to download book'}, status_code=500)
 
-@app.route('/api/search', methods=['GET'])
-def search_books():
+@app.get('/api/search')
+def search_books(q: str = '', limit: int = 50, offset: int = 0):
     """Search books in Calibre library"""
-    query = request.args.get('q', '')
-    limit = request.args.get('limit', default=50, type=int)
-    offset = request.args.get('offset', default=0, type=int)
+    query = q
 
     books, total = get_calibre_books(limit=limit, offset=offset, query=query)
-    return jsonify({
+    return {
         'books': books,
         'total': total,
         'query': query,
         'offset': offset,
         'limit': limit
-    })
+    }
 
 # ---------- Audiobooks / unified library (Audiobookshelf) ----------
 # These endpoints are additive: /api/books and /api/search above are
@@ -1287,20 +1282,20 @@ def search_books():
 # is the new merged view the audiobook-aware UI will consume; it falls back to
 # the Calibre-only list whenever ABS is off or unreachable (never 500s).
 
-@app.route('/api/audiobooks', methods=['GET'])
+@app.get('/api/audiobooks')
 def list_audiobooks():
     """Debug/inspection route: the raw normalized ABS audiobook list plus the
     absEnabled flag. Returns absEnabled=false and an empty list when ABS isn't
     configured, so the frontend can feature-detect without guessing."""
     items = get_abs_items() if ABS_ENABLED else []
-    return jsonify({
+    return {
         'absEnabled': ABS_ENABLED,
         'audiobooks': items,
         'total': len(items),
-    })
+    }
 
-@app.route('/api/library', methods=['GET'])
-def unified_library():
+@app.get('/api/library')
+def unified_library(limit: int | None = None, offset: int = 0, query: str | None = None, q: str | None = None):
     """Merged Calibre + ABS library. Ebook items keep their Calibre id (so all
     existing progress/highlight/cache keys still resolve); audio-only items use
     abs:{absId}. Degrades to the exact Calibre-only list when ABS is off or
@@ -1315,10 +1310,6 @@ def unified_library():
     For text searches (query param): Calibre paginates the filtered result set
     and we run a one-shot match against that slice (no audio-only appended,
     since text search doesn't cover ABS metadata)."""
-    limit = request.args.get('limit', type=int)
-    offset = request.args.get('offset', default=0, type=int)
-    query = request.args.get('query')
-
     books, total = get_calibre_books(limit=limit, offset=offset, query=query)
 
     if ABS_ENABLED:
@@ -1331,7 +1322,7 @@ def unified_library():
             # never surfaces ABS-only audiobooks. Filter the cached audio-only
             # list by the raw search term (token AND-match on title+author) and
             # append the hits so audiobooks show up in search results too.
-            raw = (request.args.get('q') or '').strip().lower()
+            raw = (q or '').strip().lower()
             terms = [t for t in raw.split() if t]
             if terms:
                 for m in audio_only:
@@ -1347,15 +1338,15 @@ def unified_library():
     else:
         merged = books
 
-    return jsonify({
+    return {
         'books': merged,
         'total': total,
         'offset': offset,
         'limit': limit,
         'absEnabled': ABS_ENABLED,
-    })
+    }
 
-@app.route('/api/library/<book_id>', methods=['GET'])
+@app.get('/api/library/{book_id}')
 def unified_library_item(book_id):
     """Merged single book: the Calibre work plus any matched ABS editions, in
     the exact shape /api/library rows use. The frontend uses this to (re)load
@@ -1369,7 +1360,7 @@ def unified_library_item(book_id):
     # Handle audiobook IDs (abs:...)
     if book_id_str.startswith('abs:'):
         if not ABS_ENABLED:
-            return jsonify({'error': 'Audiobooks not available'}), 404
+            return JSONResponse({'error': 'Audiobooks not available'}, status_code=404)
         abs_id = book_id_str[4:]
 
         # First check if this is a dual-format book (has matching Calibre ebook)
@@ -1377,29 +1368,29 @@ def unified_library_item(book_id):
         for calibre_id, enriched in enrich_map.items():
             if enriched.get('absId') == abs_id:
                 # Found the dual-format book - return it
-                return jsonify(enriched)
+                return enriched
 
         # Not dual-format, check audio-only items
         for item in audio_only:
             if item.get('id') == book_id_str or item.get('absId') == abs_id:
-                return jsonify(item)
+                return item
 
-        return jsonify({'error': 'Audiobook not found'}), 404
+        return JSONResponse({'error': 'Audiobook not found'}, status_code=404)
 
     # Calibre book
     book = get_book_metadata(book_id)
     if not book:
-        return jsonify({'error': 'Book not found'}), 404
+        return JSONResponse({'error': 'Book not found'}, status_code=404)
     if ABS_ENABLED:
         abs_items = get_abs_items()
         if abs_items:
             merged = match_works([book], abs_items, include_audio_only=False)
             if merged:
-                return jsonify(merged[0])
+                return merged[0]
     book.setdefault('mediaTypes', ['ebook'])
-    return jsonify(book)
+    return book
 
-@app.route('/api/booklinks/<book_id>', methods=['GET'])
+@app.get('/api/booklinks/{book_id}')
 def book_links(book_id):
     """Resolve the cross-format siblings of a book so the reader/player can show
     each other's bookmarks (synced by percentage). Given a Calibre id, returns
@@ -1432,7 +1423,7 @@ def book_links(book_id):
                             siblings.append('abs:' + aid)
                 if not siblings and m.get('absId'):
                     siblings.append('abs:' + m['absId'])
-    return jsonify({'bookId': book_id, 'siblings': siblings})
+    return {'bookId': book_id, 'siblings': siblings}
 
 # Fields the series/saga views need per book; drops heavy ones (description,
 # audiobook.chapters) so the grouped payload stays lean.
@@ -1450,7 +1441,7 @@ def _series_sort_key(book):
     numbered = idx is not None
     return (numbered, idx if numbered else 0, book.get('title') or '')
 
-@app.route('/api/series', methods=['GET'])
+@app.get('/api/series')
 def api_series():
     """Group the full merged library into series. Reuses the full-library match
     cache so grouping spans every Calibre page AND ABS audio-only items. Each
@@ -1487,7 +1478,7 @@ def api_series():
             'books': books,
         })
     out.sort(key=lambda s: s['name'].lower())
-    return jsonify({'series': out, 'absEnabled': ABS_ENABLED})
+    return {'series': out, 'absEnabled': ABS_ENABLED}
 
 def _saga_sort_key(book):
     """Order books within a saga: group by series name, then series_index
@@ -1499,7 +1490,7 @@ def _saga_sort_key(book):
     return (series == '', series, numbered, idx if numbered else 0,
             book.get('title') or '')
 
-@app.route('/api/saga', methods=['GET'])
+@app.get('/api/saga')
 def api_saga():
     """Group the library into sagas — the Calibre #universe custom column (e.g.
     "The Cosmere"). Calibre-only: ABS has no equivalent field, so audio-only
@@ -1537,7 +1528,7 @@ def api_saga():
             'books': books,
         })
     out.sort(key=lambda s: s['name'].lower())
-    return jsonify({'sagas': out, 'absEnabled': ABS_ENABLED})
+    return {'sagas': out, 'absEnabled': ABS_ENABLED}
 
 # ---------------------------------------------------------------------------
 # Chapter summaries (overlay shown at chapter-end / from reading settings).
@@ -1598,14 +1589,14 @@ def _load_summary_links():
         return {}
 
 
-@app.route('/api/summaries/<book_id>', methods=['GET'])
+@app.get('/api/summaries/{book_id}')
 def get_summaries(book_id):
     """Resolve a book to its chapter-summary set and return the ordered
     chapter summaries for that book. {available: false} when no set matches —
     never an error, so the reader can quietly hide the feature."""
     sets, book_index = _load_summary_sets()
     if not sets:
-        return jsonify({'available': False, 'reason': 'no summary sets'})
+        return {'available': False, 'reason': 'no summary sets'}
 
     matched = None       # (set_id, book_obj)
     matched_by = None
@@ -1629,10 +1620,10 @@ def get_summaries(book_id):
                 matched, matched_by = hit, 'title'
 
     if matched is None:
-        return jsonify({'available': False, 'bookTitle': title})
+        return {'available': False, 'bookTitle': title}
 
     set_id, book = matched
-    return jsonify({
+    return {
         'available': True,
         'setId': set_id,
         'setTitle': sets[set_id].get('title') or set_id,
@@ -1640,7 +1631,7 @@ def get_summaries(book_id):
         'bookTitle': book.get('title') or '',
         'matchedBy': matched_by,
         'chapters': book.get('chapters', []),
-    })
+    }
 
 # ---------------------------------------------------------------------------
 # Generic fetch proxy — powers the reader's clean in-app lookup view (wiki /
@@ -1677,15 +1668,14 @@ def _fetch_host_blocked(host):
     return False
 
 
-@app.route('/api/fetch', methods=['GET'])
-def fetch_proxy():
+@app.get('/api/fetch')
+def fetch_proxy(url: str = ''):
     from urllib.parse import urlparse
-    url = request.args.get('url', '')
     parsed = urlparse(url)
     if parsed.scheme not in ('http', 'https'):
-        return jsonify({'error': 'only http/https'}), 400
+        return JSONResponse({'error': 'only http/https'}, status_code=400)
     if _fetch_host_blocked(parsed.hostname):
-        return jsonify({'error': 'host not allowed'}), 403
+        return JSONResponse({'error': 'host not allowed'}, status_code=403)
     try:
         upstream = requests.get(url, timeout=12, headers={
             # A real UA — some wikis/CDNs 403 the python-requests default.
@@ -1694,24 +1684,23 @@ def fetch_proxy():
             'Accept': '*/*',
         }, stream=True)
     except requests.RequestException as e:
-        return jsonify({'error': 'fetch failed', 'detail': str(e)}), 502
+        return JSONResponse({'error': 'fetch failed', 'detail': str(e)}, status_code=502)
     # Cap body size (reader pages, not downloads) and pass content-type through.
     MAX = 4 * 1024 * 1024
     body = upstream.raw.read(MAX + 1, decode_content=True)
     if len(body) > MAX:
         body = body[:MAX]
     ctype = upstream.headers.get('Content-Type', 'application/octet-stream')
-    resp = Response(body, status=upstream.status_code)
-    resp.headers['Content-Type'] = ctype
-    return resp
+    return Response(content=body, status_code=upstream.status_code,
+                    headers={'Content-Type': ctype}, media_type=ctype)
 
-@app.route('/api/audiobooks/<abs_id>/cover', methods=['GET'])
-def get_audiobook_cover(abs_id):
+@app.get('/api/audiobooks/{abs_id}/cover')
+def get_audiobook_cover(abs_id, type: str = 'cover'):
     """Proxy an Audiobookshelf item cover. Mirrors /api/books/<id>/cover:
     same 30-day cache and SVG placeholder fallback, so the frontend can treat
     audio and ebook covers identically. Returns the placeholder when ABS is
     off, the item has no cover, or anything errors."""
-    cover_type = request.args.get('type', 'cover')  # 'cover' or 'thumb'
+    cover_type = type  # 'cover' or 'thumb'
     placeholder = '''<svg width="200" height="300" xmlns="http://www.w3.org/2000/svg">
         <defs>
             <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
@@ -1723,7 +1712,7 @@ def get_audiobook_cover(abs_id):
         <text x="100" y="150" text-anchor="middle" fill="white" font-size="60">🎧</text>
     </svg>'''
     if not ABS_ENABLED:
-        return Response(placeholder, mimetype='image/svg+xml')
+        return Response(content=placeholder, media_type='image/svg+xml')
     try:
         url = f'{ABS_URL}/api/items/{abs_id}/cover'
         # ABS resizes server-side when given a width; ignored (full cover) if
@@ -1731,18 +1720,17 @@ def get_audiobook_cover(abs_id):
         params = {'width': 400} if cover_type == 'thumb' else None
         response = requests.get(url, headers=_abs_headers(), params=params, timeout=10)
         if response.status_code == 404:
-            return Response(placeholder, mimetype='image/svg+xml')
+            return Response(content=placeholder, media_type='image/svg+xml')
         response.raise_for_status()
-        res = Response(response.content,
-                       mimetype=response.headers.get('Content-Type', 'image/jpeg'))
-        res.headers['Cache-Control'] = 'public, max-age=2592000'
-        return res
+        return Response(content=response.content,
+                        media_type=response.headers.get('Content-Type', 'image/jpeg'),
+                        headers={'Cache-Control': 'public, max-age=2592000'})
     except Exception as e:
         print(f"⚠️  Error fetching ABS cover {abs_id}: {e}")
-        return Response(placeholder, mimetype='image/svg+xml')
+        return Response(content=placeholder, media_type='image/svg+xml')
 
 # ---------- Audiobook playback (ABS session proxy) ----------
-# The Flask proxy starts/stops the ABS playback session and hands the client
+# This proxy starts/stops the ABS playback session and hands the client
 # the media URLs. HLS tracks (transcode) are routed back through THIS backend's
 # /api/audiobooks/hls proxy: ABS sends no CORS headers on /hls, so hls.js's XHR
 # from the :8090 WebView would be blocked reading the manifest/segments. Routing
@@ -1775,8 +1763,8 @@ def _rewrite_track_urls(session):
             t['contentUrl'] = f"{base}{p}{sep}token={ABS_TOKEN}"
     return session
 
-@app.route('/api/audiobooks/<abs_id>/play', methods=['POST'])
-def play_audiobook(abs_id):
+@app.post('/api/audiobooks/{abs_id}/play')
+async def play_audiobook(abs_id, request: Request):
     """Start an ABS playback session for an item and return it with track URLs
     rewritten to absolute token-bearing URLs. Multi-file guard: a DirectPlay
     (playMethod 0) split across >1 file is painful to stitch client-side, so we
@@ -1784,8 +1772,12 @@ def play_audiobook(abs_id):
     Read playMethod (0=DirectPlay,1=DirectStream,2=Transcode), currentTime
     (resume point), duration, chapters, and audioTracks on the client."""
     if not ABS_ENABLED:
-        return jsonify({'error': 'Audiobooks not available'}), 503
-    client = request.get_json(silent=True) or {}
+        return JSONResponse({'error': 'Audiobooks not available'}, status_code=503)
+    try:
+        client = await request.json()
+    except Exception:
+        client = None
+    client = client or {}
     body = {
         'deviceInfo': {'clientName': 'GreatReads', 'clientVersion': _read_version()},
         'supportedMimeTypes': client.get('supportedMimeTypes', _ABS_MIME_TYPES),
@@ -1793,7 +1785,7 @@ def play_audiobook(abs_id):
     }
     session = _abs_post(f'/api/items/{abs_id}/play', body)
     if not session:
-        return jsonify({'error': 'Could not start playback session'}), 502
+        return JSONResponse({'error': 'Could not start playback session'}, status_code=502)
 
     tracks = session.get('audioTracks') or []
     if session.get('playMethod') == 0 and len(tracks) > 1:
@@ -1805,17 +1797,21 @@ def play_audiobook(abs_id):
         if forced:
             session = forced
 
-    return jsonify(_rewrite_track_urls(session))
+    return _rewrite_track_urls(session)
 
-@app.route('/api/audiobooks/sessions/<sid>/sync', methods=['POST'])
-def sync_audiobook_session(sid):
+@app.post('/api/audiobooks/sessions/{sid}/sync')
+async def sync_audiobook_session(sid, request: Request):
     """Forward a playback sync to ABS (POST /api/session/<sid>/sync). Body:
     {currentTime, timeListened (seconds since the PREVIOUS sync — a delta, not
     cumulative), duration}. Keeps ABS progress + multi-device websocket events
     up to date. Call ~every 15s while playing."""
     if not ABS_ENABLED:
-        return jsonify({'error': 'Audiobooks not available'}), 503
-    body = request.get_json(silent=True) or {}
+        return JSONResponse({'error': 'Audiobooks not available'}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body or {}
     payload = {
         'currentTime': body.get('currentTime', 0),
         'timeListened': body.get('timeListened', 0),
@@ -1823,22 +1819,26 @@ def sync_audiobook_session(sid):
     }
     res = _abs_post(f'/api/session/{sid}/sync', payload)
     if res is None:
-        return jsonify({'error': 'sync failed'}), 502
-    return jsonify(res or {'ok': True})
+        return JSONResponse({'error': 'sync failed'}, status_code=502)
+    return res or {'ok': True}
 
-@app.route('/api/audiobooks/sessions/<sid>/close', methods=['POST'])
-def close_audiobook_session(sid):
+@app.post('/api/audiobooks/sessions/{sid}/close')
+async def close_audiobook_session(sid, request: Request):
     """Close an ABS playback session (POST /api/session/<sid>/close). Optional
     body is forwarded as a final sync. Best-effort: always returns ok so the
     client's beforeunload/sendBeacon path never blocks."""
     if not ABS_ENABLED:
-        return jsonify({'error': 'Audiobooks not available'}), 503
-    body = request.get_json(silent=True) or {}
+        return JSONResponse({'error': 'Audiobooks not available'}, status_code=503)
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body or {}
     _abs_post(f'/api/session/{sid}/close', body or {})
-    return jsonify({'ok': True})
+    return {'ok': True}
 
-@app.route('/api/audiobooks/hls/<path:subpath>', methods=['GET'])
-def proxy_hls(subpath):
+@app.get('/api/audiobooks/hls/{subpath:path}')
+def proxy_hls(subpath, request: Request):
     """Proxy ABS HLS manifests + segments through this backend so the WebView
     (served from :8090) can fetch them without CORS errors — ABS sends no
     Access-Control-Allow-Origin on /hls — and without ever seeing the ABS token.
@@ -1846,8 +1846,8 @@ def proxy_hls(subpath):
     back to this route automatically; no body rewriting needed. The token is
     re-attached server-side on every upstream fetch."""
     if not ABS_ENABLED:
-        return Response('', status=503)
-    params = dict(request.args)
+        return Response(status_code=503)
+    params = dict(request.query_params)
     params['token'] = ABS_TOKEN
     # ABS transcodes segments on demand, so a freshly-requested .ts (especially
     # right after a seek) 404s until ffmpeg reaches it. Retry briefly before
@@ -1861,7 +1861,7 @@ def proxy_hls(subpath):
                              params=params, timeout=30, stream=True)
         except Exception as e:
             print(f"⚠️  ABS HLS proxy {subpath} failed: {e}")
-            return Response('', status=502)
+            return Response(status_code=502)
         if r.status_code == 404 and is_seg and i < attempts - 1:
             r.close()
             time.sleep(0.5)
@@ -1870,20 +1870,18 @@ def proxy_hls(subpath):
     if r.status_code >= 400:
         # Pass the upstream status through so hls.js can retry on its side too.
         r.close()
-        return Response('', status=r.status_code)
+        return Response(status_code=r.status_code)
     ct = r.headers.get('Content-Type', '')
     if subpath.endswith('.m3u8') or 'mpegurl' in ct.lower():
-        res = Response(r.content, mimetype='application/vnd.apple.mpegurl')
-        res.headers['Cache-Control'] = 'no-cache'
-        return res
+        return Response(content=r.content, media_type='application/vnd.apple.mpegurl',
+                        headers={'Cache-Control': 'no-cache'})
     # Stream segment bytes (chunked) so we don't buffer whole .ts files.
     def _gen():
         for chunk in r.iter_content(chunk_size=65536):
             if chunk:
                 yield chunk
-    res = Response(_gen(), mimetype=ct or 'video/mp2t')
-    res.headers['Cache-Control'] = 'no-cache'
-    return res
+    return StreamingResponse(_gen(), media_type=ct or 'video/mp2t',
+                             headers={'Cache-Control': 'no-cache'})
 
 # ---------- Highlights & Bookmarks ----------
 # Single endpoint family handles both. An item is:
@@ -1893,12 +1891,12 @@ def proxy_hls(subpath):
 # Anchor is the data-anchor index from reader.html — it pins the position to
 # a specific source-DOM block, surviving font-size / unfold re-pagination.
 
-@app.route('/api/highlights', methods=['GET'])
-def list_highlights():
+@app.get('/api/highlights')
+def list_highlights(bookId: str | None = None, type: str | None = None, q: str | None = None):
     """List all highlights/bookmarks. Optional filters: bookId, type, q."""
-    book_id = request.args.get('bookId')
-    type_filter = request.args.get('type')
-    q = (request.args.get('q') or '').strip().lower()
+    book_id = bookId
+    type_filter = type
+    q = (q or '').strip().lower()
 
     with _highlights_lock:
         items = _load_highlights()
@@ -1916,17 +1914,21 @@ def list_highlights():
                 continue
         out.append(it)
     out.sort(key=lambda x: x.get('created', 0), reverse=True)
-    return jsonify({'items': out, 'total': len(out)})
+    return {'items': out, 'total': len(out)}
 
-@app.route('/api/highlights', methods=['POST'])
-def create_highlight():
+@app.post('/api/highlights')
+async def create_highlight(request: Request):
     """Create a highlight or bookmark. Body is the partial item; we fill
     in id + created timestamp."""
-    body = request.get_json(silent=True) or {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body or {}
     if body.get('type') not in ('highlight', 'bookmark', 'auto-bookmark', 'line-bookmark'):
-        return jsonify({'error': 'type must be "highlight", "bookmark", "auto-bookmark", or "line-bookmark"'}), 400
+        return JSONResponse({'error': 'type must be "highlight", "bookmark", "auto-bookmark", or "line-bookmark"'}, status_code=400)
     if not body.get('bookId'):
-        return jsonify({'error': 'bookId is required'}), 400
+        return JSONResponse({'error': 'bookId is required'}, status_code=400)
 
     item = {
         'id': str(uuid.uuid4()),
@@ -1986,22 +1988,26 @@ def create_highlight():
                                  and str(it.get('bookId')) == book_id
                                  and it['id'] not in keep)]
         _save_highlights(items)
-    return jsonify(item), 201
+    return JSONResponse(item, status_code=201)
 
-@app.route('/api/highlights/<item_id>', methods=['DELETE'])
+@app.delete('/api/highlights/{item_id}')
 def delete_highlight(item_id):
     with _highlights_lock:
         items = _load_highlights()
         new_items = [it for it in items if it.get('id') != item_id]
         if len(new_items) == len(items):
-            return jsonify({'error': 'not found'}), 404
+            return JSONResponse({'error': 'not found'}, status_code=404)
         _save_highlights(new_items)
-    return jsonify({'deleted': item_id})
+    return {'deleted': item_id}
 
-@app.route('/api/highlights/<item_id>', methods=['PUT'])
-def update_highlight(item_id):
+@app.put('/api/highlights/{item_id}')
+async def update_highlight(item_id, request: Request):
     """Partial update — only allows mutating note/color/text."""
-    body = request.get_json(silent=True) or {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body or {}
     allowed = ('note', 'color', 'text')
     with _highlights_lock:
         items = _load_highlights()
@@ -2011,8 +2017,8 @@ def update_highlight(item_id):
                     if k in body:
                         it[k] = body[k]
                 _save_highlights(items)
-                return jsonify(it)
-    return jsonify({'error': 'not found'}), 404
+                return it
+    return JSONResponse({'error': 'not found'}, status_code=404)
 
 # ---------- Reading progress ----------
 # Per-book "where am I" record so the same position follows the user across
@@ -2031,7 +2037,7 @@ def update_highlight(item_id):
 #   { mediaType: 'audiobook', position: float (seconds), duration: float (seconds),
 #     absId: str, progress: 0..1, ... }
 
-@app.route('/api/progress', methods=['GET'])
+@app.get('/api/progress')
 def list_progress():
     """List all per-book progress records (used by the library 'continue
     reading' view)."""
@@ -2039,23 +2045,27 @@ def list_progress():
         data = _load_progress()
     items = list(data.values())
     items.sort(key=lambda x: x.get('updated', 0), reverse=True)
-    return jsonify({'items': items, 'total': len(items)})
+    return {'items': items, 'total': len(items)}
 
-@app.route('/api/progress/<book_id>', methods=['GET'])
+@app.get('/api/progress/{book_id}')
 def get_progress(book_id):
     with _progress_lock:
         data = _load_progress()
     item = data.get(str(book_id))
     if not item:
-        return jsonify({'error': 'not found'}), 404
-    return jsonify(item)
+        return JSONResponse({'error': 'not found'}, status_code=404)
+    return item
 
-@app.route('/api/progress/<book_id>', methods=['PUT'])
-def put_progress(book_id):
+@app.put('/api/progress/{book_id}')
+async def put_progress(book_id, request: Request):
     """Upsert progress for one book. Body is the partial record; we fill in
     bookId + updated timestamp. Last-writer-wins (the client compares
     `updated` against its local copy before pushing)."""
-    body = request.get_json(silent=True) or {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body or {}
     # `recentPages` is a rolling buffer of recent valid page-turn samples
     # used to compute WPM / time-remaining in the reader bottom bar. Each
     # entry is {ms: int, words: int}; capped at 10 entries client-side.
@@ -2094,17 +2104,17 @@ def put_progress(book_id):
         _save_progress(data)
     # Reflect the % straight into GreatReads (read.current_percent) — no sync job.
     _gr_set_current_percent(book_id, item)
-    return jsonify(item)
+    return item
 
-@app.route('/api/progress/<book_id>', methods=['DELETE'])
+@app.delete('/api/progress/{book_id}')
 def delete_progress(book_id):
     with _progress_lock:
         data = _load_progress()
         if str(book_id) not in data:
-            return jsonify({'error': 'not found'}), 404
+            return JSONResponse({'error': 'not found'}, status_code=404)
         del data[str(book_id)]
         _save_progress(data)
-    return jsonify({'deleted': str(book_id)})
+    return {'deleted': str(book_id)}
 
 # ---------- GreatReads progress (now written directly) ----------
 # The old title-matching batch "sync" is retired. Reading progress is written
@@ -2113,14 +2123,14 @@ def delete_progress(book_id):
 # in-progress reading (see _gr_set_current_percent). The endpoint below is kept
 # only so the reader's existing fire-and-forget call doesn't 404.
 
-@app.route('/api/greatreads/sync', methods=['POST'])
+@app.post('/api/greatreads/sync')
 def greatreads_sync():
     """Deprecated no-op. Progress is now written directly to GreatReads at save
     time (PUT /api/progress → read.current_percent), so there is nothing to sync."""
-    return jsonify({'ok': True, 'deprecated': True,
-                    'note': 'progress is written directly at save time; no sync needed'})
+    return {'ok': True, 'deprecated': True,
+            'note': 'progress is written directly at save time; no sync needed'}
 
-@app.route('/api/greatreads/format/<book_id>', methods=['GET'])
+@app.get('/api/greatreads/format/{book_id}')
 def greatreads_get_format(book_id):
     """Get the media format that GreatReads is tracking for this book.
 
@@ -2155,7 +2165,7 @@ def greatreads_get_format(book_id):
             pass
 
     if not book_meta:
-        return jsonify({'media': None, 'readingId': None, 'status': None})
+        return {'media': None, 'readingId': None, 'status': None}
 
     title = book_meta.get('title', '')
     norm_title = _norm(_strip_edition(title))
@@ -2175,18 +2185,18 @@ def greatreads_get_format(book_id):
             rd_title = (rd.get('book') or {}).get('title') or ''
             rd_norm = _norm(_strip_edition(rd_title))
             if rd_norm == norm_title:
-                return jsonify({
+                return {
                     'media': rd.get('media'),
                     'readingId': rd.get('id'),
                     'status': rd.get('status'),
-                })
+                }
     except Exception as e:
         print(f'Warning: Failed to fetch GreatReads format: {e}')
 
-    return jsonify({'media': None, 'readingId': None, 'status': None})
+    return {'media': None, 'readingId': None, 'status': None}
 
-@app.route('/api/greatreads/finish', methods=['POST'])
-def greatreads_finish():
+@app.post('/api/greatreads/finish')
+async def greatreads_finish(request: Request):
     """Mark a book as finished in GreatReads, then surface the next TBR book.
 
     Body: {
@@ -2206,7 +2216,11 @@ def greatreads_finish():
     Returns 404 when no in-progress GreatReads reading matches this title.
     Returns 502 on any GreatReads API error.
     """
-    body = request.get_json(silent=True) or {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body or {}
     book_id = str(body.get('bookId', ''))
     title = body.get('title', '')
     author = body.get('author', '')
@@ -2216,7 +2230,7 @@ def greatreads_finish():
     reading_id = body.get('readingId')  # Optional; resolves the exact reading
 
     if not all([book_id, title, finish_date]):
-        return jsonify({'error': 'Missing required fields: bookId, title, finishDate'}), 400
+        return JSONResponse({'error': 'Missing required fields: bookId, title, finishDate'}, status_code=400)
 
     norm_title = _norm(_strip_edition(title))
 
@@ -2250,11 +2264,11 @@ def greatreads_finish():
                     break
 
         if not existing:
-            return jsonify({
+            return JSONResponse({
                 'error': 'No in-progress GreatReads reading for this book',
                 'message': f'Start "{title}" in GreatReads first, then mark it finished here.',
                 'nextBook': None,
-            }), 404
+            }, status_code=404)
 
         reading_id = existing['id']
         # PUT ratings + finish date in one shot. GreatReads' native UI is a
@@ -2278,7 +2292,7 @@ def greatreads_finish():
         ur.raise_for_status()
         message = f'Marked reading #{reading_id} as finished'
     except Exception as e:
-        return jsonify({'error': 'GreatReads API error', 'detail': str(e)}), 502
+        return JSONResponse({'error': 'GreatReads API error', 'detail': str(e)}, status_code=502)
 
     # Next book in reading order for this media. Use /api/readings/tbr — it's
     # the canonical "what's next" source, already sorted (in-progress first,
@@ -2358,16 +2372,16 @@ def greatreads_finish():
     except Exception as e:
         print(f'Warning: Failed to clear progress: {e}')
 
-    return jsonify({
+    return {
         'success': True,
         'readingId': reading_id,
         'message': message,
         'nextBook': next_book
-    })
+    }
 
 
-@app.route('/api/greatreads/start-next', methods=['POST'])
-def greatreads_start_next():
+@app.post('/api/greatreads/start-next')
+async def greatreads_start_next(request: Request):
     """Surface a not-yet-started TBR reading as in-progress in GreatReads.
 
     Split out of /finish so the frontend's Cancel button actually cancels —
@@ -2380,11 +2394,15 @@ def greatreads_start_next():
             defaults to today) }
     Returns 200 {success:true, readingId} on success, 502 on upstream error.
     """
-    body = request.get_json(silent=True) or {}
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    body = body or {}
     reading_id = body.get('readingId')
     start_date = body.get('startDate') or ''
     if not reading_id:
-        return jsonify({'error': 'Missing required field: readingId'}), 400
+        return JSONResponse({'error': 'Missing required field: readingId'}, status_code=400)
     if not start_date:
         from datetime import date
         start_date = date.today().isoformat()
@@ -2394,11 +2412,11 @@ def greatreads_start_next():
             params={'start_date': start_date}, timeout=15)
         r.raise_for_status()
     except Exception as e:
-        return jsonify({'error': 'GreatReads API error', 'detail': str(e)}), 502
-    return jsonify({'success': True, 'readingId': reading_id, 'startDate': start_date})
+        return JSONResponse({'error': 'GreatReads API error', 'detail': str(e)}, status_code=502)
+    return {'success': True, 'readingId': reading_id, 'startDate': start_date}
 
 
-@app.route('/api/health', methods=['GET'])
+@app.get('/api/health')
 def health_check():
     """Health check endpoint"""
     # Test Calibre connection
@@ -2409,21 +2427,21 @@ def health_check():
     except:
         pass
 
-    return jsonify({
+    return {
         'status': 'ok' if calibre_ok else 'degraded',
         'calibre_url': CALIBRE_URL,
         'calibre_library': CALIBRE_LIBRARY,
         'calibre_connected': calibre_ok,
         'version': _read_version(),
-    })
+    }
 
-@app.route('/api/version', methods=['GET'])
+@app.get('/api/version')
 def get_version():
     """Return the current app version (read live from version.txt so a
     `gvc` bump is reflected without a server restart)."""
-    return jsonify({'version': _read_version()})
+    return {'version': _read_version()}
 
-@app.route('/api/build-stamp', methods=['GET'])
+@app.get('/api/build-stamp')
 def get_build_stamp():
     """Return a YYMMDD-HH:MM stamp derived from the most recently edited
     web asset (index.html / reader.html). Used by the status-bar build
@@ -2445,7 +2463,7 @@ def get_build_stamp():
     if latest == 0.0:
         latest = _time.time()
     stamp = _time.strftime('%y%m%d-%H:%M', _time.localtime(latest))
-    return jsonify({'stamp': stamp})
+    return {'stamp': stamp}
 
 if __name__ == '__main__':
     print(f"Ereader Backend Server")
@@ -2467,12 +2485,5 @@ if __name__ == '__main__':
         print(f"  Make sure Calibre Content Server is running at {CALIBRE_URL}")
 
     print(f"\nStarting server on http://0.0.0.0:8091")
-    # Run server - accessible from local network.
-    # debug=False: the Werkzeug interactive debugger is remote code execution if
-    #   any unhandled exception page is reachable on the LAN — never enable it on
-    #   a listening service. use_reloader is kept ON independently so the backend
-    #   still auto-restarts when keep-alive.sh fast-forwards the checkout (that
-    #   file-watch restart IS the deploy mechanism for this bare-metal process).
-    # threaded=True: serve concurrent requests (and so the _highlights_lock that
-    #   guards the JSON writes is actually doing something).
-    app.run(host='0.0.0.0', port=8091, debug=False, use_reloader=True, threaded=True)
+    port = int(os.environ.get('PORT', '8091'))
+    uvicorn.run(app, host='0.0.0.0', port=port)
