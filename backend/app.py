@@ -398,6 +398,14 @@ def _gr_recalculate_chains_async():
 
 def get_calibre_books(limit=None, offset=0, query=None):
     """Fetch books from Calibre Content Server"""
+    # Serve from the short-TTL memo if warm (see _calibre_books_cache). limit
+    # None and 0 both mean "all" (num=1000 below), so normalize them to one key.
+    _ck = (limit or 0, offset, query or '')
+    _now = time.time()
+    with _calibre_books_lock:
+        _hit = _calibre_books_cache.get(_ck)
+        if _hit and _now - _hit[2] < _CALIBRE_BOOKS_TTL:
+            return _hit[0], _hit[1]
     try:
         params = {
             'library_id': CALIBRE_LIBRARY,
@@ -442,7 +450,10 @@ def get_calibre_books(limit=None, offset=0, query=None):
 
         print(f"Returning {len(books)} sorted books")
 
-        return books, search_data.get('total_num', 0)
+        total = search_data.get('total_num', 0)
+        with _calibre_books_lock:
+            _calibre_books_cache[_ck] = (books, total, _now)
+        return books, total
     except Exception as e:
         print(f"Error fetching books from Calibre: {e}")
         import traceback
@@ -557,6 +568,25 @@ _library_cache: dict = {
     'ts': 0.0,
 }
 _LIBRARY_CACHE_TTL = 120  # seconds — rebuilt when new books are detected
+
+# Short-TTL memo for the raw Calibre fetch. get_calibre_books() pulls per-book
+# metadata in a sequential loop, so an unpaginated browse costs ~3s; without
+# this it re-ran on EVERY /api/library hit (the merge cache above only covered
+# the ABS×Calibre match, not the underlying Calibre fetch). Keyed on the query
+# shape (num, offset, query); same 120s window as the merge cache, and busted
+# immediately by _invalidate_library_caches() when a new book is imported.
+_calibre_books_lock = threading.Lock()
+_calibre_books_cache: dict = {}   # (num, offset, query) -> (books, total, ts)
+_CALIBRE_BOOKS_TTL = 120  # seconds
+
+def _invalidate_library_caches():
+    """Drop the Calibre fetch memo and force the next merge rebuild. Call after
+    a known library mutation (e.g. a fresh Calibre import) so the change shows
+    up immediately instead of waiting out the TTL."""
+    with _calibre_books_lock:
+        _calibre_books_cache.clear()
+    with _library_cache_lock:
+        _library_cache['ts'] = 0.0
 
 def _abs_headers():
     return {'Authorization': f'Bearer {ABS_TOKEN}'}
@@ -1345,6 +1375,14 @@ def unified_library(limit: int | None = None, offset: int = 0, query: str | None
         'limit': limit,
         'absEnabled': ABS_ENABLED,
     }
+
+@app.post('/api/library/refresh')
+def refresh_library():
+    """Force the library caches to rebuild on the next request. Call this after
+    importing a book into Calibre so it shows up immediately rather than after
+    the (up to 120s) TTL. Cheap and idempotent."""
+    _invalidate_library_caches()
+    return {'status': 'ok', 'refreshed': True}
 
 @app.get('/api/library/{book_id}')
 def unified_library_item(book_id):
