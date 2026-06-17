@@ -611,6 +611,10 @@ function readingExtraInfoHtml(reading) {
 }
 
 // ---- Shared cover-tap popup -------------------------------------------------
+// Ereader (Flask) API base — used to fetch per-book highlight counts for the popup.
+// (Named distinctly from pages' own EREADER_API const to avoid global redeclaration.)
+const GR_EREADER_API = 'http://100.69.184.113:8091/api';
+
 // Open a readable book in the Ereader reader/player. Both are served same-origin
 // at the site root via the :8090 proxy, so root-absolute paths work. Cache-bust
 // with a stamp so reader/player HTML edits show up immediately.
@@ -716,14 +720,39 @@ function grOpenBookActions(book, opts = {}) {
 
     const extraInfo = opts.extraInfoHtml ? `<div class="col-12">${opts.extraInfoHtml}</div>` : '';
 
-    const secondary = opts.actionsHtml ? `
+    // Highlights link — shown on any page when the book is a linked ebook. Hidden
+    // until the async count below confirms there are some. (Library/TBR/Journal all
+    // get this for free.) Opt out with opts.highlights === false.
+    const showHl = opts.highlights !== false && !!book.calibre_id;
+    const hlLink = showHl ? `
+                <a id="hlActionBtn" class="btn btn-sm btn-outline-secondary d-none"
+                   href="/greatreads/highlights?book=${book.calibre_id}&title=${titleEnc}">
+                    <i class="fas fa-highlighter me-2" style="color:#e0a800;"></i>Highlights
+                    <span id="hlCount" class="badge bg-secondary ms-auto">0</span>
+                </a>` : '';
+
+    const secondaryInner = `${hlLink}${opts.actionsHtml || ''}`;
+    const secondary = secondaryInner.trim() ? `
         <div class="col-12">
-            <div class="open-secondary">${opts.actionsHtml}</div>
+            <div class="open-secondary">${secondaryInner}</div>
         </div>` : '';
 
     document.getElementById('openBookOptions').innerHTML =
         locationCard + big + extraInfo + details + secondary;
     bootstrap.Modal.getOrCreateInstance(document.getElementById('openBookModal')).show();
+
+    // Fill the highlights count (reveal the link only if there are any).
+    if (showHl) {
+        fetch(`${GR_EREADER_API}/highlights?type=highlight&bookId=${encodeURIComponent(book.calibre_id)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => {
+                const n = d && Array.isArray(d.items) ? d.items.length : 0;
+                const btn = document.getElementById('hlActionBtn');
+                const cnt = document.getElementById('hlCount');
+                if (btn && n > 0) { cnt.textContent = n; btn.classList.remove('d-none'); }
+            })
+            .catch(() => {});
+    }
 
     if (typeof opts.onShow === 'function') opts.onShow(book);
 }

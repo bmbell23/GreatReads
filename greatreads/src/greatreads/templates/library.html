@@ -800,23 +800,14 @@ function openBookActions(bookId) {
     const book = allBooks.find(b => b.id === bookId);
     if (!book) return;
 
-    const titleEnc = encodeURIComponent(book.title || '').replace(/'/g, '%27');
-
     // Pick the most relevant reading for the extra-info section: an in-progress
     // one if any, else a scheduled (not-yet-started) one.
     const readings = book.readings || [];
     const relevant = readings.find(r => r.date_started && !r.date_finished_actual)
         || readings.find(r => !r.date_started && !r.date_finished_actual);
 
-    const hlLink = book.calibre_id ? `
-                <a id="hlActionBtn" class="btn btn-sm btn-outline-secondary d-none"
-                   href="/greatreads/highlights?book=${book.calibre_id}&title=${titleEnc}">
-                    <i class="fas fa-highlighter me-2" style="color:#e0a800;"></i>Highlights
-                    <span id="hlCount" class="badge bg-secondary ms-auto">0</span>
-                </a>` : '';
-
+    // The Highlights link (+ async count) is provided by the shared popup itself.
     const actionsHtml = `
-                ${hlLink}
                 <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libViewDetails(${book.id})">
                     <i class="fas fa-eye me-2 text-primary"></i>View Details
                 </button>
@@ -833,19 +824,6 @@ function openBookActions(bookId) {
     GreatReads.openBookActions(book, {
         extraInfoHtml: GreatReads.readingExtraInfoHtml(relevant),
         actionsHtml,
-        onShow: (b) => {
-            // Fill the highlights count (reveal the link only if there are any).
-            if (!b.calibre_id) return;
-            fetch(`${EREADER_API}/highlights?type=highlight&bookId=${encodeURIComponent(b.calibre_id)}`)
-                .then(r => r.ok ? r.json() : null)
-                .then(d => {
-                    const n = d && Array.isArray(d.items) ? d.items.length : 0;
-                    const btn = document.getElementById('hlActionBtn');
-                    const cnt = document.getElementById('hlCount');
-                    if (btn && n > 0) { cnt.textContent = n; btn.classList.remove('d-none'); }
-                })
-                .catch(() => {});
-        }
     });
 }
 
