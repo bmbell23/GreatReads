@@ -1437,11 +1437,16 @@ function createProgressSection(reading, book) {
 function createReadingCard(reading, index) {
     const book = reading.book;
     const statusClass = GreatReads.getStatusClass(reading);
-    const statusBadge = GreatReads.getStatusBadge(reading);
 
     // Get format info and colors
     const formatClass = getFormatClass(reading.media);
-    const formatBadge = getFormatBadge(reading.media);
+
+    // Stacked icon chips for the right rail (format / status / reread)
+    const formatIcon = getFormatIcon(reading.media);
+    const statusIcon = getStatusIcon(reading);
+    const rereadIcon = reading.reread
+        ? '<span class="tbr-icon-badge" style="background-color:#17a2b8;color:#fff;" title="Reread"><i class="fas fa-rotate-right"></i></span>'
+        : '';
 
     // For in-progress books, wrap the entire border; for paused books, no border; otherwise just left border
     const isInProgress = reading.date_started && !reading.is_finished && reading.status !== 'paused';
@@ -1462,37 +1467,19 @@ function createReadingCard(reading, index) {
                             `<i class="fas fa-book book-cover-fallback"></i>`
                         }
                     </div>
-                    <div class="tbr-info flex-grow-1">
-                        <div class="d-flex justify-content-between align-items-start gap-2">
-                            <div class="tbr-info-text">
-                                <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
-                                <p class="text-muted mb-1 text-truncate">${book.author}</p>
-                                ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
-                                <div class="tbr-meta text-muted mb-2">
-                                    ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
-                                    ${book.page_count ? (book.word_count ? ' &middot; ' : '') + book.page_count + ' pages' : ''}
-                                </div>
-                            </div>
-                            <div class="btn-group btn-group-sm flex-shrink-0">
-                                <button class="btn btn-outline-primary" onclick="event.stopPropagation(); editReading(${reading.id})" title="Edit Reading">
-                                    <i class="fas fa-edit"></i>
-                                </button>
-                                ${isInProgress ? `
-                                    <button class="btn btn-outline-info" onclick="event.stopPropagation(); showUpdateProgressModal(${reading.id})" title="Update Progress">
-                                        <i class="fas fa-chart-line"></i>
-                                    </button>
-                                ` : (!reading.is_finished && !isInProgress ? `
-                                    <button class="btn btn-outline-success" onclick="event.stopPropagation(); finishReading(${reading.id})" title="Mark as Finished">
-                                        <i class="fas fa-check"></i>
-                                    </button>
-                                ` : '')}
-                            </div>
+                    <div class="tbr-info tbr-info-text flex-grow-1">
+                        <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
+                        <p class="text-muted mb-1 text-truncate">${book.author}</p>
+                        ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
+                        <div class="tbr-meta text-muted mb-0">
+                            ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
+                            ${book.page_count ? (book.word_count ? ' &middot; ' : '') + book.page_count + ' pages' : ''}
                         </div>
-                        <div class="d-flex flex-wrap gap-1">
-                            ${formatBadge}
-                            ${reading.status === 'paused' ? '<span class="media-badge-large" style="background-color: #ffc107; color: #212529;">Paused</span>' : statusBadge}
-                            ${reading.reread ? '<span class="media-badge-large" style="background-color: #17a2b8; color: white;">Reread</span>' : ''}
-                        </div>
+                    </div>
+                    <div class="tbr-icon-stack flex-shrink-0">
+                        ${formatIcon}
+                        ${statusIcon}
+                        ${rereadIcon}
                     </div>
                 </div>
 
@@ -2743,6 +2730,34 @@ function getFormatBadge(mediaType) {
         'audio': '<span class="media-badge-large audio">Audio</span>'
     };
     return badgeMap[normalized?.toLowerCase()] || '';
+}
+
+// Icon-only format chip for the card's right rail (color-coded square + icon)
+function getFormatIcon(mediaType) {
+    const normalized = normalizeMediaType(mediaType);
+    const map = {
+        'ebook':    { icon: 'fa-tablet-alt', color: '#0066CC', label: 'Ebook' },
+        'physical': { icon: 'fa-book',       color: '#6B4BA3', label: 'Physical' },
+        'audio':    { icon: 'fa-headphones', color: '#FF6600', label: 'Audio' }
+    };
+    const f = map[normalized?.toLowerCase()];
+    if (!f) return '';
+    return `<span class="tbr-icon-badge" style="background-color:${f.color};color:#fff;" title="${f.label}"><i class="fas ${f.icon}"></i></span>`;
+}
+
+// Icon-only status chip for the card's right rail
+function getStatusIcon(reading) {
+    let s;
+    if (reading.status === 'paused') {
+        s = { icon: 'fa-pause',     color: '#ffc107', text: '#212529', label: 'Paused' };
+    } else if (reading.is_finished) {
+        s = { icon: 'fa-check',     color: '#28a745', text: '#fff', label: 'Finished' };
+    } else if (reading.is_started) {
+        s = { icon: 'fa-book-open', color: '#e8900c', text: '#fff', label: 'In Progress' };
+    } else {
+        s = { icon: 'fa-clock',     color: '#6c757d', text: '#fff', label: 'Not Started' };
+    }
+    return `<span class="tbr-icon-badge" style="background-color:${s.color};color:${s.text};" title="${s.label}"><i class="fas ${s.icon}"></i></span>`;
 }
 </script>
 {% endblock %}
