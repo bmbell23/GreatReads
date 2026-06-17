@@ -11,14 +11,23 @@ from sqlalchemy.orm import Session
 
 from ..models.inventory import Inventory
 from ..models.external_import import ExternalImport
+from ..models.reading import Reading
 
 
 def enrich_book_dict(book_data: dict, book_id: int, db: Session) -> dict:
-    """Add inventory, owned-media, and source-link fields to a book dict.
+    """Add inventory, owned-media, source-link, and read-count fields to a book dict.
 
     Mutates and returns ``book_data`` (the output of ``Book.to_dict()``).
     Mirrors the enrichment done in the library books endpoint.
     """
+    # Read count = number of finished readings (prior completions). TBR cards use
+    # this to show an "×N" cover badge for the upcoming re-read.
+    if "read_count" not in book_data:
+        book_data["read_count"] = (
+            db.query(Reading)
+            .filter(Reading.book_id == book_id, Reading.date_finished_actual.isnot(None))
+            .count()
+        )
     # Inventory rows (physical shelf location, owned formats).
     inventory = db.query(Inventory).filter(Inventory.book_id == book_id).all()
     book_data["inventory"] = [i.to_dict() for i in inventory]

@@ -378,8 +378,21 @@ def _gr_set_current_percent(book_key, record):
                     (pct, datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f'), row['id']))
         finally:
             conn.close()
+        # Progress changed → ask GreatReads to recompute estimated end dates and the
+        # rest of this format's chain. Best-effort + backgrounded so a page-turn save
+        # never blocks on it.
+        _gr_recalculate_chains_async()
     except Exception as e:
         print(f'GreatReads current_percent update failed for {book_key}: {e}')
+
+def _gr_recalculate_chains_async():
+    """Fire-and-forget POST to GreatReads' chain recalculation. Never raises."""
+    def _go():
+        try:
+            requests.post(f'{GREATREADS_URL}/api/chains/recalculate', timeout=8)
+        except Exception as e:
+            print(f'GreatReads chain recalc failed: {e}')
+    threading.Thread(target=_go, daemon=True).start()
 
 def get_calibre_books(limit=None, offset=0, query=None):
     """Fetch books from Calibre Content Server"""

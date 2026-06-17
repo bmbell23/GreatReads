@@ -878,16 +878,18 @@ html, body {
     letter-spacing: 0.5px;
 }
 
-/* Journal card consistency: every card reserves the same space for each rail slot
-   (stars / format / reread) and pins the start·days·end row to the bottom, so all
-   elements stay in the same place whether or not a rating/reread is present. */
-.journal-info {
+/* Card consistency (TBR + Journal): the right column is a flex column and the
+   start·days·end row is pinned to the bottom, so dates/progress sit in the same
+   place on every card regardless of which elements above them are present. */
+.tbr-info {
     display: flex;
     flex-direction: column;
 }
-.journal-info .tbr-card-dates {
+.tbr-info .tbr-card-dates {
     margin-top: auto;
 }
+/* Journal reserves the same space for each rail slot (stars / format / reread)
+   even when a rating or reread is absent. */
 .tbr-rail-stars {
     min-height: 16px;
     display: flex;
@@ -899,6 +901,14 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: center;
+}
+
+/* "×N" upcoming-read badge on the TBR cover (mirrors the Library cover badge). */
+.tbr-readcount {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    z-index: 2;
 }
 
 .tbr-draggable-card {

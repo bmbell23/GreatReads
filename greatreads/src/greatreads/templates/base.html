@@ -50,7 +50,7 @@
     {% if current_user %}
     <nav class="bookish-header" id="grNav">
         <div class="container gr-nav-bar">
-            <a class="navbar-brand bookish-brand" href="{{ url_for('library_page') }}">
+            <a class="navbar-brand bookish-brand" href="{{ url_for('tbr_page') }}">
                 <i class="fas fa-book-open me-2"></i>
                 <span class="brand-text">GreatReads</span>
             </a>
@@ -65,14 +65,8 @@
             </button>
 
             <ul class="gr-nav-menu" id="grNavMenu">
-                <!-- Unified menu. Library is the home; Highlights deep-links into
-                     the Ereader overlay (Bookmarks live there as a sub-tab now). -->
-                <li>
-                    <a class="bookish-nav-link" href="{{ url_for('library_page') }}" onclick="closeNavMenu()">
-                        <i class="fas fa-book"></i>
-                        <span class="nav-text">Library</span>
-                    </a>
-                </li>
+                <!-- Unified menu. TBR (reading now) is the home; Highlights deep-links
+                     into the Ereader overlay (Bookmarks live there as a sub-tab now). -->
                 <li>
                     <a class="bookish-nav-link" href="{{ url_for('tbr_page') }}" onclick="closeNavMenu()">
                         <i class="fas fa-list"></i>
@@ -83,6 +77,12 @@
                     <a class="bookish-nav-link" href="{{ url_for('journal_page') }}" onclick="closeNavMenu()">
                         <i class="fas fa-book-reader"></i>
                         <span class="nav-text">Journal</span>
+                    </a>
+                </li>
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('library_page') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-book"></i>
+                        <span class="nav-text">Library</span>
                     </a>
                 </li>
                 <li>

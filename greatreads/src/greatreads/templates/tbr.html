@@ -898,6 +898,41 @@ function apiUrl(path) {
 let currentReadings = [];
 const STATIC_BASE = "{{ url_for('static', path='') }}";
 
+// Live reading position from the Ereader feed — the same source the reader screen
+// and the Library use. The reading model's `current_progress_percent` is only a
+// WPD/time estimate, so for books actually opened in the reader we prefer the real
+// position (and real page x/y) shown there.
+const progressByCalibre = new Map();  // calibre_id -> { progress, page, total, ... }
+const progressByAbs = new Map();      // abs_id     -> { progress, ... }
+
+async function loadReadingProgress() {
+    try {
+        const res = await fetch(`${GR_EREADER_API}/progress`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const items = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
+        progressByCalibre.clear();
+        progressByAbs.clear();
+        for (const it of items) {
+            if (it && it.bookId != null) progressByCalibre.set(String(it.bookId), it);
+            if (it && it.absId) progressByAbs.set(String(it.absId), it);
+        }
+    } catch (e) { /* leave maps empty → fall back to the estimate */ }
+}
+
+// The live progress record for a reading: prefer the format it's actually in,
+// fall back to whichever record exists. null when the book was never opened.
+function liveProgressFor(reading, book) {
+    const isAudio = (reading.media || '').toLowerCase() === 'audio';
+    if (!isAudio && book.calibre_id && progressByCalibre.has(String(book.calibre_id)))
+        return progressByCalibre.get(String(book.calibre_id));
+    if (isAudio && book.abs_id && progressByAbs.has(String(book.abs_id)))
+        return progressByAbs.get(String(book.abs_id));
+    return (book.calibre_id && progressByCalibre.get(String(book.calibre_id)))
+        || (book.abs_id && progressByAbs.get(String(book.abs_id)))
+        || null;
+}
+
 // Effective WPD for each format (loaded from settings API)
 let effectiveWpd = { ebook: null, physical: null, audio: null };
 
@@ -1187,6 +1222,9 @@ async function loadTBRReadings() {
         const readings = await GreatReads.apiCall('/readings/tbr');
         allReadings = readings;
         currentReadings = readings;
+        // Pull live reading positions before rendering so the progress bar matches
+        // what the reader shows (non-fatal if the Ereader feed is unreachable).
+        await loadReadingProgress();
         updateStats(readings);
         // Apply current filters instead of showing all readings
         applyFilters();
@@ -1325,97 +1363,58 @@ function createProgressSection(reading, book) {
         return date.toLocaleDateString('en-US', options);
     };
 
-    // For not-started books, show date info but no progress bar.
-    // (WPD moved to the cover-tap popup to keep the card compact.)
-    if (!reading.date_started) {
-        return `
-            <div class="mt-2 pt-2" style="border-top: 1px solid #dee2e6;">
-                <div class="d-flex justify-content-between align-items-center text-sm">
-                    <div class="text-muted">
-                        <i class="fas fa-calendar-alt" style="width: 16px;"></i>
-                        ${startDate ? formatDateSmart(startDate) : 'Not scheduled'}
-                    </div>
-                    <div class="text-muted">
-                        <i class="fas fa-calendar-day" style="width: 16px;"></i>${totalDays ? Math.round(totalDays) : 'TBD'}
-                    </div>
-                    <div class="text-muted">
-                        <i class="fas fa-flag-checkered" style="width: 16px;"></i>
-                        ${endDate ? formatDateSmart(endDate) : 'TBD'}
-                    </div>
-                </div>
-            </div>
-        `;
-    }
+    // Every TBR card uses the SAME structure — a start·days·end row plus a progress
+    // bar — so element placement is identical whether a book is in-progress or not
+    // yet started (the bar just reads "Not started"/"Scheduled" at 0%).
 
-    if (!endDate || !totalDays) {
-        // Fallback to simple date display if we don't have enough data for progress bar
-        return `
-            <div class="mt-2 pt-2" style="border-top: 1px solid #dee2e6;">
-                <div class="d-flex justify-content-between align-items-center text-sm">
-                    <div class="text-muted">
-                        <i class="fas fa-calendar-alt" style="width: 16px;"></i>
-                        ${formatDateSmart(startDate)}
-                    </div>
-                    <div class="text-muted">
-                        <i class="fas fa-calendar-day" style="width: 16px;"></i>${totalDays ? Math.round(totalDays) : 'TBD'}
-                    </div>
-                    <div class="text-muted">
-                        <i class="fas fa-flag-checkered" style="width: 16px;"></i>
-                        ${endDate ? formatDateSmart(endDate) : 'TBD'}
-                    </div>
-                </div>
-            </div>
-        `;
-    }
+    // Prefer the live reading position from the Ereader feed (what the reader screen
+    // shows). Fall back to the model's current_progress_percent (the actual tracked
+    // value; only an estimate for untracked books). 0 when not started.
+    const live = liveProgressFor(reading, book);
+    const hasLive = live && typeof live.progress === 'number';
+    const targetProgress = hasLive
+        ? live.progress * 100
+        : (reading.date_started ? (reading.current_progress_percent || 0) : 0);
 
-    // Use the current_progress_percent from the API (which handles manual overrides)
-    const targetProgress = reading.current_progress_percent || 0;
+    // Real page x/y for ebooks when available.
+    const totalPages = (hasLive && live.total) ? live.total : (book.page_count || 0);
+    const targetPage = (hasLive && live.page != null) ? live.page : (reading.current_progress_page || 0);
 
-    // Target page number
-    const totalPages = book.page_count || 0;
-    const targetPage = reading.current_progress_page || 0;
-
-    // Determine if we're on track, ahead, or behind (placeholder for now - would need actual current page)
     const isStarted = reading.date_started && !reading.date_finished_actual;
+    const startIcon = reading.date_started ? 'fa-play-circle' : 'fa-calendar-alt';
+    const startColor = reading.date_started ? 'color:#28a745;' : '';
+    const emptyLabel = reading.status === 'paused' ? 'Paused' : (isStarted ? 'In Progress' : 'Not started');
 
-    // Get media color
-    const mediaColors = {
-        'Ebook': '#0066CC',
-        'Physical': '#6B4BA3',
-        'Audio': '#FF6600'
-    };
+    const mediaColors = { 'Ebook': '#0066CC', 'Physical': '#6B4BA3', 'Audio': '#FF6600' };
     const mediaColor = mediaColors[reading.media] || '#28a745';
 
     return `
-        <div class="mt-2 pt-2" style="border-top: 1px solid #dee2e6;">
-            <!-- Date info row -->
+        <div class="pt-2 tbr-card-dates" style="border-top: 1px solid #dee2e6;">
+            <!-- Date info row: start | days | end (always present, TBD when unknown) -->
             <div class="d-flex justify-content-between align-items-center text-sm mb-2">
                 <div class="text-muted">
-                    <i class="fas fa-play-circle" style="width: 16px; color: #28a745;"></i>
-                    ${formatDateSmart(startDate)}
+                    <i class="fas ${startIcon}" style="width: 16px; ${startColor}"></i>
+                    ${startDate ? formatDateSmart(startDate) : 'TBD'}
                 </div>
                 <div class="text-muted">
-                    <i class="fas fa-calendar-day" style="width: 16px;"></i>${Math.round(totalDays)}
+                    <i class="fas fa-calendar-day" style="width: 16px;"></i>${totalDays ? Math.round(totalDays) : 'TBD'}
                 </div>
                 <div class="text-muted">
                     <i class="fas fa-flag-checkered" style="width: 16px;"></i>
-                    ${formatDateSmart(endDate)}
+                    ${endDate ? formatDateSmart(endDate) : 'TBD'}
                 </div>
             </div>
 
-            <!-- Progress bar -->
+            <!-- Progress bar (always present for consistent placement) -->
             <div style="position: relative; height: 24px; background-color: #e9ecef; border-radius: 4px; overflow: hidden;">
-                <!-- Filled progress (actual completion) -->
                 <div style="position: absolute; left: 0; top: 0; height: 100%; background-color: ${mediaColor}; border-radius: 4px; width: ${targetProgress}%; transition: width 0.3s ease;"></div>
-
-                <!-- Progress bar label -->
                 ${targetProgress > 0 ? `
                     <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 0.7rem; font-weight: 600; color: #212529; z-index: 1; white-space: nowrap; background-color: rgba(255, 255, 255, 0.85); padding: 1px 6px; border-radius: 2px;">
-                        ${targetProgress.toFixed(1)}% p. ${targetPage}
+                        ${targetProgress.toFixed(1)}%${targetPage ? ' · p. ' + targetPage + (totalPages ? '/' + totalPages : '') : ''}
                     </div>
                 ` : `
                     <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 0.75rem; font-weight: 600; color: #495057; z-index: 1;">
-                        ${reading.status === 'paused' ? 'Paused' : (isStarted ? 'In Progress' : 'Not Started')}
+                        ${emptyLabel}
                     </div>
                 `}
             </div>
@@ -1430,12 +1429,18 @@ function createReadingCard(reading, index) {
     // Get format info and colors
     const formatClass = getFormatClass(reading.media);
 
-    // Stacked icon chips for the right rail. Order: status, format, (reread).
-    // Reread is only sometimes present — the flex column collapses cleanly without it.
+    // Right rail: status, then format. Both are always present, so the rail is the
+    // same on every card. Reread is no longer a rail badge — it's shown as an "×N"
+    // cover badge instead (below), matching the Library cards and freeing rail space.
     const formatIcon = getFormatIcon(reading.media);
     const statusIcon = getStatusIcon(reading);
-    const rereadIcon = reading.reread
-        ? '<span class="tbr-icon-badge" style="background-color:#17a2b8;color:#fff;" title="Reread"><i class="fas fa-rotate-right"></i></span>'
+
+    // "×N" cover badge: the read this WILL be once finished (prior completions + 1).
+    // Only shown for re-reads (N ≥ 2), mirroring the Library cover badge.
+    let nthRead = (book.read_count || 0) + 1;
+    if (reading.reread && nthRead < 2) nthRead = 2;
+    const readBadge = nthRead >= 2
+        ? `<span class="read-count-badge read-count-${Math.min(nthRead, 15)} tbr-readcount" title="Will be read #${nthRead}">×${nthRead}</span>`
         : '';
 
     // For in-progress books, wrap the entire border; for paused books, no border; otherwise just left border
@@ -1456,17 +1461,22 @@ function createReadingCard(reading, index) {
                              <i class="fas fa-book book-cover-fallback" style="display: none;"></i>` :
                             `<i class="fas fa-book book-cover-fallback"></i>`
                         }
+                        ${readBadge}
                     </div>
                     <div class="tbr-info flex-grow-1">
                         <div class="d-flex justify-content-between align-items-start gap-2">
                             <div class="tbr-info-text">
                                 <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
-                                <p class="text-muted mb-0 text-truncate">${book.author}</p>
+                                <p class="text-muted mb-1 text-truncate">${book.author}</p>
+                                ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
+                                <div class="tbr-meta text-muted mb-0">
+                                    ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
+                                    ${book.page_count ? (book.word_count ? ' &middot; ' : '') + book.page_count + ' pages' : ''}
+                                </div>
                             </div>
                             <div class="tbr-icon-stack flex-shrink-0">
                                 ${statusIcon}
                                 ${formatIcon}
-                                ${rereadIcon}
                             </div>
                         </div>
 
@@ -1489,13 +1499,22 @@ function openReadingActions(readingId) {
     const wpd = getWpdForMedia(reading.media);
     const detailRows = wpd ? [['WPD', `${(wpd / 1000).toFixed(1)}k`]] : [];
 
+    // Use the real reading position (Ereader feed) for the popup's progress too, so
+    // it matches the card and the reader.
+    const live = liveProgressFor(reading, reading.book);
+    const r2 = (live && typeof live.progress === 'number')
+        ? { ...reading,
+            current_progress_percent: live.progress * 100,
+            current_progress_page: (live.page != null ? live.page : reading.current_progress_page) }
+        : reading;
+
     const actionsHtml = `
         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="tbrEditFromPopup(${reading.id})">
             <i class="fas fa-edit me-2 text-primary"></i>Edit Reading
         </button>`;
 
     GreatReads.openBookActions(reading.book, {
-        extraInfoHtml: GreatReads.readingExtraInfoHtml(reading),
+        extraInfoHtml: GreatReads.readingExtraInfoHtml(r2),
         detailRows,
         actionsHtml,
     });

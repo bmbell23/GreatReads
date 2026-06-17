@@ -612,75 +612,6 @@ function setupEventListeners() {
     renderSortUI();
 }
 
-// ---- Ereader reading progress (cross-origin, same feed the Ereader home uses) ----
-const EREADER_API = 'http://100.69.184.113:8091/api';
-const progressByCalibre = new Map();  // calibre_id -> { progress, updated, ... }
-const progressByAbs = new Map();      // abs_id     -> { progress, updated, ... }
-
-async function loadReadingProgress() {
-    try {
-        const res = await fetch(`${EREADER_API}/progress`);
-        if (!res.ok) return;
-        const data = await res.json();
-        const items = Array.isArray(data.items) ? data.items : [];
-        progressByCalibre.clear();
-        progressByAbs.clear();
-        for (const it of items) {
-            if (it && it.bookId != null) progressByCalibre.set(String(it.bookId), it);
-            if (it && it.absId) progressByAbs.set(String(it.absId), it);
-        }
-    } catch (_) {
-        // Offline / Ereader API unreachable — sort just falls back to no float.
-    }
-}
-
-// Progress record for a book (prefer ebook/calibre, fall back to audio/abs).
-function bookProgress(book) {
-    if (book.calibre_id && progressByCalibre.has(String(book.calibre_id))) {
-        return progressByCalibre.get(String(book.calibre_id));
-    }
-    if (book.abs_id && progressByAbs.has(String(book.abs_id))) {
-        return progressByAbs.get(String(book.abs_id));
-    }
-    return null;
-}
-
-// "In progress" = opened and partway through (0 < p < 1) — not finished, not just opened.
-function isInProgress(book) {
-    const pr = bookProgress(book);
-    const p = pr && typeof pr.progress === 'number' ? pr.progress : 0;
-    return !!pr && p > 0 && p < 1;
-}
-
-// Ereader-home-style ordering: in-progress books first (newest update first),
-// then everyone else by author last name → series → series order → pub date.
-function sortAuthorEreaderStyle(list) {
-    const inProgress = [];
-    const rest = [];
-    for (const b of list) {
-        (isInProgress(b) ? inProgress : rest).push(b);
-    }
-    inProgress.sort((a, b) => {
-        const au = (bookProgress(a) && bookProgress(a).updated) || 0;
-        const bu = (bookProgress(b) && bookProgress(b).updated) || 0;
-        return bu - au;
-    });
-    const lastName = b => (b.author_name_second || b.author_sorted || b.author || 'Unknown');
-    rest.sort((a, b) => {
-        const lc = lastName(a).toLowerCase().localeCompare(lastName(b).toLowerCase());
-        if (lc !== 0) return lc;
-        const sc = (a.series || '').toLowerCase().localeCompare((b.series || '').toLowerCase());
-        if (sc !== 0) return sc;
-        const ai = a.series_number ?? 0, bi = b.series_number ?? 0;
-        if (ai !== bi) return ai - bi;
-        return (a.date_published || '').localeCompare(b.date_published || '');
-    });
-    // Descending flips the author ordering (Z→A); in-progress books still float
-    // at the top, newest first.
-    if (!sortAscending) rest.reverse();
-    return inProgress.concat(rest);
-}
-
 async function loadLibraryData() {
     try {
         // Check if GreatReads is available
@@ -688,15 +619,12 @@ async function loadLibraryData() {
             throw new Error('GreatReads library not loaded');
         }
 
-        // Load books + filters in parallel; pull Ereader reading progress too so
-        // in-progress books can float to the top (matches the Ereader home).
+        // Load books + filters in parallel.
         const [books, stats, filters] = await Promise.all([
             GreatReads.apiCall('/library/books?limit=10000'),
             GreatReads.apiCall('/library/stats'),
             GreatReads.apiCall('/library/filters')
         ]);
-
-        await loadReadingProgress();
 
         allBooks = books;
         filteredBooks = books;
@@ -706,9 +634,8 @@ async function loadLibraryData() {
         populateFilterOptions(filters);
 
         // Initialize filters from URL params, then render via applyFilters() so the
-        // default Author (in-progress-first) sort is actually applied on first load
-        // — previously the initial render used raw API order while the dropdown
-        // already said "Author".
+        // default Author sort is applied on first load (the dropdown already says
+        // "Author").
         initializeFiltersFromURL();
         applyFilters();
 
@@ -867,6 +794,9 @@ async function libMarkFinished(id) {
     }
 }
 
+// Ereader API base (cross-origin) — used to clear reading progress the reader wrote.
+const EREADER_API = 'http://100.69.184.113:8091/api';
+
 // Clear reading progress via the Ereader API (same feed/keys the reader writes).
 async function libClearProgress(id) {
     const book = allBooks.find(b => b.id === id);
@@ -881,7 +811,6 @@ async function libClearProgress(id) {
             await fetch(`${EREADER_API}/progress/${encodeURIComponent(k)}`, { method: 'DELETE' }).catch(() => {});
         }
         GreatReads.showToast('Reading progress cleared', 'success');
-        await loadReadingProgress();
         applyFilters();
     } catch (e) {
         console.error('Clear progress failed:', e);
@@ -892,7 +821,6 @@ async function libClearProgress(id) {
 async function refreshLibraryData() {
     try {
         allBooks = await GreatReads.apiCall('/library/books?limit=10000');
-        await loadReadingProgress();
         applyFilters();
     } catch (_) {}
 }
@@ -949,15 +877,6 @@ function applyFilters() {
 
         return true;
     });
-
-    // Author (default) view: float in-progress books to the top (newest first),
-    // then group by author last name → series → series order → publication date.
-    // Mirrors the Ereader home's applySort() so the two libraries feel identical.
-    if (sort === 'author') {
-        filteredBooks = sortAuthorEreaderStyle(filteredBooks);
-        displayBooks(filteredBooks);
-        return;
-    }
 
     // Apply sorting
     filteredBooks.sort((a, b) => {

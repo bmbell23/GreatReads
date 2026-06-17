@@ -138,12 +138,20 @@ class ChainCalculator:
     def _calculate_ip_days_estimate_from_progress(
         self, reading: Reading, reading_speeds: Dict[str, int]
     ) -> Optional[int]:
-        """Calculate days estimate for an IP book using its manual progress baseline.
+        """Calculate days estimate for an IP book from its ACTUAL recorded progress.
 
         Re-evaluates how many days remain based on:
-          - The manually recorded percentage and the date it was entered
+          - The real current percentage (tracked live from the reader, or set via the
+            in-app progress control)
           - WPD for the reading's media type
-        This keeps date_est_end accurate as time passes after the manual entry.
+        Recomputed whenever the chain is recalculated (i.e. whenever progress
+        updates), so date_est_end and the rest of the format's chain stay accurate.
+
+        NOTE: we deliberately do NOT project additional reading forward from the date
+        the progress was recorded. Progress is directly tracked now, so the estimate
+        is "elapsed so far + time to finish the remaining words at WPD" using the real
+        position. (The old forward-projection — additional_words = days_since × wpd —
+        is preserved here, commented out, for reference.)
         """
         today = date.today()
         days_elapsed = (today - reading.date_started).days + 1
@@ -152,19 +160,14 @@ class ChainCalculator:
         wpd = reading_speeds.get(media_lower, 12000)
 
         total_words = reading.book.word_count
-        words_at_manual = total_words * (reading.current_percent / 100.0)
+        words_read = total_words * (reading.current_percent / 100.0)  # actual position
 
-        progress_date = (
-            reading.date_progress_set.date()
-            if isinstance(reading.date_progress_set, datetime)
-            else reading.date_progress_set
-        )
-        days_since_manual = (today - progress_date).days
+        # Legacy daily-goal projection (kept for reference, intentionally disabled):
+        #   progress_date = reading.date_progress_set ...
+        #   days_since_manual = (today - progress_date).days
+        #   words_read = min(words_read + days_since_manual * wpd, total_words)
 
-        additional_words = days_since_manual * wpd
-        total_words_read = min(words_at_manual + additional_words, total_words)
-        words_remaining = max(0.0, total_words - total_words_read)
-
+        words_remaining = max(0.0, total_words - words_read)
         if words_remaining <= 0:
             return days_elapsed
 

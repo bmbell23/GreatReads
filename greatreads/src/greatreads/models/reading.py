@@ -147,54 +147,38 @@ class Reading(Base):
         if not self.date_started or not self.book or not self.book.word_count or not self.media:
             return None
 
-        # If paused, return the frozen progress
-        if self.is_paused:
-            return self.current_percent if self.current_percent is not None else 0.0
+        # Progress is now DIRECTLY TRACKED: the Ereader writes the real reading
+        # position into current_percent on every read, and the in-app "update
+        # progress" control sets it too. So whenever we have an actual value, return
+        # it as-is — no daily WPD projection. We used to project a moving "daily
+        # goal" forward because we didn't know the real position; that estimate is
+        # kept below ONLY as a fallback for untracked books with no recorded
+        # position yet (e.g. a physical book you haven't logged progress for).
+        if self.current_percent is not None:
+            return min(100.0, max(0.0, self.current_percent))
 
-        # Get WPD for this media type
+        # ----- Legacy fallback: time/WPD estimate (no recorded position) -----
+        if self.is_paused:
+            return 0.0
+
         from ..services.settings_service import get_wpd_for_media
         from sqlalchemy.orm import object_session
 
-        db = object_session(self)
-        if not db:
-            # Fallback to days-based calculation if we can't get WPD
-            if not self.effective_days_estimate:
-                return None
-            today = date.today()
-            days_elapsed = (today - self.date_started).days + 1
-            if days_elapsed <= 0:
-                return 0.0
-            progress = (days_elapsed / self.effective_days_estimate) * 100
-            return min(100.0, max(0.0, progress))
-
-        wpd = get_wpd_for_media(db, self.media)
         today = date.today()
-
-        # If start date is in the future, return 0% progress
         if self.date_started > today:
             return 0.0
-
-        days_elapsed_today = (today - self.date_started).days + 1  # +1 to make it inclusive
-
+        days_elapsed_today = (today - self.date_started).days + 1  # inclusive
         if days_elapsed_today <= 0:
             return 0.0
 
-        # If manual progress was set, calculate from that baseline
-        if self.current_percent_manual_override and self.current_percent is not None and self.date_progress_set is not None:
-            # Calculate days since manual progress was set
-            # Extract date from datetime if needed
-            progress_date = self.date_progress_set.date() if isinstance(self.date_progress_set, datetime) else self.date_progress_set
-            days_since_manual_entry = (today - progress_date).days
-
-            # Calculate additional progress since manual entry
-            total_words = self.book.word_count
-            words_at_manual_entry = total_words * (self.current_percent / 100.0)
-            additional_words = days_since_manual_entry * wpd
-            total_words_read = words_at_manual_entry + additional_words
-            progress = (total_words_read / total_words) * 100
+        db = object_session(self)
+        if not db:
+            if not self.effective_days_estimate:
+                return None
+            progress = (days_elapsed_today / self.effective_days_estimate) * 100
             return min(100.0, max(0.0, progress))
 
-        # Otherwise, calculate based on WPD from start date
+        wpd = get_wpd_for_media(db, self.media)
         words_read = days_elapsed_today * wpd
         progress = (words_read / self.book.word_count) * 100
         return min(100.0, max(0.0, progress))
