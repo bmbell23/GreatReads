@@ -9,7 +9,7 @@ from ..database import get_db
 from ..models.book import Book, BookResponse
 from ..models.reading import Reading
 from ..models.inventory import Inventory
-from ..models.external_import import ExternalImport
+from ._book_enrich import enrich_book_dict
 
 router = APIRouter()
 
@@ -122,31 +122,10 @@ async def get_library_books(
             r.date_started and not r.date_finished_actual for r in readings
         )
 
-        # Add inventory information
-        inventory = db.query(Inventory).filter(Inventory.book_id == book.id).all()
-        book_data["inventory"] = [i.to_dict() for i in inventory]
-
-        # Calculate owned media types
-        media_owned = []
-        for inv in inventory:
-            if inv.owned_audio:
-                media_owned.append("Audio")
-            if inv.owned_ebook:
-                media_owned.append("Ebook")
-            if inv.owned_physical:
-                media_owned.append("Physical")
-        book_data["media_owned"] = list(set(media_owned))  # Remove duplicates
-
-        # External source links (Calibre / Audiobookshelf). The unified home uses
-        # these to open a readable book in the reader/player by its source id;
-        # books with neither link are tracking-only (physical / manually added).
-        ext = db.query(ExternalImport).filter(ExternalImport.book_id == book.id).all()
-        book_data["calibre_id"] = next(
-            (e.external_id for e in ext if e.source == "calibre"), None
-        )
-        book_data["abs_id"] = next(
-            (e.external_id for e in ext if e.source == "audiobookshelf"), None
-        )
+        # Inventory + owned-media + external source links (Calibre / Audiobookshelf).
+        # The unified home/popup uses these to open a readable book and show shelf
+        # location; books with neither link are tracking-only (physical / manual).
+        enrich_book_dict(book_data, book.id, db)
 
         enriched_books.append(book_data)
 

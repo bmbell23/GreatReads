@@ -48,66 +48,71 @@
 <body>
     <!-- Navigation -->
     {% if current_user %}
-    <nav class="navbar navbar-expand-lg navbar-dark bookish-header">
-        <div class="container">
+    <nav class="bookish-header" id="grNav">
+        <div class="container gr-nav-bar">
             <a class="navbar-brand bookish-brand" href="{{ url_for('library_page') }}">
                 <i class="fas fa-book-open me-2"></i>
                 <span class="brand-text">GreatReads</span>
             </a>
 
-            <button class="navbar-toggler border-0" type="button" data-bs-toggle="collapse" data-bs-target="#navbarNav">
-                <span class="navbar-toggler-icon"></span>
+            <!-- Animated hamburger -> X (custom, replaces Bootstrap toggler) -->
+            <button class="gr-hamburger" id="grHamburger" type="button"
+                    aria-label="Toggle navigation" aria-expanded="false"
+                    aria-controls="grNavMenu" onclick="toggleNavMenu()">
+                <span></span>
+                <span></span>
+                <span></span>
             </button>
 
-            <div class="collapse navbar-collapse" id="navbarNav">
-                <ul class="navbar-nav ms-auto">
-                    <!-- Unified menu. Library is the home; Highlights deep-links into
-                         the Ereader overlay (Bookmarks live there as a sub-tab now). -->
-                    <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="{{ url_for('library_page') }}">
-                            <i class="fas fa-book"></i>
-                            <span class="nav-text">Library</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="{{ url_for('tbr_page') }}">
-                            <i class="fas fa-list"></i>
-                            <span class="nav-text">TBR</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="{{ url_for('journal_page') }}">
-                            <i class="fas fa-book-reader"></i>
-                            <span class="nav-text">Journal</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="{{ url_for('highlights_page') }}">
-                            <i class="fas fa-highlighter"></i>
-                            <span class="nav-text">Highlights</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="{{ url_for('stats_page') }}">
-                            <i class="fas fa-chart-bar"></i>
-                            <span class="nav-text">Stats</span>
-                        </a>
-                    </li>
-                    <li class="nav-item">
-                        <a class="nav-link bookish-nav-link" href="{{ url_for('settings_page') }}">
-                            <i class="fas fa-cog"></i>
-                            <span class="nav-text">Settings</span>
-                        </a>
-                    </li>
-                </ul>
-            </div>
+            <ul class="gr-nav-menu" id="grNavMenu">
+                <!-- Unified menu. Library is the home; Highlights deep-links into
+                     the Ereader overlay (Bookmarks live there as a sub-tab now). -->
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('library_page') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-book"></i>
+                        <span class="nav-text">Library</span>
+                    </a>
+                </li>
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('tbr_page') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-list"></i>
+                        <span class="nav-text">TBR</span>
+                    </a>
+                </li>
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('journal_page') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-book-reader"></i>
+                        <span class="nav-text">Journal</span>
+                    </a>
+                </li>
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('highlights_page') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-highlighter"></i>
+                        <span class="nav-text">Highlights</span>
+                    </a>
+                </li>
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('stats_page') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-chart-bar"></i>
+                        <span class="nav-text">Stats</span>
+                    </a>
+                </li>
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('settings_page') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-cog"></i>
+                        <span class="nav-text">Settings</span>
+                    </a>
+                </li>
+            </ul>
         </div>
     </nav>
+    <!-- Tap-off backdrop for the mobile menu overlay -->
+    <div class="gr-nav-backdrop" id="grNavBackdrop" onclick="closeNavMenu()" aria-hidden="true"></div>
     {% else %}
     <!-- Simple header for login page -->
-    <nav class="navbar navbar-dark bookish-header">
-        <div class="container">
-            <a class="navbar-brand bookish-brand mx-auto" href="#">
+    <nav class="bookish-header">
+        <div class="container gr-nav-bar gr-nav-bar--centered">
+            <a class="navbar-brand bookish-brand" href="#">
                 <i class="fas fa-book-open me-2"></i>
                 <span class="brand-text">GreatReads</span>
             </a>
@@ -120,6 +125,23 @@
         {% block content %}{% endblock %}
     </main>
 
+    <!-- Shared cover-tap popup (Library / TBR / Journal all use GreatReads.openBookActions) -->
+    {% if current_user %}
+    <div class="modal fade" id="openBookModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-sm">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-truncate" id="openBookTitle"></h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="row g-2" id="openBookOptions"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    {% endif %}
+
     <!-- Footer -->
     <footer class="bg-light mt-5 py-4">
         <div class="container text-center">
@@ -129,6 +151,42 @@
             </p>
         </div>
     </footer>
+
+    <!-- Animated hamburger / overlay menu -->
+    <script>
+        function toggleNavMenu() {
+            const menu = document.getElementById('grNavMenu');
+            if (!menu) return;
+            if (menu.classList.contains('active')) {
+                closeNavMenu();
+            } else {
+                openNavMenu();
+            }
+        }
+
+        function openNavMenu() {
+            const menu = document.getElementById('grNavMenu');
+            const burger = document.getElementById('grHamburger');
+            const backdrop = document.getElementById('grNavBackdrop');
+            if (menu) menu.classList.add('active');
+            if (burger) { burger.classList.add('active'); burger.setAttribute('aria-expanded', 'true'); }
+            if (backdrop) backdrop.classList.add('active');
+        }
+
+        function closeNavMenu() {
+            const menu = document.getElementById('grNavMenu');
+            const burger = document.getElementById('grHamburger');
+            const backdrop = document.getElementById('grNavBackdrop');
+            if (menu) menu.classList.remove('active');
+            if (burger) { burger.classList.remove('active'); burger.setAttribute('aria-expanded', 'false'); }
+            if (backdrop) backdrop.classList.remove('active');
+        }
+
+        // Tap off (Escape key) closes the menu; the backdrop handles tap-outside.
+        document.addEventListener('keydown', function (e) {
+            if (e.key === 'Escape') closeNavMenu();
+        });
+    </script>
 
     <!-- Base path configuration -->
     <script>
@@ -179,7 +237,7 @@
             const isLeftHanded = response.setting_value === 'true';
             console.log('Left-handed mode setting:', isLeftHanded);
 
-            const navbar = document.querySelector('.navbar .container');
+            const navbar = document.querySelector('.bookish-header .container');
             if (navbar) {
                 if (isLeftHanded) {
                     document.documentElement.classList.add('left-handed-mode');

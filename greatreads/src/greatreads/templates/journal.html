@@ -702,76 +702,74 @@ function displayReadings(readings) {
 function createReadingCard(reading, index) {
     const book = reading.book;
     const statusClass = GreatReads.getStatusClass(reading);
-    const statusBadge = GreatReads.getStatusBadge(reading);
 
     // Get format info and colors
     const formatClass = getFormatClass(reading.media);
-    const formatBadge = getFormatBadge(reading.media);
 
     // For finished books, use left border only
     const borderClass = formatClass ? `border-${formatClass}` : '';
 
-    // Check if this is a reread by looking for earlier finished readings of the same book
+    // Right-rail badges mirror the TBR card, but stars replace the status chip.
+    // Order: stars, format, (reread — only sometimes present).
+    const formatIcon = getFormatIcon(reading.media);
     const isReread = isReadingAReread(reading);
+    const starsHtml = reading.rating_overall
+        ? `<div class="tbr-stars" title="Rating">${GreatReads.formatRating(reading.rating_overall)}</div>`
+        : '';
+    const rereadIcon = isReread
+        ? '<span class="tbr-icon-badge" style="background-color:#17a2b8;color:#fff;" title="Reread"><i class="fas fa-rotate-right"></i></span>'
+        : '';
 
     return `
-        <div class="card reading-card ${statusClass} ${borderClass} mb-3 fade-in" data-reading-id="${reading.id}" onclick="editReading(${reading.id})">
-            <div class="card-body">
-                <div class="row">
-                    <div class="col-auto">
-                        <div class="tbr-book-cover">
-                            ${book.cover ?
-                                `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg"
-                                     alt="${book.title} cover"
-                                     class="tbr-book-cover-img"
-                                     onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
-                                 <i class="fas fa-book book-cover-fallback" style="display: none;"></i>` :
-                                `<i class="fas fa-book book-cover-fallback"></i>`
-                            }
-                        </div>
+        <div class="card reading-card ${statusClass} ${borderClass} mb-2 fade-in" data-reading-id="${reading.id}" onclick="openReadingActions(${reading.id})">
+            <div class="card-body tbr-card-body">
+                <div class="d-flex gap-3">
+                    <div class="tbr-book-cover tbr-book-cover-large flex-shrink-0">
+                        ${book.cover ?
+                            `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg"
+                                 alt="${book.title} cover"
+                                 class="tbr-book-cover-img"
+                                 onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
+                             <i class="fas fa-book book-cover-fallback" style="display: none;"></i>` :
+                            `<i class="fas fa-book book-cover-fallback"></i>`
+                        }
                     </div>
-                    <div class="col">
-                        <h5 class="card-title mb-1">${book.title}</h5>
-                        <p class="text-muted mb-1">${book.author}</p>
-                        ${book.series ? `<small class="text-muted">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</small><br>` : ''}
-                        <small class="text-muted">
-                            ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
-                            ${book.page_count ? (book.word_count ? ' • ' : '') + book.page_count + ' pages' : ''}
-                        </small>
+                    <div class="tbr-info journal-info flex-grow-1">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div class="tbr-info-text">
+                                <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
+                                <p class="text-muted mb-1 text-truncate">${book.author}</p>
+                                ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
+                                <div class="tbr-meta text-muted mb-0">
+                                    ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
+                                    ${book.page_count ? (book.word_count ? ' &middot; ' : '') + book.page_count + ' pages' : ''}
+                                </div>
+                            </div>
+                            <!-- Fixed slots: stars / format / reread always occupy the
+                                 same space, even when a rating or reread is absent. -->
+                            <div class="tbr-icon-stack flex-shrink-0">
+                                <div class="tbr-rail-stars">${starsHtml}</div>
+                                ${formatIcon}
+                                <div class="tbr-rail-reread">${rereadIcon}</div>
+                            </div>
+                        </div>
 
-                        <div class="row text-sm g-2 mt-2">
-                            <div class="col-4">
-                                <div><strong>Start:</strong></div>
-                                <div class="small">${GreatReads.formatDate(reading.date_started)}</div>
-                            </div>
-                            <div class="col-4">
-                                <div><strong>End:</strong></div>
-                                <div class="small">${GreatReads.formatDate(reading.date_finished_actual)}</div>
-                            </div>
-                            <div class="col-4">
-                                <div><strong>Days:</strong></div>
-                                <div class="small">${reading.actual_days_elapsed || 'N/A'}</div>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="col-auto d-flex align-items-center">
-                        <div class="d-flex gap-2 align-items-center">
-                            <div class="d-flex flex-column gap-1 align-items-end">
-                                <div style="position: relative; display: flex; align-items: center; justify-content: center; padding-top: 22px;">
-                                    ${reading.rating_overall ? `<div style="position: absolute; top: 0; right: 0; font-size: 0.9rem; white-space: nowrap;">${GreatReads.formatRating(reading.rating_overall)}</div>` : ''}
-                                    ${formatBadge}
+                        <!-- Finished reading: start | days | end (same layout/format as
+                             TBR, no bar). Pinned to the bottom so it's always in the same
+                             place regardless of the elements above. -->
+                        <div class="pt-2 tbr-card-dates" style="border-top: 1px solid #dee2e6;">
+                            <div class="d-flex justify-content-between align-items-center text-sm">
+                                <div class="text-muted">
+                                    <i class="fas fa-play-circle" style="width: 16px; color: #28a745;"></i>
+                                    ${GreatReads.formatDateSmart(reading.date_started) || 'N/A'}
                                 </div>
-                                <div style="min-height: 24px; display: flex; align-items: center;">
-                                    ${isReread ? '<span class="media-badge-large" style="background-color: #17a2b8; color: white;">Reread</span>' : ''}
+                                <div class="text-muted">
+                                    <i class="fas fa-calendar-day" style="width: 16px;"></i>${reading.actual_days_elapsed != null ? reading.actual_days_elapsed : 'N/A'}
                                 </div>
-                            </div>
-                            <div class="d-flex flex-column gap-1">
-                                <button class="btn btn-outline-primary btn-sm" onclick="event.stopPropagation(); editReading(${reading.id})" title="Edit">
-                                    <i class="fas fa-edit"></i>
-                                </button>
-                                <button class="btn btn-outline-danger btn-sm" onclick="event.stopPropagation(); deleteSingleReading(${reading.id})" title="Delete">
-                                    <i class="fas fa-trash"></i>
-                                </button>
+                                <div class="text-muted">
+                                    <i class="fas fa-flag-checkered" style="width: 16px;"></i>
+                                    ${GreatReads.formatDateSmart(reading.date_finished_actual) || 'N/A'}
+                                </div>
                             </div>
                         </div>
                     </div>
@@ -780,6 +778,72 @@ function createReadingCard(reading, index) {
         </div>
     `;
 }
+
+// Square format chip for the right rail (matches the TBR card).
+function getFormatIcon(mediaType) {
+    const normalized = normalizeMediaType(mediaType);
+    const map = {
+        'ebook':    { icon: 'fa-tablet-alt', color: '#0066CC', label: 'Ebook' },
+        'physical': { icon: 'fa-book',       color: '#6B4BA3', label: 'Physical' },
+        'audio':    { icon: 'fa-headphones', color: '#FF6600', label: 'Audio' }
+    };
+    const f = map[normalized?.toLowerCase()];
+    if (!f) return '';
+    return `<span class="tbr-icon-badge" style="background-color:${f.color};color:#fff;" title="${f.label}"><i class="fas ${f.icon}"></i></span>`;
+}
+
+// Compact per-category ratings for the popup (Enjoyment / Writing / Characters /
+// World building / Readability, each as "N★"). Horror & spice are intentionally
+// omitted. Returns '' when no category was rated.
+function journalRatingsHtml(reading) {
+    const cats = [
+        ['Enjoyment', reading.rating_enjoyment],
+        ['Writing', reading.rating_writing],
+        ['Characters', reading.rating_characters],
+        ['World building', reading.rating_world_building],
+        ['Readability', reading.rating_readability],
+    ];
+    const rows = cats
+        .filter(([, v]) => v)
+        .map(([label, v]) => `
+            <div class="d-flex justify-content-between gap-3">
+                <span class="text-muted">${label}</span>
+                <span class="fw-medium text-end">${v}<i class="fas fa-star text-warning ms-1"></i></span>
+            </div>`).join('');
+    if (!rows) return '';
+    return `
+        <div class="open-extra">
+            <div class="open-extra-label"><i class="fas fa-star me-1 text-warning"></i>Ratings</div>
+            <div class="open-details">${rows}</div>
+        </div>`;
+}
+
+// Tap a Journal card → shared cover-tap popup with Read/Listen, details
+// (series/words/pages), the per-category ratings, and Edit / Delete actions.
+function openReadingActions(readingId) {
+    const reading = allReadings.find(r => r.id === readingId);
+    if (!reading || !reading.book) return;
+
+    const actionsHtml = `
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="journalEditFromPopup(${reading.id})">
+            <i class="fas fa-edit me-2 text-primary"></i>Edit Reading
+        </button>
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="journalDeleteFromPopup(${reading.id})">
+            <i class="fas fa-trash me-2 text-danger"></i>Delete Reading
+        </button>`;
+
+    GreatReads.openBookActions(reading.book, {
+        extraInfoHtml: GreatReads.readingExtraInfoHtml(reading) + journalRatingsHtml(reading),
+        actionsHtml,
+    });
+}
+
+function hideOpenBookModal() {
+    const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+    if (m) m.hide();
+}
+function journalEditFromPopup(readingId) { hideOpenBookModal(); editReading(readingId); }
+function journalDeleteFromPopup(readingId) { hideOpenBookModal(); deleteSingleReading(readingId); }
 
 async function deleteSingleReading(readingId) {
     const reading = allReadings.find(r => r.id === readingId);

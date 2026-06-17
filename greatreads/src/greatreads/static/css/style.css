@@ -15,7 +15,9 @@
 html, body {
     font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
     background-color: #f8f9fa;
-    overflow-x: hidden; /* Prevent horizontal scrolling */
+    /* `clip` (not `hidden`) prevents horizontal scroll WITHOUT creating a scroll
+       container — `overflow-x: hidden` here was breaking the sticky top nav. */
+    overflow-x: clip;
     max-width: 100%;
 }
 
@@ -28,8 +30,34 @@ html, body {
     background: linear-gradient(135deg, #1a2332 0%, #2d3748 50%, #1a2332 100%);
     box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
     padding: 0.75rem 0;
-    position: relative;
+    /* Sticky: the header stays pinned to the top of the viewport on scroll. */
+    position: sticky;
+    top: 0;
+    z-index: 1030;
     border-bottom: 2px solid rgba(102, 126, 234, 0.3);
+}
+
+/* Flex layout for the nav bar (replaces Bootstrap .navbar). Brand on the
+   left, menu on the right; hamburger only appears on narrow screens. */
+.gr-nav-bar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    position: relative;
+}
+
+.gr-nav-bar--centered {
+    justify-content: center;
+}
+
+.gr-nav-menu {
+    list-style: none;
+    display: flex;
+    align-items: center;
+    gap: 0.25rem;
+    margin: 0;
+    padding: 0;
 }
 
 .bookish-header::before {
@@ -123,59 +151,139 @@ html, body {
     width: 80%;
 }
 
-.navbar-toggler {
-    border-color: rgba(255, 255, 255, 0.3) !important;
+/* Animated hamburger -> X. Hidden on desktop, shown when the menu collapses. */
+.gr-hamburger {
+    display: none;
+    flex-direction: column;
+    justify-content: center;
+    gap: 6px;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    /* Above the sliding panel so the "X" stays tappable while open. */
+    z-index: 1101;
 }
 
-.navbar-toggler:focus {
-    box-shadow: 0 0 0 0.2rem rgba(102, 126, 234, 0.25);
+.gr-hamburger span {
+    display: block;
+    width: 26px;
+    height: 3px;
+    margin: 0 auto;
+    background: #fff;
+    border-radius: 2px;
+    transition: transform 0.3s ease, opacity 0.2s ease;
 }
 
-/* Responsive navigation */
+/* The neat swoop: top & bottom bars rotate into an X, middle bar fades out. */
+.gr-hamburger.active span:nth-child(1) {
+    transform: translateY(9px) rotate(45deg);
+}
+
+.gr-hamburger.active span:nth-child(2) {
+    opacity: 0;
+}
+
+.gr-hamburger.active span:nth-child(3) {
+    transform: translateY(-9px) rotate(-45deg);
+}
+
+.gr-hamburger:focus-visible {
+    outline: 2px solid rgba(102, 126, 234, 0.6);
+    outline-offset: 2px;
+    border-radius: 6px;
+}
+
+/* Dimmed tap-off backdrop behind the overlay menu. */
+.gr-nav-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.18);
+    opacity: 0;
+    visibility: hidden;
+    transition: opacity 0.3s ease, visibility 0.3s ease;
+    /* Below the sticky header (1030) so the overlay menu, which lives inside the
+       header's stacking context, still paints above this backdrop. */
+    z-index: 1020;
+}
+
+.gr-nav-backdrop.active {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* Responsive navigation: hamburger + compact dropdown popup (sized to its items,
+   anchored just under the bar — not a full-height drawer). */
 @media (max-width: 991px) {
-    .bookish-nav-link {
-        margin: 0.25rem 0;
+    .gr-hamburger {
+        display: flex;
     }
 
-    .navbar-nav {
-        padding-top: 1rem;
-        border-top: 1px solid rgba(255, 255, 255, 0.1);
-        margin-top: 0.5rem;
+    .gr-nav-menu {
+        position: absolute;
+        top: calc(100% + 8px);
+        right: 0;
+        width: max-content;
+        min-width: 190px;
+        max-width: min(78vw, 260px);
+        flex-direction: column;
+        align-items: stretch;
+        gap: 2px;
+        background: linear-gradient(160deg, #1a2332 0%, #2d3748 100%);
+        border: 1px solid rgba(255, 255, 255, 0.08);
+        border-radius: 12px;
+        box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+        padding: 6px;
+        /* Hidden state — small pop, not a slide. */
+        opacity: 0;
+        visibility: hidden;
+        pointer-events: none;
+        transform: translateY(-8px) scale(0.98);
+        transform-origin: top right;
+        transition: opacity 0.16s ease, transform 0.16s ease, visibility 0.16s;
+        z-index: 1100;
+    }
+
+    .gr-nav-menu.active {
+        opacity: 1;
+        visibility: visible;
+        pointer-events: auto;
+        transform: translateY(0) scale(1);
+    }
+
+    .gr-nav-menu li {
+        width: 100%;
+    }
+
+    .gr-nav-menu .bookish-nav-link {
+        border-radius: 8px;
+        margin: 0;
+        padding: 0.6rem 0.9rem !important;
+        font-size: 1rem;
+    }
+
+    .gr-nav-menu .bookish-nav-link:hover {
+        transform: none;
     }
 }
 
-/* Left-handed mode - move hamburger menu to the left on mobile */
+/* Left-handed mode - hamburger on the left, popup anchored to the left */
 @media (max-width: 991px) {
-    /* Reverse the order of navbar items using flexbox */
-    html.left-handed-mode .navbar .container,
-    body.left-handed-mode .navbar .container,
-    .left-handed-mode .navbar .container {
-        display: flex !important;
-        flex-wrap: wrap !important;
+    /* space-between + hamburger first → hamburger far-left, brand far-right */
+    .left-handed-mode .gr-nav-bar {
+        justify-content: space-between;
     }
 
-    /* Put toggler first (left side) */
-    html.left-handed-mode .navbar-toggler,
-    body.left-handed-mode .navbar-toggler,
-    .left-handed-mode .navbar-toggler {
-        order: -1 !important;
-        margin-right: auto !important;
+    .left-handed-mode .gr-hamburger {
+        order: -1;
     }
 
-    /* Put brand last (right side) */
-    html.left-handed-mode .navbar-brand,
-    body.left-handed-mode .navbar-brand,
-    .left-handed-mode .navbar-brand {
-        order: 0 !important;
-        margin-left: 0 !important;
-    }
-
-    /* Collapse menu takes full width on next row */
-    html.left-handed-mode .navbar-collapse,
-    body.left-handed-mode .navbar-collapse,
-    .left-handed-mode .navbar-collapse {
-        order: 1 !important;
-        flex-basis: 100% !important;
+    .left-handed-mode .gr-nav-menu {
+        right: auto;
+        left: 0;
+        transform-origin: top left;
     }
 }
 
@@ -703,8 +811,8 @@ html, body {
 }
 
 .tbr-book-cover-large {
-    width: 96px;
-    height: 144px;
+    width: 118px;
+    height: 177px;
 }
 
 .tbr-book-cover-img {
@@ -762,8 +870,86 @@ html, body {
     line-height: 1;
 }
 
+/* Journal right-rail: compact star row sitting above the format/reread chips */
+.tbr-stars {
+    font-size: 0.72rem;
+    line-height: 1;
+    white-space: nowrap;
+    letter-spacing: 0.5px;
+}
+
+/* Journal card consistency: every card reserves the same space for each rail slot
+   (stars / format / reread) and pins the start·days·end row to the bottom, so all
+   elements stay in the same place whether or not a rating/reread is present. */
+.journal-info {
+    display: flex;
+    flex-direction: column;
+}
+.journal-info .tbr-card-dates {
+    margin-top: auto;
+}
+.tbr-rail-stars {
+    min-height: 16px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.tbr-rail-reread {
+    min-height: 30px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
 .tbr-draggable-card {
     transition: box-shadow 0.2s ease;
+}
+
+/* ---- Shared cover-tap popup: Read/Listen picker, details, secondary actions ----
+   Used by Library, TBR, and Journal via GreatReads.openBookActions(). */
+.open-type-btn {
+    width: 100%; min-height: 96px;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    border-width: 2px; border-style: solid; border-radius: 12px;
+    background: #fff; transition: all 0.15s; cursor: pointer;
+}
+.open-type-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.15); }
+.open-type-ebook  { border-color: #0066CC; color: #0066CC; }
+.open-type-audio  { border-color: #FF6600; color: #FF6600; }
+.open-type-ebook:hover  { background: #0066CC; color: #fff; }
+.open-type-audio:hover  { background: #FF6600; color: #fff; }
+.open-type-physical { border-color: #6B4BA3; color: #6B4BA3; }
+/* Informational card (physical location / progress) — looks like a format button
+   but isn't clickable, so no hover lift/invert, and it lays out as a compact row. */
+.open-type-static {
+    min-height: auto; flex-direction: row; justify-content: flex-start;
+    align-items: center; padding: 10px 14px; cursor: default;
+}
+.open-type-static:hover { transform: none; box-shadow: none; }
+.open-secondary { display: flex; flex-direction: column; gap: 5px; }
+.open-secondary .btn { text-align: left; }
+
+/* Book-detail rows in the cover popup */
+.open-details { font-size: 0.85rem; }
+.open-details > div { padding: 3px 0; border-bottom: 1px solid #f0f0f0; }
+.open-details > div:last-child { border-bottom: none; }
+
+/* Extra-info block (progress / planned) in the cover popup */
+.open-extra { padding: 2px 0; }
+.open-extra-label { font-size: 0.8rem; font-weight: 600; color: #495057; margin-bottom: 4px; }
+.open-progress {
+    position: relative; height: 22px; background: #e9ecef;
+    border-radius: 4px; overflow: hidden;
+}
+.open-progress-fill {
+    position: absolute; left: 0; top: 0; height: 100%;
+    border-radius: 4px; transition: width 0.3s ease;
+}
+.open-progress-text {
+    position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+    font-size: 0.72rem; font-weight: 600; color: #212529;
+    background: rgba(255, 255, 255, 0.85); padding: 1px 6px; border-radius: 2px;
+    white-space: nowrap;
 }
 
 .tbr-draggable-card:hover {
@@ -909,8 +1095,8 @@ html, body {
     }
 
     .tbr-book-cover-large {
-        width: 72px;
-        height: 108px;
+        width: 92px;
+        height: 138px;
     }
 
     .tbr-book-cover-img {

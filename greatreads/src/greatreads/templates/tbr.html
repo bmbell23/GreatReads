@@ -1325,16 +1325,8 @@ function createProgressSection(reading, book) {
         return date.toLocaleDateString('en-US', options);
     };
 
-    // WPD badge helper
-    const wpd = getWpdForMedia(reading.media);
-    const wpdBadge = wpd
-        ? `<span class="text-muted" title="Words per day (${reading.media})">
-               <i class="fas fa-tachometer-alt" style="width:14px;font-size:0.7rem;"></i>
-               <span style="font-size:0.7rem;">${(wpd/1000).toFixed(1)}k WPD</span>
-           </span>`
-        : '';
-
-    // For not-started books, show date info but no progress bar
+    // For not-started books, show date info but no progress bar.
+    // (WPD moved to the cover-tap popup to keep the card compact.)
     if (!reading.date_started) {
         return `
             <div class="mt-2 pt-2" style="border-top: 1px solid #dee2e6;">
@@ -1344,12 +1336,11 @@ function createProgressSection(reading, book) {
                         ${startDate ? formatDateSmart(startDate) : 'Not scheduled'}
                     </div>
                     <div class="text-muted">
+                        <i class="fas fa-calendar-day" style="width: 16px;"></i>${totalDays ? Math.round(totalDays) : 'TBD'}
+                    </div>
+                    <div class="text-muted">
                         <i class="fas fa-flag-checkered" style="width: 16px;"></i>
                         ${endDate ? formatDateSmart(endDate) : 'TBD'}
-                    </div>
-                    <div class="text-muted d-flex align-items-center gap-2">
-                        <span><i class="fas fa-calendar-day" style="width: 16px;"></i>${totalDays ? Math.round(totalDays) : 'TBD'}</span>
-                        ${wpdBadge}
                     </div>
                 </div>
             </div>
@@ -1366,12 +1357,11 @@ function createProgressSection(reading, book) {
                         ${formatDateSmart(startDate)}
                     </div>
                     <div class="text-muted">
+                        <i class="fas fa-calendar-day" style="width: 16px;"></i>${totalDays ? Math.round(totalDays) : 'TBD'}
+                    </div>
+                    <div class="text-muted">
                         <i class="fas fa-flag-checkered" style="width: 16px;"></i>
                         ${endDate ? formatDateSmart(endDate) : 'TBD'}
-                    </div>
-                    <div class="text-muted d-flex align-items-center gap-2">
-                        <span><i class="fas fa-calendar-day" style="width: 16px;"></i>${totalDays ? Math.round(totalDays) : 'TBD'}</span>
-                        ${wpdBadge}
                     </div>
                 </div>
             </div>
@@ -1404,9 +1394,8 @@ function createProgressSection(reading, book) {
                     <i class="fas fa-play-circle" style="width: 16px; color: #28a745;"></i>
                     ${formatDateSmart(startDate)}
                 </div>
-                <div class="text-muted d-flex align-items-center gap-2">
-                    <span><i class="fas fa-calendar-day" style="width: 16px;"></i>${Math.round(totalDays)}</span>
-                    ${wpdBadge}
+                <div class="text-muted">
+                    <i class="fas fa-calendar-day" style="width: 16px;"></i>${Math.round(totalDays)}
                 </div>
                 <div class="text-muted">
                     <i class="fas fa-flag-checkered" style="width: 16px;"></i>
@@ -1441,7 +1430,8 @@ function createReadingCard(reading, index) {
     // Get format info and colors
     const formatClass = getFormatClass(reading.media);
 
-    // Stacked icon chips for the right rail (format / status / reread)
+    // Stacked icon chips for the right rail. Order: status, format, (reread).
+    // Reread is only sometimes present — the flex column collapses cleanly without it.
     const formatIcon = getFormatIcon(reading.media);
     const statusIcon = getStatusIcon(reading);
     const rereadIcon = reading.reread
@@ -1454,10 +1444,10 @@ function createReadingCard(reading, index) {
     const borderClass = isPaused ? '' : (formatClass ? (isInProgress ? `border-${formatClass}-full` : `border-${formatClass}`) : '');
 
     return `
-        <div class="card reading-card ${statusClass} ${borderClass} mb-2 fade-in tbr-draggable-card" data-reading-id="${reading.id}" onclick="editReading(${reading.id})">
+        <div class="card reading-card ${statusClass} ${borderClass} mb-2 fade-in tbr-draggable-card" data-reading-id="${reading.id}" onclick="openReadingActions(${reading.id})">
             <div class="card-body tbr-card-body">
                 <div class="d-flex gap-3">
-                    <div class="tbr-book-cover tbr-book-cover-large flex-shrink-0" title="Drag to reorder">
+                    <div class="tbr-book-cover tbr-book-cover-large flex-shrink-0">
                         ${book.cover ?
                             `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg"
                                  alt="${book.title} cover"
@@ -1471,16 +1461,11 @@ function createReadingCard(reading, index) {
                         <div class="d-flex justify-content-between align-items-start gap-2">
                             <div class="tbr-info-text">
                                 <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
-                                <p class="text-muted mb-1 text-truncate">${book.author}</p>
-                                ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
-                                <div class="tbr-meta text-muted mb-0">
-                                    ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
-                                    ${book.page_count ? (book.word_count ? ' &middot; ' : '') + book.page_count + ' pages' : ''}
-                                </div>
+                                <p class="text-muted mb-0 text-truncate">${book.author}</p>
                             </div>
                             <div class="tbr-icon-stack flex-shrink-0">
-                                ${formatIcon}
                                 ${statusIcon}
+                                ${formatIcon}
                                 ${rereadIcon}
                             </div>
                         </div>
@@ -1491,6 +1476,35 @@ function createReadingCard(reading, index) {
             </div>
         </div>
     `;
+}
+
+// Tap a TBR card → shared cover-tap popup. Read/Listen (for linked books),
+// details (series/words/pages/WPD), an extra-info section (progress / planned),
+// and an Edit Reading action that opens the existing edit modal. Series/word/page
+// counts and WPD moved here off the card to make room for a bigger cover.
+function openReadingActions(readingId) {
+    const reading = currentReadings.find(r => r.id === readingId);
+    if (!reading || !reading.book) return;
+
+    const wpd = getWpdForMedia(reading.media);
+    const detailRows = wpd ? [['WPD', `${(wpd / 1000).toFixed(1)}k`]] : [];
+
+    const actionsHtml = `
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="tbrEditFromPopup(${reading.id})">
+            <i class="fas fa-edit me-2 text-primary"></i>Edit Reading
+        </button>`;
+
+    GreatReads.openBookActions(reading.book, {
+        extraInfoHtml: GreatReads.readingExtraInfoHtml(reading),
+        detailRows,
+        actionsHtml,
+    });
+}
+
+function tbrEditFromPopup(readingId) {
+    const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+    if (m) m.hide();
+    editReading(readingId);
 }
 
 function editReading(readingId) {

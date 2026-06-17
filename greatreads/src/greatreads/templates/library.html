@@ -342,19 +342,7 @@
 </div>
 
 <!-- Read / Listen picker — opened by tapping or right-clicking a book cover -->
-<div class="modal fade" id="openBookModal" tabindex="-1">
-    <div class="modal-dialog modal-dialog-centered modal-sm">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title text-truncate" id="openBookTitle"></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div class="row g-2" id="openBookOptions"></div>
-            </div>
-        </div>
-    </div>
-</div>
+<!-- The cover-tap popup (#openBookModal) now lives in base.html so TBR/Journal share it. -->
 {% endblock %}
 
 {% block extra_scripts %}
@@ -541,29 +529,8 @@
 .lib-media .physical { color: #b89cf0; }
 
 /* Cards are cover-only now — title/author live in the cover-tap popup. */
-
-/* ---- Read/Listen picker + secondary actions (cover tap popup) ---- */
-.open-type-btn {
-    width: 100%; min-height: 96px;
-    display: flex; flex-direction: column; align-items: center; justify-content: center;
-    border-width: 2px; border-style: solid; border-radius: 12px;
-    background: #fff; transition: all 0.15s; cursor: pointer;
-}
-.open-type-btn:hover { transform: translateY(-2px); box-shadow: 0 6px 16px rgba(0,0,0,0.15); }
-.open-type-ebook  { border-color: #0066CC; color: #0066CC; }
-.open-type-audio  { border-color: #FF6600; color: #FF6600; }
-.open-type-ebook:hover  { background: #0066CC; color: #fff; }
-.open-type-audio:hover  { background: #FF6600; color: #fff; }
-.open-type-physical { border-color: #6B4BA3; color: #6B4BA3; }
-/* Informational card (physical location) — looks like a format button but isn't
-   clickable, so no hover lift/invert, and it lays out as a compact row. */
-.open-type-static {
-    min-height: auto; flex-direction: row; justify-content: flex-start;
-    align-items: center; padding: 10px 14px; cursor: default;
-}
-.open-type-static:hover { transform: none; box-shadow: none; }
-.open-secondary { display: flex; flex-direction: column; gap: 5px; }
-.open-secondary .btn { text-align: left; }
+/* ---- Read/Listen picker + secondary actions (cover-tap popup) now live in
+        style.css so TBR/Journal share them. ---- */
 
 /* Compact, label-less stat/filter chips — tight enough to fit one row on phones */
 .stat-chips { gap: 6px; row-gap: 6px; }
@@ -589,11 +556,6 @@
 .lib-search-clear:hover { color: #6c757d; background: #f1f3f5; }
 /* Trim the page header so it aligns with the action buttons */
 .page-header-bookish { padding-top: 0; padding-bottom: 0; }
-
-/* Book-detail rows in the cover popup */
-.open-details { font-size: 0.85rem; }
-.open-details > div { padding: 3px 0; border-bottom: 1px solid #f0f0f0; }
-.open-details > div:last-child { border-bottom: none; }
 </style>
 
 <script>
@@ -797,26 +759,6 @@ function displayBooks(books) {
     booksGrid.innerHTML = html;
 }
 
-// Open a readable book in the Ereader reader/player. Both are served same-origin
-// at the site root via the :8090 proxy, so root-absolute paths work whether this
-// page was reached at /greatreads/library or embedded. Cache-bust with a stamp so
-// reader/player HTML edits show up immediately (mirrors the Ereader home).
-function openLibraryEbook(calibreId, titleEnc) {
-    const v = Date.now();
-    window.location.href = `/reader.html?v=${v}&id=${encodeURIComponent(calibreId)}&format=epub&title=${titleEnc}`;
-}
-// calibreId (optional) links a matching ebook so the player can offer in-book
-// search / read-while-listening (dual-format). Passed through as bookId+hasEbook,
-// mirroring the Ereader home's openPlayer().
-function openLibraryAudio(absId, titleEnc, authorEnc, calibreId) {
-    const v = Date.now();
-    let url = `/player.html?v=${v}&absId=${encodeURIComponent(absId)}&title=${titleEnc}&author=${authorEnc}`;
-    if (calibreId) {
-        url += `&bookId=${encodeURIComponent(calibreId)}&format=epub&hasEbook=1`;
-    }
-    window.location.href = url;
-}
-
 function createBookCard(book) {
     const owned = book.media_owned || [];
     const has = m => owned.includes(m);
@@ -850,86 +792,22 @@ function createBookCard(book) {
     `;
 }
 
-// Click a cover → one popup: big Read/Listen format button(s) up top, then the
-// smaller secondary actions (View Details / Add to TBR / Mark Finished / Clear
-// Progress). Only the formats a book actually has are offered; a tracking-only
-// book (no Calibre/ABS link) just shows a short note above the secondary actions.
+// Click a cover → the shared cover-tap popup (GreatReads.openBookActions): big
+// Read/Listen button(s) up top, then library-specific secondary actions (View
+// Details / Add to TBR / Mark Finished / Clear Progress) plus a Highlights link
+// whose count is filled async. Extra-info shows progress / planned reading.
 function openBookActions(bookId) {
     const book = allBooks.find(b => b.id === bookId);
     if (!book) return;
-    const canRead = !!book.calibre_id;
-    const canListen = !!book.abs_id;
-    // encodeURIComponent leaves ' unescaped, which would break the inline
-    // onclick string for titles with apostrophes — escape it explicitly.
+
     const titleEnc = encodeURIComponent(book.title || '').replace(/'/g, '%27');
-    const authorEnc = encodeURIComponent(book.author || '').replace(/'/g, '%27');
 
-    document.getElementById('openBookTitle').textContent = book.title || '';
+    // Pick the most relevant reading for the extra-info section: an in-progress
+    // one if any, else a scheduled (not-yet-started) one.
+    const readings = book.readings || [];
+    const relevant = readings.find(r => r.date_started && !r.date_finished_actual)
+        || readings.find(r => !r.date_started && !r.date_finished_actual);
 
-    // Book details (word/page count, series, physical shelf location).
-    const rows = [];
-    if (book.author) rows.push(['Author', book.author]);
-    if (book.series) {
-        const num = (book.series_number != null) ? ' #' + book.series_number : '';
-        rows.push(['Series', `${book.universe ? book.universe + ': ' : ''}${book.series}${num}`]);
-    }
-    if (book.word_count) rows.push(['Words', Number(book.word_count).toLocaleString()]);
-    if (book.page_count) rows.push(['Pages', Number(book.page_count).toLocaleString()]);
-
-    // Physical shelf location — shown at the very top as a format-styled card
-    // (almost a "third format"), only when we own the physical copy + know where.
-    let locationCard = '';
-    const phys = (book.inventory || []).find(i => i.owned_physical && (i.shelf_bookshelf || i.location));
-    if (phys) {
-        let loc = phys.location || '';
-        if (phys.shelf_bookshelf) {
-            loc = `Shelf ${phys.shelf_bookshelf}` +
-                  (phys.shelf_shelf != null ? `-${phys.shelf_shelf}` : '') +
-                  (phys.shelf_position != null ? `, pos ${phys.shelf_position}` : '');
-        }
-        if (loc) locationCard = `
-            <div class="col-12">
-                <div class="open-type-btn open-type-physical open-type-static">
-                    <i class="fas fa-book fa-lg me-2"></i>
-                    <div class="text-start">
-                        <div class="fw-bold">Physical</div>
-                        <div class="small">${loc}</div>
-                    </div>
-                </div>
-            </div>`;
-    }
-
-    const details = rows.length ? `
-        <div class="col-12">
-            <div class="open-details">
-                ${rows.map(([k, v]) => `<div class="d-flex justify-content-between gap-3">
-                    <span class="text-muted">${k}</span><span class="fw-medium text-end">${v}</span>
-                </div>`).join('')}
-            </div>
-        </div>` : '';
-
-    const big = (canRead || canListen) ? `
-        <div class="col-12">
-            <div class="row g-2">
-                ${canRead ? `<div class="col">
-                    <button type="button" class="open-type-btn open-type-ebook"
-                            onclick="openLibraryEbook('${book.calibre_id}', '${titleEnc}')">
-                        <i class="fas fa-book-open fa-2x mb-2"></i><div class="fw-bold">Read</div>
-                    </button>
-                </div>` : ''}
-                ${canListen ? `<div class="col">
-                    <button type="button" class="open-type-btn open-type-audio"
-                            onclick="openLibraryAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}', '${book.calibre_id || ''}')">
-                        <i class="fas fa-headphones fa-2x mb-2"></i><div class="fw-bold">Listen</div>
-                    </button>
-                </div>` : ''}
-            </div>
-        </div>` : `
-        <div class="col-12 text-center text-muted small pb-1">
-            <i class="fas fa-book me-1"></i>Tracked book — no ebook or audiobook file linked.
-        </div>`;
-
-    // Highlights link — shown only when the book has any (count filled async below).
     const hlLink = book.calibre_id ? `
                 <a id="hlActionBtn" class="btn btn-sm btn-outline-secondary d-none"
                    href="/greatreads/highlights?book=${book.calibre_id}&title=${titleEnc}">
@@ -937,9 +815,7 @@ function openBookActions(bookId) {
                     <span id="hlCount" class="badge bg-secondary ms-auto">0</span>
                 </a>` : '';
 
-    const secondary = `
-        <div class="col-12">
-            <div class="open-secondary">
+    const actionsHtml = `
                 ${hlLink}
                 <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libViewDetails(${book.id})">
                     <i class="fas fa-eye me-2 text-primary"></i>View Details
@@ -952,25 +828,25 @@ function openBookActions(bookId) {
                 </button>
                 <button type="button" class="btn btn-sm btn-outline-secondary" onclick="libClearProgress(${book.id})">
                     <i class="fas fa-trash me-2 text-danger"></i>Clear Reading Progress
-                </button>
-            </div>
-        </div>`;
+                </button>`;
 
-    document.getElementById('openBookOptions').innerHTML = locationCard + big + details + secondary;
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('openBookModal')).show();
-
-    // Fill the highlights count (reveal the link only if there are any).
-    if (book.calibre_id) {
-        fetch(`${EREADER_API}/highlights?type=highlight&bookId=${encodeURIComponent(book.calibre_id)}`)
-            .then(r => r.ok ? r.json() : null)
-            .then(d => {
-                const n = d && Array.isArray(d.items) ? d.items.length : 0;
-                const btn = document.getElementById('hlActionBtn');
-                const cnt = document.getElementById('hlCount');
-                if (btn && n > 0) { cnt.textContent = n; btn.classList.remove('d-none'); }
-            })
-            .catch(() => {});
-    }
+    GreatReads.openBookActions(book, {
+        extraInfoHtml: GreatReads.readingExtraInfoHtml(relevant),
+        actionsHtml,
+        onShow: (b) => {
+            // Fill the highlights count (reveal the link only if there are any).
+            if (!b.calibre_id) return;
+            fetch(`${EREADER_API}/highlights?type=highlight&bookId=${encodeURIComponent(b.calibre_id)}`)
+                .then(r => r.ok ? r.json() : null)
+                .then(d => {
+                    const n = d && Array.isArray(d.items) ? d.items.length : 0;
+                    const btn = document.getElementById('hlActionBtn');
+                    const cnt = document.getElementById('hlCount');
+                    if (btn && n > 0) { cnt.textContent = n; btn.classList.remove('d-none'); }
+                })
+                .catch(() => {});
+        }
+    });
 }
 
 function hideOpenBookModal() {

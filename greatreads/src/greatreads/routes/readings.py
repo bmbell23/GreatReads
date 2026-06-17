@@ -10,6 +10,7 @@ from sqlalchemy import and_, or_
 from ..database import get_db
 from ..models.reading import Reading, ReadingCreate, ReadingUpdate, ReadingResponse
 from ..services.chain_calculator import ChainCalculator
+from ._book_enrich import enrich_book_dict
 
 router = APIRouter()
 
@@ -25,6 +26,15 @@ def normalize_media_type(media: Optional[str]) -> Optional[str]:
     }
 
     return normalized.get(media.lower(), media)
+
+
+def _reading_dict_with_enriched_book(reading: Reading, db: Session) -> dict:
+    """Serialize a reading and enrich its embedded book with source/inventory
+    fields (calibre_id, abs_id, inventory, media_owned) for the shared popup."""
+    data = reading.to_dict()
+    if data.get("book") and reading.book_id is not None:
+        enrich_book_dict(data["book"], reading.book_id, db)
+    return data
 
 
 @router.get("/")
@@ -80,8 +90,9 @@ async def get_tbr_readings(db: Session = Depends(get_db)):
         r.id  # Then by ID for stable sort
     ))
 
-    # Convert to dict format that includes book data
-    return [reading.to_dict() for reading in readings]
+    # Convert to dict, enriching each book with source links + owned media so the
+    # shared cover-tap popup can offer Read/Listen and show shelf location.
+    return [_reading_dict_with_enriched_book(r, db) for r in readings]
 
 
 @router.get("/journal")
@@ -96,8 +107,9 @@ async def get_journal_readings(db: Session = Depends(get_db)):
         Reading.date_finished_actual.desc()
     ).all()
 
-    # Convert to dict format that includes book data
-    return [reading.to_dict() for reading in readings]
+    # Convert to dict, enriching each book with source links + owned media so the
+    # shared cover-tap popup can offer Read/Listen and show shelf location.
+    return [_reading_dict_with_enriched_book(r, db) for r in readings]
 
 
 @router.get("/{reading_id}")

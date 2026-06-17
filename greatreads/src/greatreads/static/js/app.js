@@ -551,6 +551,183 @@ document.addEventListener('DOMContentLoaded', function() {
     });
 });
 
+// Smart short date: "Mon D" (omits the year when it's the current year, else
+// "Mon D, YYYY"). Parses YYYY-MM-DD as a *local* date to avoid timezone day-shift.
+// Shared so TBR and Journal cards format start/end dates identically.
+function formatDateSmart(dateString) {
+    if (!dateString) return '';
+    let date;
+    if (typeof dateString === 'string' && /^\d{4}-\d{2}-\d{2}/.test(dateString)) {
+        const [y, m, d] = dateString.split('-').map(Number);
+        date = new Date(y, m - 1, d);
+    } else {
+        date = new Date(dateString);
+    }
+    if (isNaN(date)) return '';
+    const opts = { month: 'short', day: 'numeric' };
+    if (date.getFullYear() !== new Date().getFullYear()) opts.year = 'numeric';
+    return date.toLocaleDateString('en-US', opts);
+}
+
+// Popup "extra info" section for a reading: a progress bar for an in-progress
+// book, or planned start–end for a scheduled (not-yet-started) one. '' otherwise.
+function readingExtraInfoHtml(reading) {
+    if (!reading) return '';
+    const started = reading.date_started;
+    const finished = reading.date_finished_actual;
+    const mediaColors = { 'Ebook': '#0066CC', 'Physical': '#6B4BA3', 'Audio': '#FF6600' };
+    const color = mediaColors[reading.media] || '#28a745';
+
+    if (reading.status === 'paused') {
+        const at = reading.current_progress_percent
+            ? ' at ' + reading.current_progress_percent.toFixed(1) + '%' : '';
+        return `<div class="open-extra"><div class="open-extra-label">
+                  <i class="fas fa-pause me-1"></i>Paused${at}</div></div>`;
+    }
+    if (started && !finished) {
+        const pct = reading.current_progress_percent || 0;
+        const page = reading.current_progress_page || 0;
+        const label = pct > 0 ? `${pct.toFixed(1)}%${page ? ' · p. ' + page : ''}` : 'In progress';
+        return `
+          <div class="open-extra">
+            <div class="open-extra-label"><i class="fas fa-bookmark me-1"></i>Currently reading</div>
+            <div class="open-progress">
+              <div class="open-progress-fill" style="width:${pct}%;background:${color};"></div>
+              <div class="open-progress-text">${label}</div>
+            </div>
+          </div>`;
+    }
+    if (!started) {
+        const s = reading.date_est_start;
+        const e = reading.date_est_end || reading.date_finished_estimate;
+        if (s || e) {
+            return `<div class="open-extra">
+                      <div class="open-extra-label"><i class="fas fa-calendar me-1"></i>Planned</div>
+                      <div class="small text-muted">${s ? formatDateSmart(s) : 'TBD'} – ${e ? formatDateSmart(e) : 'TBD'}</div>
+                    </div>`;
+        }
+    }
+    return '';
+}
+
+// ---- Shared cover-tap popup -------------------------------------------------
+// Open a readable book in the Ereader reader/player. Both are served same-origin
+// at the site root via the :8090 proxy, so root-absolute paths work. Cache-bust
+// with a stamp so reader/player HTML edits show up immediately.
+function grOpenEbook(calibreId, titleEnc) {
+    const v = Date.now();
+    window.location.href = `/reader.html?v=${v}&id=${encodeURIComponent(calibreId)}&format=epub&title=${titleEnc}`;
+}
+// calibreId (optional) links a matching ebook so the player can offer in-book
+// search / read-while-listening (dual-format).
+function grOpenAudio(absId, titleEnc, authorEnc, calibreId) {
+    const v = Date.now();
+    let url = `/player.html?v=${v}&absId=${encodeURIComponent(absId)}&title=${titleEnc}&author=${authorEnc}`;
+    if (calibreId) {
+        url += `&bookId=${encodeURIComponent(calibreId)}&format=epub&hasEbook=1`;
+    }
+    window.location.href = url;
+}
+
+// Build & show the unified cover-tap popup. Used by Library, TBR, and Journal.
+//   book : enriched book dict (calibre_id, abs_id, inventory, series, counts…)
+//   opts : {
+//     title        : override modal title (default book.title),
+//     extraInfoHtml: HTML shown between the Read/Listen buttons and details
+//                    (e.g. progress / planned-reading section),
+//     detailRows   : extra [label, value] pairs appended to the details list
+//                    (e.g. WPD),
+//     actionsHtml  : HTML for the stacked secondary action buttons at the bottom,
+//     onShow       : callback(book) run after the modal is shown (async fills).
+//   }
+function grOpenBookActions(book, opts = {}) {
+    if (!book) return;
+    const canRead = !!book.calibre_id;
+    const canListen = !!book.abs_id;
+    // encodeURIComponent leaves ' unescaped, which would break the inline onclick
+    // string for titles with apostrophes — escape it explicitly.
+    const titleEnc = encodeURIComponent(book.title || '').replace(/'/g, '%27');
+    const authorEnc = encodeURIComponent(book.author || '').replace(/'/g, '%27');
+
+    document.getElementById('openBookTitle').textContent = opts.title || book.title || '';
+
+    // Detail rows: author / series / words / pages, plus any caller extras (WPD…).
+    const rows = [];
+    if (book.author) rows.push(['Author', book.author]);
+    if (book.series) {
+        const num = (book.series_number != null) ? ' #' + book.series_number : '';
+        rows.push(['Series', `${book.universe ? book.universe + ': ' : ''}${book.series}${num}`]);
+    }
+    if (book.word_count) rows.push(['Words', Number(book.word_count).toLocaleString()]);
+    if (book.page_count) rows.push(['Pages', Number(book.page_count).toLocaleString()]);
+    if (Array.isArray(opts.detailRows)) rows.push(...opts.detailRows.filter(Boolean));
+
+    // Physical shelf location — a non-clickable format-styled card at the top.
+    let locationCard = '';
+    const phys = (book.inventory || []).find(i => i.owned_physical && (i.shelf_bookshelf || i.location));
+    if (phys) {
+        let loc = phys.location || '';
+        if (phys.shelf_bookshelf) {
+            loc = `Shelf ${phys.shelf_bookshelf}` +
+                  (phys.shelf_shelf != null ? `-${phys.shelf_shelf}` : '') +
+                  (phys.shelf_position != null ? `, pos ${phys.shelf_position}` : '');
+        }
+        if (loc) locationCard = `
+            <div class="col-12">
+                <div class="open-type-btn open-type-physical open-type-static">
+                    <i class="fas fa-book fa-lg me-2"></i>
+                    <div class="text-start">
+                        <div class="fw-bold">Physical</div>
+                        <div class="small">${loc}</div>
+                    </div>
+                </div>
+            </div>`;
+    }
+
+    const details = rows.length ? `
+        <div class="col-12">
+            <div class="open-details">
+                ${rows.map(([k, v]) => `<div class="d-flex justify-content-between gap-3">
+                    <span class="text-muted">${k}</span><span class="fw-medium text-end">${v}</span>
+                </div>`).join('')}
+            </div>
+        </div>` : '';
+
+    const big = (canRead || canListen) ? `
+        <div class="col-12">
+            <div class="row g-2">
+                ${canRead ? `<div class="col">
+                    <button type="button" class="open-type-btn open-type-ebook"
+                            onclick="grOpenEbook('${book.calibre_id}', '${titleEnc}')">
+                        <i class="fas fa-book-open fa-2x mb-2"></i><div class="fw-bold">Read</div>
+                    </button>
+                </div>` : ''}
+                ${canListen ? `<div class="col">
+                    <button type="button" class="open-type-btn open-type-audio"
+                            onclick="grOpenAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}', '${book.calibre_id || ''}')">
+                        <i class="fas fa-headphones fa-2x mb-2"></i><div class="fw-bold">Listen</div>
+                    </button>
+                </div>` : ''}
+            </div>
+        </div>` : `
+        <div class="col-12 text-center text-muted small pb-1">
+            <i class="fas fa-book me-1"></i>Tracked book — no ebook or audiobook file linked.
+        </div>`;
+
+    const extraInfo = opts.extraInfoHtml ? `<div class="col-12">${opts.extraInfoHtml}</div>` : '';
+
+    const secondary = opts.actionsHtml ? `
+        <div class="col-12">
+            <div class="open-secondary">${opts.actionsHtml}</div>
+        </div>` : '';
+
+    document.getElementById('openBookOptions').innerHTML =
+        locationCard + big + extraInfo + details + secondary;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('openBookModal')).show();
+
+    if (typeof opts.onShow === 'function') opts.onShow(book);
+}
+
 // Export functions for global use
 window.GreatReads = {
     showToast,
@@ -567,6 +744,9 @@ window.GreatReads = {
     reorderReadings,
     recalculateChains,
     showEditModal,
+    openBookActions: grOpenBookActions,
+    formatDateSmart,
+    readingExtraInfoHtml,
     saveReadingChanges,
     initializeDragAndDrop,
     initEmojiRating,
