@@ -1467,23 +1467,27 @@ function createReadingCard(reading, index) {
                             `<i class="fas fa-book book-cover-fallback"></i>`
                         }
                     </div>
-                    <div class="tbr-info tbr-info-text flex-grow-1">
-                        <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
-                        <p class="text-muted mb-1 text-truncate">${book.author}</p>
-                        ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
-                        <div class="tbr-meta text-muted mb-0">
-                            ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
-                            ${book.page_count ? (book.word_count ? ' &middot; ' : '') + book.page_count + ' pages' : ''}
+                    <div class="tbr-info flex-grow-1">
+                        <div class="d-flex justify-content-between align-items-start gap-2">
+                            <div class="tbr-info-text">
+                                <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
+                                <p class="text-muted mb-1 text-truncate">${book.author}</p>
+                                ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
+                                <div class="tbr-meta text-muted mb-0">
+                                    ${book.word_count ? book.word_count.toLocaleString() + ' words' : ''}
+                                    ${book.page_count ? (book.word_count ? ' &middot; ' : '') + book.page_count + ' pages' : ''}
+                                </div>
+                            </div>
+                            <div class="tbr-icon-stack flex-shrink-0">
+                                ${formatIcon}
+                                ${statusIcon}
+                                ${rereadIcon}
+                            </div>
                         </div>
-                    </div>
-                    <div class="tbr-icon-stack flex-shrink-0">
-                        ${formatIcon}
-                        ${statusIcon}
-                        ${rereadIcon}
+
+                        ${createProgressSection(reading, book)}
                     </div>
                 </div>
-
-                ${createProgressSection(reading, book)}
             </div>
         </div>
     `;
