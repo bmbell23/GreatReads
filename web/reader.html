@@ -1530,7 +1530,7 @@
         const BUILD = fmtStamp();
         buildStamp.textContent = '…';
         buildStamp.title = 'Tap to download latest APK';
-        fetch('http://100.69.184.113:8091/api/build-stamp')
+        fetch('http://100.69.184.113:8092/api/build-stamp')
             .then(r => r.json())
             .then(d => { if (d && d.stamp) buildStamp.textContent = d.stamp; })
             .catch(() => { buildStamp.textContent = BUILD; });
@@ -1610,7 +1610,7 @@
         const bookId = urlParams.get('id');
         const format = urlParams.get('format') || 'epub';
         const title = urlParams.get('title') || 'Book';
-        const API_URL = 'http://100.69.184.113:8091/api';
+        const API_URL = 'http://100.69.184.113:8092/api';
 
         // Populated from the EPUB's OPF metadata (dc:creator) once the book
         // is parsed — used by the share-card renderer to credit the author

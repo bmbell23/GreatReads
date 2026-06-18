@@ -29,6 +29,7 @@ dependencies = [
     "passlib[bcrypt]>=1.7.4",
     "python-jose[cryptography]>=3.3.0",
     "apscheduler>=3.10.0",
+    "requests>=2.31.0",  # Ereader catalog/cover/HLS calls absorbed from :8091 (#22)
 ]
 
 [project.optional-dependencies]

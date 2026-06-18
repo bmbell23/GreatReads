@@ -5,7 +5,7 @@
 // The proxy hands back absolute, token-bearing media URLs; we never see the
 // ABS token. HLS (transcode) is played via hls.js; single-file direct play
 // feeds the <audio> element straight.
-const API_URL = 'http://100.69.184.113:8091/api';
+const API_URL = 'http://100.69.184.113:8092/api';
 const params = new URLSearchParams(location.search);
 const ABS_ID = params.get('absId') || '';
 const TITLE = params.get('title') || '';

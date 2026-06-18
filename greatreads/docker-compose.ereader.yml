@@ -37,6 +37,28 @@ services:
       - CALIBRE_LIBRARY_PATH=/calibre
       - ABS_DB_PATH=/audiobookshelf/absdatabase.sqlite
       - ABS_METADATA_PATH=/audiobookshelf/metadata
+      # --- Ereader backend absorbed from :8091 (#22) ---
+      # HTTP endpoints (distinct from the *_DB_PATH vars above, which the
+      # GreatReads sync reads directly). The container reaches the host's
+      # Calibre/ABS via host.docker.internal (see extra_hosts below).
+      - CALIBRE_URL=http://host.docker.internal:8083
+      - CALIBRE_LIBRARY=library
+      - ABS_URL=http://host.docker.internal:13378
+      # MUST be explicit: app.py only auto-rewrites localhost/127.0.0.1 → LAN IP,
+      # not host.docker.internal, so phone-facing HLS URLs need this set.
+      - ABS_PUBLIC_URL=http://100.69.184.113:13378
+      # ABS_LIBRARY_ID intentionally unset — empty = auto-resolve, matching the
+      # working :8091 setup (backend/abs.env sets only ABS_TOKEN).
+      - PUBLIC_HOST=100.69.184.113:8092        # phone-facing host for cover/HLS URLs
+      - GREATREADS_URL=http://127.0.0.1:8006   # self-hop, in-process port (inlined in step 3)
+      - EREADER_DATA_DIR=/app/data             # JSON fallbacks land beside greatreads.db
+      - GREATREADS_DB=/app/data/greatreads.db  # the DB the absorbed routes read/write
+      - EREADER_SUMMARIES_DIR=/app/ereader/summaries
+      - EREADER_VERSION_FILE=/app/ereader/version.txt
+    env_file:
+      - ./.ereader.env                         # ABS_TOKEN (secret) — gitignored
+    extra_hosts:
+      - "host.docker.internal:host-gateway"    # reach host-published :8083/:13378
     networks: [greatreads_ereader_net]
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:8006/health"]

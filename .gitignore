@@ -61,3 +61,6 @@ backend/calibre.env
 # Misc
 *.orig
 .watchmanconfig
+
+# Ereader backend secret absorbed into the GreatReads container (#22)
+greatreads/.ereader.env

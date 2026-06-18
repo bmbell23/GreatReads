@@ -29,6 +29,14 @@ RUN pip install --no-cache-dir -e .
 # Fix bcrypt compatibility issues
 RUN pip install --no-cache-dir --upgrade bcrypt==4.0.1
 
+# Ereader backend assets absorbed from :8091 (#22) — summaries + version file.
+# Copies of backend/summaries + repo-root version.txt; re-stage into
+# ereader-assets/ before build if the originals change. Pointed here via
+# EREADER_SUMMARIES_DIR / EREADER_VERSION_FILE in docker-compose.ereader.yml.
+# Placed after pip install so re-staging assets doesn't bust the deps layer.
+COPY ereader-assets/summaries /app/ereader/summaries
+COPY ereader-assets/version.txt /app/ereader/version.txt
+
 # Create necessary directories
 RUN mkdir -p /app/data /app/data/covers
 
