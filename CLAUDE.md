@@ -24,22 +24,39 @@
 - **Still back up `greatreads/data/greatreads.db` before any schema or data
   migration** (the repo had a Jan-2026 data-loss incident — treat the DB with
   care). Rebuilds that only change code need no backup.
+- **Re-stage Ereader assets if their originals changed (#22 fallout).** The
+  container bakes in copies at `greatreads/ereader-assets/` — `summaries/`
+  (from `backend/summaries/`) and `version.txt` (repo root). The Docker build
+  context is `greatreads/`, so it can't `COPY` from `backend/` or the root
+  directly; the copies are what get baked. If you edited `backend/summaries/*`
+  or bumped `version.txt`, re-stage **before** rebuilding, or the container
+  serves stale summaries / an old version pill:
+  `cp backend/summaries/*.json greatreads/ereader-assets/summaries/ && cp version.txt greatreads/ereader-assets/version.txt`
+  (A code-only change needs no re-stage.) TODO: fold this re-stage into a
+  deploy-script wrapper when #8 lands so it can't be forgotten.
 
-## Runtime orientation (as of the backend-merge work)
+## Runtime orientation (post backend-merge — #22 step 2 done)
 - `:8090` `web/serve.py` — static reader files + `/greatreads/` reverse proxy (bare-metal).
-- `:8091` `backend/app.py` — FastAPI: Calibre/ABS catalog (`/api/catalog`, `/api/ebooks`),
-  audiobooks, highlights, progress, summaries. Bare-metal `uvicorn --reload`. **Being merged
-  into the `:8092` container — see the open "Step 2" issue.**
-- `:8092` `greatreads_ereader` container — FastAPI: library/TBR/journal/stats + the canonical
-  SQLite DB. Code is baked in (`COPY src`), so code changes need a rebuild (see above).
+- `:8092` `greatreads_ereader` container — the **unified** FastAPI app: GreatReads
+  (library/TBR/journal/stats + the canonical SQLite DB) **plus** the absorbed Ereader
+  routes (`/api/catalog`, `/api/ebooks`, audiobooks, highlights, progress, summaries — all
+  still at their original `/api/...` paths via `ereader_api.py`). Code is baked in
+  (`COPY src`), so code changes need a rebuild (see above).
+- `:8091` `backend/app.py` — **retired** (#22). Folded into `:8092`; the process is stopped
+  and nothing listens on the port. `backend/app.py` + `run.sh` are kept in the tree only as
+  rollback (slated for deletion once the merge is proven stable — see #22's deferred list).
+  Do **not** restart `:8091`; if Calibre/ABS features break, debug `:8092` instead.
 
-## The `:8091` backend has no watchdog — restart it if audio/catalog break
-- `:8091` (`backend/app.py`) is bare-metal `uvicorn --reload` with **no supervisor**
-  (`web/keep-alive.sh` only watches `:8090`). On any reboot/crash it stays down,
-  and the reader then shows failures like *"Could not start playback. Is
-  Audiobookshelf reachable?"* or an empty/Calibre-only catalog.
-- If audiobooks, covers, downloads, highlights, or progress fail, **first check
-  `:8091` is up** (`curl -sf localhost:8091/api/health`). If not, restart it:
-  `cd backend && nohup ./run.sh >/tmp/ereader-backend.log 2>&1 &` — then re-check
-  `/api/health` (expect `{"status":"ok",...,"calibre_connected":true}`).
-- This goes away once Step 2 (#22) folds `:8091` into the `:8092` container.
+## If audio/catalog/covers break, check the `:8092` container (not `:8091`)
+- The Ereader routes now live in the `greatreads_ereader` container, which **is**
+  supervised (`restart: unless-stopped` + a healthcheck). On reboot it comes back on its
+  own — unlike the old unsupervised `:8091`.
+- If audiobooks, covers, downloads, highlights, or progress fail, check the container is up
+  and healthy (`docker ps --filter name=greatreads_ereader`) and hit
+  `curl -sf localhost:8092/api/health` (expect `{"status":"ok",...,"calibre_connected":true}`).
+  If `calibre_connected:false`, the container can't reach the host's Calibre/ABS — verify
+  `host.docker.internal` resolves (`docker exec greatreads_ereader curl -sf http://host.docker.internal:8083/ajax/library-info`)
+  and that the host still publishes `:8083`/`:13378` on `0.0.0.0`.
+- **Rollback** (only if the merge regresses): restart `:8091` with
+  `cd backend && nohup ./run.sh >/tmp/ereader-backend.log 2>&1 &`, then flip the 5 frontend
+  URLs (`web/reader.html` ×2, `web/index.html` ×2, `web/player.js` ×1) from `:8092` back to `:8091`.
