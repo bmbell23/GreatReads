@@ -4,7 +4,7 @@
             "path": "."
         }
     ],
-    "name": "Ereader",
+    "name": "GreatReads",
     "settings": {
         "workbench.colorTheme": "Dark+",
         "search.exclude": {
