@@ -2244,7 +2244,8 @@
                 loadBookmarksForBook(),
                 syncReadingStateFromServer(),
                 loadBookWordCount(),
-                loadBookSummaries()
+                loadBookSummaries(),
+                loadReadingBaseline()
             ]).finally(() => {
                 setTimeout(calculatePages, 100);
             });
@@ -3145,6 +3146,11 @@
 
         let _bookWordCount      = null;   // null = unknown → hide WPM cell
         let _recentPages        = [];     // [{ms, words}, ...]
+        // Global cross-book reading-speed baseline (#29), ms-per-word. Fetched on
+        // open from /api/reading-speed; used ONLY as a fallback to seed WPM /
+        // time-remaining on a fresh book before it has its own samples. Real
+        // per-book samples always win over it.
+        let _baselineMsPerWord  = null;
         let _pageStartMs        = null;
         let _pageElapsedAccrued = 0;      // ms accrued before last hide
         let _pageHiddenAt       = null;   // timestamp when WebView went hidden
@@ -3298,11 +3304,18 @@
             if (totalWords === 0) return null;
             return totalMs / totalWords;
         }
+        // Effective ms-per-word: this book's real samples if we have enough,
+        // else the persisted global baseline (#29) so a freshly-opened book
+        // shows WPM / time-remaining from the first page instead of blank.
+        function _effMsPerWord() {
+            const real = _avgMsPerWord();
+            return real != null ? real : _baselineMsPerWord;
+        }
         function _avgMs() {
             // Prefer the layout-aware path: ms-per-word × current words-per-page
             // gives an accurate per-page estimate immediately after a dual-page
             // toggle / font-size change, without having to refill the buffer.
-            const mpw = _avgMsPerWord();
+            const mpw = _effMsPerWord();
             const wpp = _currentWPP();
             if (mpw != null && wpp != null) return mpw * wpp;
             // Fallback for books without a Calibre #word_count: outlier-
@@ -3315,7 +3328,7 @@
             return kept.reduce((s, p) => s + p.ms, 0) / kept.length;
         }
         function _avgWPM() {
-            const mpw = _avgMsPerWord();
+            const mpw = _effMsPerWord();
             if (mpw == null || mpw === 0) return null;
             return Math.round(60000 / mpw);
         }
@@ -3417,6 +3430,10 @@
                 // "Reading-speed tracking" block above). Server just stores
                 // it verbatim; restored on next open via syncReadingState.
                 recentPages: _recentPages,
+                // Current REAL avg ms-per-word (this book's own samples only,
+                // null until we have enough). The backend folds it into the
+                // global cross-book baseline (#29) so other books seed from it.
+                msPerWord: _avgMsPerWord(),
             });
             _pendingState = null;
             if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
@@ -3540,6 +3557,20 @@
                 const own = candidates.find(x => x && x.mediaType !== 'audiobook');
                 if (own && Array.isArray(own.recentPages)) {
                     _recentPages = own.recentPages.slice(-READING_SPEED.bufferSize);
+                }
+            } catch (_) {}
+        }
+
+        // Fetch the global cross-book reading-speed baseline (#29) so a fresh
+        // book can show WPM / time-remaining from the first page. Layout-
+        // invariant ms-per-word; only a fallback — real per-book samples win.
+        async function loadReadingBaseline() {
+            try {
+                const r = await fetch(`${API_URL}/reading-speed`);
+                if (!r.ok) return;
+                const d = await r.json();
+                if (Number.isFinite(d.ebook_ms_per_word) && d.ebook_ms_per_word > 0) {
+                    _baselineMsPerWord = d.ebook_ms_per_word;
                 }
             } catch (_) {}
         }

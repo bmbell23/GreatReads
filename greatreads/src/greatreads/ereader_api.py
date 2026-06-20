@@ -266,6 +266,71 @@ def _ensure_highlights_table(conn):
         ' data    TEXT NOT NULL,'    # full JSON highlight/bookmark record
         ' created INTEGER)')         # epoch ms (denormalized for ORDER BY)
 
+# ---------- Small app-wide key/value store (JSON values) ----------
+# Used for cross-book singletons that don't belong in ereader_progress (which the
+# library iterates per book). Currently: the global reading-speed baseline (#29).
+def _ensure_app_kv_table(conn):
+    conn.execute(
+        'CREATE TABLE IF NOT EXISTS ereader_app_kv ('
+        ' key   TEXT PRIMARY KEY,'
+        ' value TEXT NOT NULL)')     # JSON-encoded value
+
+def _kv_get(key, default=None):
+    try:
+        conn = _gr_db()
+        try:
+            _ensure_app_kv_table(conn)
+            row = conn.execute('SELECT value FROM ereader_app_kv WHERE key=?', (key,)).fetchone()
+        finally:
+            conn.close()
+        if row:
+            try:
+                return json.loads(row['value'])
+            except Exception:
+                return default
+        return default
+    except Exception:
+        return default
+
+def _kv_set(key, value):
+    try:
+        conn = _gr_db()
+        try:
+            _ensure_app_kv_table(conn)
+            with conn:
+                conn.execute(
+                    'INSERT INTO ereader_app_kv(key,value) VALUES(?,?) '
+                    'ON CONFLICT(key) DO UPDATE SET value=excluded.value',
+                    (key, json.dumps(value)))
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f"⚠️  KV write failed for {key}: {e}")
+
+# Global cross-book reading-speed baseline (#29). ms-per-word is layout-invariant,
+# so it transfers across books/devices. EMA so it tracks the user's pace over time.
+_READING_SPEED_KEY = 'reading_speed_baseline'
+_RS_ALPHA = 0.2  # weight of each fresh session estimate
+
+def _update_reading_baseline(ms_per_word):
+    """Fold a fresh ebook ms-per-word estimate (the reader's current real avg)
+    into the global baseline via a simple EMA."""
+    try:
+        mpw = float(ms_per_word)
+    except (TypeError, ValueError):
+        return
+    # Sanity gate: reject junk. ~3 ms/word ≈ 20k WPM (impossible); 60s/word is a
+    # sane upper bound for real reading.
+    if not (3.0 <= mpw <= 60000.0):
+        return
+    cur = _kv_get(_READING_SPEED_KEY) or {}
+    old = cur.get('ebook_ms_per_word')
+    new = ((1 - _RS_ALPHA) * old + _RS_ALPHA * mpw) if isinstance(old, (int, float)) and old > 0 else mpw
+    cur['ebook_ms_per_word'] = round(new, 2)
+    cur['samples'] = int(cur.get('samples') or 0) + 1
+    cur['updated'] = int(time.time() * 1000)
+    _kv_set(_READING_SPEED_KEY, cur)
+
 def _load_progress_json():
     if not os.path.exists(PROGRESS_FILE):
         return {}
@@ -2154,7 +2219,26 @@ async def put_progress(book_id, request: Request):
         _save_progress(data)
     # Reflect the % straight into GreatReads (read.current_percent) — no sync job.
     _gr_set_current_percent(book_id, item)
+    # Maintain the global cross-book reading-speed baseline (#29): the reader
+    # sends its current REAL avg ms-per-word (ebook only) so a freshly-opened
+    # book can seed WPM / time-remaining before it has its own samples.
+    mpw = body.get('msPerWord')
+    if mpw is not None and not str(book_id).startswith('abs:') and body.get('mediaType') != 'audiobook':
+        _update_reading_baseline(mpw)
     return item
+
+@router.get('/api/reading-speed')
+def get_reading_speed():
+    """Global cross-book reading-speed baseline (#29). Seeds the reader's WPM /
+    time-remaining on a freshly-opened book before it has its own page-turn
+    samples. ms-per-word is layout-invariant, so it transfers across books and
+    devices. Returns null fields until the first session has contributed."""
+    rec = _kv_get(_READING_SPEED_KEY) or {}
+    return {
+        'ebook_ms_per_word': rec.get('ebook_ms_per_word'),
+        'samples': rec.get('samples') or 0,
+        'updated': rec.get('updated') or 0,
+    }
 
 @router.delete('/api/progress/{book_id}')
 def delete_progress(book_id):
