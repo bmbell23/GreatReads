@@ -3151,6 +3151,16 @@
         // time-remaining on a fresh book before it has its own samples. Real
         // per-book samples always win over it.
         let _baselineMsPerWord  = null;
+        // Measured reading activity accrued since the last progress flush (#30):
+        // real page-turn time + words. Sent with each flush and RESET, so the
+        // backend sums non-overlapping deltas into the daily analytics series.
+        let _activityMsSinceFlush    = 0;
+        let _activityWordsSinceFlush = 0;
+        // Local YYYY-MM-DD (not UTC) so reading-activity buckets to the user's day.
+        function _localDateStr() {
+            const d = new Date();
+            return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+        }
         let _pageStartMs        = null;
         let _pageElapsedAccrued = 0;      // ms accrued before last hide
         let _pageHiddenAt       = null;   // timestamp when WebView went hidden
@@ -3195,6 +3205,10 @@
                         words: wpp != null ? Math.round(wpp) : null
                     });
                     if (_recentPages.length > READING_SPEED.bufferSize) _recentPages.shift();
+                    // Measured activity for the daily analytics series (#30) —
+                    // real time + words on this page, accrued until the next flush.
+                    _activityMsSinceFlush += Math.round(ms);
+                    if (wpp != null) _activityWordsSinceFlush += Math.round(wpp);
                     // Piggyback on the existing reading-state push — the
                     // debounced PUT will pick up _recentPages via the
                     // flushReadingState body.
@@ -3434,7 +3448,17 @@
                 // null until we have enough). The backend folds it into the
                 // global cross-book baseline (#29) so other books seed from it.
                 msPerWord: _avgMsPerWord(),
+                // Measured reading activity since the last flush (#30): real
+                // page-turn time + words. The client's local date so late-night
+                // reading buckets to the correct day.
+                activityMs:    _activityMsSinceFlush,
+                activityWords: _activityWordsSinceFlush,
+                clientDate:    _localDateStr(),
             });
+            // Reset the per-flush activity accumulators — the backend sums these
+            // deltas, so they must not be resent on the next flush.
+            _activityMsSinceFlush = 0;
+            _activityWordsSinceFlush = 0;
             _pendingState = null;
             if (_pushTimer) { clearTimeout(_pushTimer); _pushTimer = null; }
             try {

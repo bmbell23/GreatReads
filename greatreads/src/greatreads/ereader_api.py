@@ -275,6 +275,21 @@ def _ensure_app_kv_table(conn):
         ' key   TEXT PRIMARY KEY,'
         ' value TEXT NOT NULL)')     # JSON-encoded value
 
+# Per-day reading-activity time-series for analytics (#30). One row per
+# (date, book, format); the stats endpoint sums across books. Starts empty —
+# there is no historical backfill (we logged nothing per-day before this).
+def _ensure_reading_activity_table(conn):
+    conn.execute(
+        'CREATE TABLE IF NOT EXISTS reading_activity ('
+        ' activity_date TEXT NOT NULL,'   # YYYY-MM-DD
+        ' book_key      TEXT NOT NULL,'
+        ' format        TEXT NOT NULL,'   # Ebook | Audio
+        ' minutes       REAL    NOT NULL DEFAULT 0,'
+        ' words         INTEGER NOT NULL DEFAULT 0,'
+        ' wpm_mpw_sum   REAL    NOT NULL DEFAULT 0,'   # Σ real ms-per-word samples (ebook) → measured WPM
+        ' wpm_n         INTEGER NOT NULL DEFAULT 0,'
+        ' PRIMARY KEY(activity_date, book_key, format))')
+
 def _kv_get(key, default=None):
     try:
         conn = _gr_db()
@@ -330,6 +345,88 @@ def _update_reading_baseline(ms_per_word):
     cur['samples'] = int(cur.get('samples') or 0) + 1
     cur['updated'] = int(time.time() * 1000)
     _kv_set(_READING_SPEED_KEY, cur)
+
+# ---------- Daily reading-activity logging (#30) ----------
+def _gr_word_count_for(book_key):
+    """GreatReads book word_count for a reader book_key, via external_imports.
+    Best-effort; None if not resolvable. Used for the audiobook word-equivalent."""
+    try:
+        bk = str(book_key)
+        source, ext_id = ('audiobookshelf', bk[4:]) if bk.startswith('abs:') else ('calibre', bk)
+        conn = _gr_db()
+        try:
+            row = conn.execute(
+                'SELECT b.word_count FROM books b '
+                'JOIN external_imports ei ON ei.book_id = b.id '
+                'WHERE ei.source=? AND ei.external_id=? AND b.word_count IS NOT NULL LIMIT 1',
+                (source, ext_id)).fetchone()
+        finally:
+            conn.close()
+        return int(row['word_count']) if row and row['word_count'] else None
+    except Exception:
+        return None
+
+def _progress_delta(item, prev):
+    a, b = item.get('progress'), (prev or {}).get('progress')
+    if isinstance(a, (int, float)) and isinstance(b, (int, float)) and a > b:
+        return a - b
+    return 0.0
+
+def _record_reading_activity(book_key, item, prev, body):
+    """Accumulate today's per-book reading activity for the analytics time-series
+    (#30). Best-effort; never raises. Ebook minutes/words are MEASURED (the reader
+    sends activityMs/activityWords accrued since its last flush); audio minutes come
+    from the position advance, words from the word-equivalent (Δprogress × word_count)."""
+    try:
+        bk = str(book_key)
+        is_audio = bool(body.get('mediaType') == 'audiobook' or bk.startswith('abs:'))
+        fmt = 'Audio' if is_audio else 'Ebook'
+        minutes, words, mpw = 0.0, 0, None
+        if is_audio:
+            pos_now, pos_prev = body.get('position'), (prev or {}).get('position')
+            if isinstance(pos_now, (int, float)) and isinstance(pos_prev, (int, float)):
+                dsec = pos_now - pos_prev
+                if 0 < dsec <= 6 * 3600:        # ignore seek-back / absurd jumps
+                    minutes = dsec / 60.0
+            wc = _gr_word_count_for(bk)
+            dprog = _progress_delta(item, prev)
+            if wc and dprog > 0:
+                words = int(round(dprog * wc))
+        else:
+            ams, aw = body.get('activityMs'), body.get('activityWords')
+            if isinstance(ams, (int, float)) and ams > 0:
+                minutes = min(float(ams), 6 * 3600 * 1000) / 60000.0
+                if isinstance(aw, (int, float)) and aw > 0:
+                    words = int(aw)
+            else:
+                # Older reader without measured fields → estimate from progress delta.
+                wc = _gr_word_count_for(bk)
+                dprog = _progress_delta(item, prev)
+                if wc and dprog > 0:
+                    words = int(round(dprog * wc))
+            bmpw = body.get('msPerWord')
+            if isinstance(bmpw, (int, float)) and bmpw > 0:
+                mpw = float(bmpw)   # measured WPM trend, independent of derived minutes
+        if minutes <= 0 and words <= 0 and mpw is None:
+            return
+        # Prefer the client's local date (correct day across the UTC boundary); else server date.
+        cd = body.get('clientDate')
+        from datetime import datetime
+        today = cd if (isinstance(cd, str) and len(cd) == 10) else datetime.now().strftime('%Y-%m-%d')
+        conn = _gr_db()
+        try:
+            _ensure_reading_activity_table(conn)
+            with conn:
+                conn.execute(
+                    'INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) '
+                    'VALUES(?,?,?,?,?,?,?) ON CONFLICT(activity_date,book_key,format) DO UPDATE SET '
+                    ' minutes=minutes+excluded.minutes, words=words+excluded.words, '
+                    ' wpm_mpw_sum=wpm_mpw_sum+excluded.wpm_mpw_sum, wpm_n=wpm_n+excluded.wpm_n',
+                    (today, bk, fmt, minutes, words, mpw or 0.0, 1 if mpw else 0))
+        finally:
+            conn.close()
+    except Exception as e:
+        print(f'reading_activity record failed for {book_key}: {e}')
 
 def _load_progress_json():
     if not os.path.exists(PROGRESS_FILE):
@@ -2215,6 +2312,7 @@ async def put_progress(book_id, request: Request):
         item['chapterFraction'] = body.get('chapterFraction')
     with _progress_lock:
         data = _load_progress()
+        prev = data.get(str(book_id))     # snapshot BEFORE overwrite — for activity deltas (#30)
         data[str(book_id)] = item
         _save_progress(data)
     # Reflect the % straight into GreatReads (read.current_percent) — no sync job.
@@ -2225,6 +2323,8 @@ async def put_progress(book_id, request: Request):
     mpw = body.get('msPerWord')
     if mpw is not None and not str(book_id).startswith('abs:') and body.get('mediaType') != 'audiobook':
         _update_reading_baseline(mpw)
+    # Log today's reading activity for the analytics time-series (#30). Best-effort.
+    _record_reading_activity(book_id, item, prev, body)
     return item
 
 @router.get('/api/reading-speed')
