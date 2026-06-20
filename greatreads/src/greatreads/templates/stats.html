@@ -17,6 +17,30 @@
 </div>
 <style>.page-header-bookish { padding-top: 0; padding-bottom: 0; }</style>
 
+<!-- Stats sub-tabs -->
+<ul class="nav nav-tabs mb-3" id="statsTabs" role="tablist">
+    <li class="nav-item" role="presentation">
+        <button class="nav-link active" id="tab-speed-btn" data-bs-toggle="tab" data-bs-target="#pane-speed" type="button" role="tab">
+            <i class="fas fa-stopwatch me-1"></i>Reading Speed
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-metrics-btn" data-bs-toggle="tab" data-bs-target="#pane-metrics" type="button" role="tab">
+            <i class="fas fa-chart-bar me-1"></i>Reading Metrics
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-genres-btn" data-bs-toggle="tab" data-bs-target="#pane-genres" type="button" role="tab">
+            <i class="fas fa-bookmark me-1"></i>Genres
+        </button>
+    </li>
+    <li class="nav-item" role="presentation">
+        <button class="nav-link" id="tab-series-btn" data-bs-toggle="tab" data-bs-target="#pane-series" type="button" role="tab">
+            <i class="fas fa-layer-group me-1"></i>Series
+        </button>
+    </li>
+</ul>
+
 <!-- Filters -->
 <div class="row mb-4">
     <div class="col-12">
@@ -53,7 +77,10 @@
     </div>
 </div>
 
-<!-- Reading Time & Speed (#30) — compact, live from reading activity -->
+<div class="tab-content" id="statsTabContent">
+
+<!-- ===== Reading Speed tab ===== -->
+<div class="tab-pane fade show active" id="pane-speed" role="tabpanel" aria-labelledby="tab-speed-btn">
 <div class="row">
     <div class="col-12 col-lg-6 mb-4">
         <div class="card">
@@ -73,7 +100,21 @@
             </div>
         </div>
     </div>
+    <div class="col-12 col-lg-6 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-tachometer-alt me-2"></i>Finished Books WPD</h5>
+            </div>
+            <div class="card-body">
+                <canvas id="speedBarChart" style="max-height: 300px;"></canvas>
+            </div>
+        </div>
+    </div>
 </div>
+</div><!-- /pane-speed -->
+
+<!-- ===== Reading Metrics tab ===== -->
+<div class="tab-pane fade" id="pane-metrics" role="tabpanel" aria-labelledby="tab-metrics-btn">
 
 <!-- Charts Row 1 - Dynamic based on filter -->
 <div class="row" id="timeBasedChartsRow">
@@ -163,18 +204,6 @@
         </div>
     </div>
 
-    <div class="col-md-6 mb-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">
-                    <i class="fas fa-tachometer-alt me-2"></i>Reading Speed
-                </h5>
-            </div>
-            <div class="card-body">
-                <canvas id="speedBarChart" style="max-height: 300px;"></canvas>
-            </div>
-        </div>
-    </div>
 </div>
 
 <!-- Charts Row 3b - Library Word Count by Format -->
@@ -241,8 +270,10 @@
         </div>
     </div>
 </div>
+</div><!-- /pane-metrics -->
 
-<!-- Charts Row 5 - Full Width Genre Chart -->
+<!-- ===== Genres tab ===== -->
+<div class="tab-pane fade" id="pane-genres" role="tabpanel" aria-labelledby="tab-genres-btn">
 <div class="row">
     <div class="col-12 mb-4">
         <div class="card">
@@ -262,8 +293,10 @@
         </div>
     </div>
 </div>
+</div><!-- /pane-genres -->
 
-<!-- Charts Row 6 - Full Width Series Progress -->
+<!-- ===== Series tab ===== -->
+<div class="tab-pane fade" id="pane-series" role="tabpanel" aria-labelledby="tab-series-btn">
 <div class="row">
     <div class="col-12 mb-4">
         <div class="card">
@@ -278,6 +311,8 @@
         </div>
     </div>
 </div>
+</div><!-- /pane-series -->
+</div><!-- /tab-content -->
 
 <script>
 // Set Chart.js defaults for better text rendering
@@ -1846,6 +1881,12 @@ document.addEventListener('DOMContentLoaded', async function() {
     await loadChartPreference();
     await loadStats();
     loadReadingActivity();   // live reading time/speed (#30) — independent of the year/month filter
+
+    // Charts built inside an inactive tab-pane (display:none) lay out at 0 size;
+    // refit them the first time their tab is shown.
+    document.querySelectorAll('#statsTabs button[data-bs-toggle="tab"]').forEach(btn => {
+        btn.addEventListener('shown.bs.tab', () => window.dispatchEvent(new Event('resize')));
+    });
 });
 </script>
 {% endblock %}
