@@ -53,35 +53,23 @@
     </div>
 </div>
 
-<!-- Reading Time & Speed (#30) — live, sourced from reading activity as you read -->
+<!-- Reading Time & Speed (#30) — compact, live from reading activity -->
 <div class="row">
-    <div class="col-12 mb-4">
+    <div class="col-12 col-lg-6 mb-4">
         <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center">
-                <h5 class="mb-0"><i class="fas fa-stopwatch me-2"></i>Reading Time &amp; Speed</h5>
-                <small class="text-muted">live — fills in as you read</small>
+            <div class="card-header d-flex justify-content-between align-items-center py-2">
+                <h6 class="mb-0"><i class="fas fa-stopwatch me-2"></i>Reading Time &amp; Speed</h6>
+                <div class="btn-group btn-group-sm" role="group">
+                    <button type="button" class="btn btn-outline-secondary active" id="actMetricMinutes" onclick="switchActivityMetric('minutes')">Time</button>
+                    <button type="button" class="btn btn-outline-secondary" id="actMetricWords" onclick="switchActivityMetric('words')">Words</button>
+                </div>
             </div>
-            <div class="card-body">
-                <div id="activitySummary" class="row g-2 mb-3 text-center"></div>
-                <div id="activityEmpty" class="text-center text-muted py-4 d-none">
-                    <i class="fas fa-hourglass-half me-2"></i>No reading time logged yet — read or listen to a book and this fills in.
+            <div class="card-body py-2">
+                <div id="activityEmpty" class="text-center text-muted py-3 small d-none">
+                    <i class="fas fa-hourglass-half me-2"></i>No reading time logged yet — read or listen and this fills in.
                 </div>
-                <div class="row" id="activityCharts">
-                    <div class="col-lg-7 mb-3">
-                        <div class="d-flex justify-content-between align-items-center mb-2">
-                            <h6 class="mb-0 text-muted">Per day</h6>
-                            <div class="btn-group btn-group-sm" role="group">
-                                <button type="button" class="btn btn-outline-secondary active" id="actMetricMinutes" onclick="switchActivityMetric('minutes')">Time</button>
-                                <button type="button" class="btn btn-outline-secondary" id="actMetricWords" onclick="switchActivityMetric('words')">Words</button>
-                            </div>
-                        </div>
-                        <canvas id="activityDailyChart" style="max-height: 300px;"></canvas>
-                    </div>
-                    <div class="col-lg-5 mb-3">
-                        <h6 class="mb-2 text-muted">Reading speed (ebook WPM)</h6>
-                        <canvas id="activityWpmChart" style="max-height: 300px;"></canvas>
-                    </div>
-                </div>
+                <canvas id="activityChart" style="max-height: 150px;"></canvas>
+                <div id="activitySummary" class="small text-muted mt-2 text-center"></div>
             </div>
         </div>
     </div>
@@ -1774,8 +1762,9 @@ document.getElementById('monthFilter').addEventListener('change', loadStats);
 
 // Load stats on page load
 // ---------- Reading Time & Speed (#30) ----------
-let activityDailyChart = null;
-let activityWpmChart = null;
+// One compact horizontal bar chart: total time (or words) per format, with the
+// measured/derived WPM in a caption underneath.
+let activityChart = null;
 let activityData = null;
 let currentActivityMetric = 'minutes';
 
@@ -1794,67 +1783,55 @@ async function loadReadingActivity() {
 
 function renderActivity() {
     if (!activityData) return;
-    const dm = activityData.daily_minutes || {};
-    const dw = activityData.daily_words || {};
-    const wpm = activityData.daily_wpm || {};
     const totals = activityData.totals || { minutes: {}, words: {} };
+    const dailyWpm = activityData.daily_wpm || {};
     const FMTS = ['Ebook', 'Audio', 'Physical'];
 
-    // All dates across formats + the WPM series.
-    const dateSet = new Set();
-    FMTS.forEach(f => Object.keys(dm[f] || {}).forEach(d => dateSet.add(d)));
-    Object.keys(wpm).forEach(d => dateSet.add(d));
-    const dates = Array.from(dateSet).sort();
-    const hasData = dates.length > 0;
-
+    const present = FMTS.filter(f => (totals.minutes[f] || 0) > 0);
+    const hasData = present.length > 0;
     document.getElementById('activityEmpty').classList.toggle('d-none', hasData);
-    document.getElementById('activityCharts').classList.toggle('d-none', !hasData);
+    document.getElementById('activityChart').style.display = hasData ? '' : 'none';
+    if (!hasData) { document.getElementById('activitySummary').textContent = ''; return; }
 
-    // Summary tiles: total time, per-format time, avg ebook WPM.
-    const totalMin = FMTS.reduce((s, f) => s + (totals.minutes[f] || 0), 0);
-    const tiles = [`<div class="col"><div class="fw-bold fs-5">${_fmtHours(totalMin)}</div><div class="text-muted small">Total time</div></div>`];
-    FMTS.forEach(f => {
-        if (totals.minutes[f]) tiles.push(`<div class="col"><div class="fw-bold fs-5" style="color:${COLORS[f]}">${_fmtHours(totals.minutes[f])}</div><div class="text-muted small">${f}</div></div>`);
-    });
-    const wpmVals = Object.values(wpm);
-    if (wpmVals.length) {
-        const avg = Math.round(wpmVals.reduce((a, b) => a + b, 0) / wpmVals.length);
-        tiles.push(`<div class="col"><div class="fw-bold fs-5">${avg}</div><div class="text-muted small">Avg WPM (ebook)</div></div>`);
-    }
-    document.getElementById('activitySummary').innerHTML = tiles.join('');
-    if (!hasData) return;
+    // Per-format WPM: measured ebook avg when available, else words/minute.
+    const wpmFor = (f) => {
+        if (f === 'Ebook') {
+            const v = Object.values(dailyWpm);
+            if (v.length) return Math.round(v.reduce((a, b) => a + b, 0) / v.length);
+        }
+        const mn = totals.minutes[f] || 0, w = totals.words[f] || 0;
+        return mn > 0 && w > 0 ? Math.round(w / mn) : null;
+    };
 
-    // Daily stacked bar — Time (minutes) or Words.
-    const src = currentActivityMetric === 'words' ? dw : dm;
-    const datasets = FMTS.filter(f => src[f]).map(f => ({
-        label: f,
-        data: dates.map(d => (src[f] && src[f][d]) || 0),
-        backgroundColor: COLORS[f], borderColor: COLORS[f], borderWidth: 1, borderRadius: 3
-    }));
-    const ctx = document.getElementById('activityDailyChart').getContext('2d');
-    if (activityDailyChart) activityDailyChart.destroy();
-    activityDailyChart = new Chart(ctx, {
+    const useWords = currentActivityMetric === 'words';
+    const vals = present.map(f => useWords ? (totals.words[f] || 0) : (totals.minutes[f] || 0));
+    const ctx = document.getElementById('activityChart').getContext('2d');
+    if (activityChart) activityChart.destroy();
+    activityChart = new Chart(ctx, {
         type: 'bar',
-        data: { labels: dates, datasets },
-        options: { ...commonChartOptions,
-            plugins: { legend: { position: 'top' } },
-            scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true,
-                title: { display: true, text: currentActivityMetric === 'words' ? 'Words' : 'Minutes' } } } }
+        data: { labels: present, datasets: [{
+            data: vals,
+            backgroundColor: present.map(f => COLORS[f]),
+            borderColor: present.map(f => COLORS[f]),
+            borderWidth: 1, borderRadius: 4, barThickness: 22
+        }] },
+        options: { ...commonChartOptions, indexAxis: 'y',
+            plugins: { legend: { display: false },
+                tooltip: { callbacks: { label: (c) => {
+                    const f = c.label, w = wpmFor(f);
+                    return useWords
+                        ? `${Number(c.raw).toLocaleString()} words${w ? ` · ${w} wpm` : ''}`
+                        : `${_fmtHours(c.raw)}${w ? ` · ${w} wpm` : ''}`;
+                } } } },
+            scales: { x: { beginAtZero: true, ticks: { callback: (v) => useWords
+                ? (v >= 1000 ? (v / 1000) + 'k' : v) : v + 'm' } }, y: { grid: { display: false } } } }
     });
 
-    // WPM-over-time line (ebook, measured).
-    const wpmDates = Object.keys(wpm).sort();
-    const wctx = document.getElementById('activityWpmChart').getContext('2d');
-    if (activityWpmChart) activityWpmChart.destroy();
-    activityWpmChart = new Chart(wctx, {
-        type: 'line',
-        data: { labels: wpmDates, datasets: [{
-            label: 'WPM', data: wpmDates.map(d => wpm[d]),
-            borderColor: COLORS.Ebook, backgroundColor: 'rgba(0,102,204,0.12)',
-            fill: true, tension: 0.3, pointRadius: 3 }] },
-        options: { ...commonChartOptions, plugins: { legend: { display: false } },
-            scales: { y: { beginAtZero: false, title: { display: true, text: 'WPM' } } } }
-    });
+    // Caption: total + per-format WPM (always visible, no second chart).
+    const totalMin = present.reduce((s, f) => s + (totals.minutes[f] || 0), 0);
+    const speeds = present.map(f => { const w = wpmFor(f); return w ? `${f} ${w} wpm` : null; }).filter(Boolean);
+    document.getElementById('activitySummary').innerHTML =
+        `Total ${_fmtHours(totalMin)}${speeds.length ? ' · ' + speeds.join(' · ') : ''}`;
 }
 
 function switchActivityMetric(m) {
