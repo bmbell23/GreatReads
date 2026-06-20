@@ -3971,7 +3971,6 @@
         // after creating a new highlight or when they tap an existing
         // one. Cleared by hideHLPopup() on explicit dismiss.
         let _editingHLId = null;
-        let _hlSelExpanded = false;  // expand a native selection to the full highlight once per gesture (#31)
 
         function getLookupURL(kind) {
             const key = kind === 'dict' ? HL_DICT_KEY : HL_WIKI_KEY;
@@ -4427,17 +4426,28 @@
             }
 
             if (replacingId) {
-                // If the selection still matches the existing highlight's
-                // text exactly, the user opened the menu but didn't drag.
-                // Skip the round-trip; just keep editing armed.
+                // EXTEND, don't replace: union the new selection with the
+                // existing highlight's range so dragging ONE native handle past
+                // an edge GROWS the highlight, instead of shrinking it to the
+                // re-selected word. (Native handles only appear for the user's
+                // own selection, so this is the reliable adjust path.) (#31)
+                const hr = _hlRanges.get(replacingId);
+                if (hr) {
+                    try {
+                        if (hr.compareBoundaryPoints(Range.START_TO_START, range) < 0)
+                            range.setStart(hr.startContainer, hr.startOffset);
+                        if (hr.compareBoundaryPoints(Range.END_TO_END, range) > 0)
+                            range.setEnd(hr.endContainer, hr.endOffset);
+                    } catch (_) {}
+                }
+                // Union unchanged from the existing highlight → nothing to do.
                 const existingText = getHighlightText(replacingId);
                 if (existingText === range.toString().trim()) {
                     _editingHLId = replacingId;
                     return true;
                 }
-                // Drop the old highlight from the registry so the yellow
-                // band disappears while the user adjusts. The server-side
-                // delete is fired below once the replacement is in flight.
+                // Drop the old highlight from the registry so the yellow band
+                // disappears while the new (extended) one is saved.
                 unwrapHL(replacingId);
             }
 
@@ -4837,6 +4847,14 @@
         }
         let _selSettleTimer = null;
         let _selSaveInFlight = false;
+        // True when a range overlaps any existing highlight (used to treat a
+        // short re-selection over a highlight as an adjust, not a lookup). (#31)
+        function _selectionOverlapsHighlight(range) {
+            if (!range) return false;
+            for (const [, hr] of _hlRanges) { if (hr && _rangesIntersect(range, hr)) return true; }
+            return false;
+        }
+
         function scheduleSelectionSettleSave() {
             if (_selSaveInFlight) return;
             if (_selSettleTimer) clearTimeout(_selSettleTimer);
@@ -4850,8 +4868,10 @@
                 // show the lookup popup instantly; do NOT save a highlight.
                 if (_wordCount(text) < HL_MIN_WORDS && !_editingHLId) {
                     const range = getEpubSelectionRange();
-                    if (range) showLookupPopup(range, text);
-                    return;
+                    if (!range) return;
+                    // A short selection that OVERLAPS a highlight is an ADJUST
+                    // (→ union below), not a lookup — let it fall through.
+                    if (!_selectionOverlapsHighlight(range)) { showLookupPopup(range, text); return; }
                 }
                 _selSaveInFlight = true;
                 try { await handleSelectionMaybe(); }
@@ -5704,39 +5724,9 @@
         // adjusting the handles. Handle-drag adjustments fire
         // selectionchange but NOT touch events, so this is the only path
         // that catches post-release tweaks.
-        // When a native long-press lands INSIDE an existing highlight, the OS
-        // only selects the pressed word — adjusting from there would shrink the
-        // highlight to that word. Expand the selection to the WHOLE highlight so
-        // the native handles sit at its two ends; the user extends/shrinks from
-        // there and the settle replaces it. Once per gesture (reset on collapse). (#31)
-        function _maybeExpandSelectionToHighlight(sel, range) {
-            if (_hlSelExpanded) return;
-            for (const [id, hr] of _hlRanges) {
-                if (!hr) continue;
-                let intersects = false, coversAll = false;
-                try {
-                    intersects = _rangesIntersect(range, hr);
-                    if (intersects) {
-                        coversAll = range.compareBoundaryPoints(Range.START_TO_START, hr) <= 0
-                                 && range.compareBoundaryPoints(Range.END_TO_END, hr) >= 0;
-                    }
-                } catch (_) { continue; }
-                if (!intersects) continue;
-                _hlSelExpanded = true;
-                if (coversAll) return;          // already spans it → mid-adjust
-                try {
-                    sel.setBaseAndExtent(hr.startContainer, hr.startOffset,
-                                         hr.endContainer, hr.endOffset);
-                    _editingHLId = id;           // settle → replace THIS highlight
-                } catch (_) {}
-                return;
-            }
-        }
-
         function onSelectionChangeForSave() {
             const sel = window.getSelection();
             if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
-                _hlSelExpanded = false;
                 if (_selSettleTimer) { clearTimeout(_selSettleTimer); _selSettleTimer = null; }
                 if (_overlaySelTimer) { clearTimeout(_overlaySelTimer); _overlaySelTimer = null; }
                 return;
@@ -5744,7 +5734,6 @@
             const range = sel.getRangeAt(0);
             const content = document.getElementById('epub-content');
             if (content && content.contains(range.endContainer)) {
-                _maybeExpandSelectionToHighlight(sel, range);
                 scheduleSelectionSettleSave();
                 return;
             }
