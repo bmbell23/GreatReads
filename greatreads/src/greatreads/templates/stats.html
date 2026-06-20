@@ -111,6 +111,52 @@
         </div>
     </div>
 </div>
+
+<!-- Daily reading goals: calendar + trend chart (#30) -->
+<style>
+    .goal-calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
+    .goal-cal-dow { text-align: center; font-size: 0.7rem; color: #999; font-weight: 600; padding: 2px 0; }
+    .goal-cal-day { min-height: 46px; border: 1px solid #e9ecef; border-radius: 6px; padding: 3px 4px;
+        cursor: pointer; display: flex; flex-direction: column; transition: background .12s; }
+    .goal-cal-day:hover { background: #f1f3f5; }
+    .goal-cal-day.empty { border: none; cursor: default; background: transparent; }
+    .goal-cal-day .dnum { font-size: 0.72rem; color: #666; line-height: 1; }
+    .goal-cal-day.today { border-color: #0066CC; }
+    .goal-cal-day.selected { box-shadow: 0 0 0 2px #0066CC; }
+    .goal-dots { margin-top: auto; display: flex; gap: 3px; justify-content: center; align-items: center; }
+    .goal-dot { width: 9px; height: 9px; border-radius: 50%; opacity: 0.22; display: inline-block; }
+    .goal-dot.met { opacity: 1; }
+</style>
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header d-flex justify-content-between align-items-center">
+                <h5 class="mb-0"><i class="fas fa-calendar-check me-2"></i>Daily Goals</h5>
+                <div class="d-flex align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-secondary" id="goalPrevMonth" type="button"><i class="fas fa-chevron-left"></i></button>
+                    <span id="goalMonthLabel" class="fw-bold text-center" style="min-width: 9.5em;"></span>
+                    <button class="btn btn-sm btn-outline-secondary" id="goalNextMonth" type="button"><i class="fas fa-chevron-right"></i></button>
+                </div>
+            </div>
+            <div class="card-body">
+                <div id="goalLegend" class="small text-muted mb-2 text-center"></div>
+                <div id="goalCalendar" class="goal-calendar"></div>
+                <div id="goalDayDetail" class="small text-center mt-2 text-muted"></div>
+                <hr class="my-3">
+                <div class="d-flex justify-content-between align-items-center mb-2">
+                    <h6 class="mb-0 text-muted" id="goalChartTitle">Words per day</h6>
+                    <div class="btn-group btn-group-sm" role="group">
+                        <button type="button" class="btn btn-outline-secondary active" id="goalGranDay" onclick="setGoalGranularity('day')">Day</button>
+                        <button type="button" class="btn btn-outline-secondary" id="goalGranWeek" onclick="setGoalGranularity('week')">Week</button>
+                        <button type="button" class="btn btn-outline-secondary" id="goalGranMonth" onclick="setGoalGranularity('month')">Month</button>
+                        <button type="button" class="btn btn-outline-secondary" id="goalGranYear" onclick="setGoalGranularity('year')">Year</button>
+                    </div>
+                </div>
+                <canvas id="goalChart" style="height: 280px;"></canvas>
+            </div>
+        </div>
+    </div>
+</div>
 </div><!-- /pane-speed -->
 
 <!-- ===== Reading Metrics tab ===== -->
@@ -1876,11 +1922,151 @@ function switchActivityMetric(m) {
     renderActivity();
 }
 
+// ---------- Daily Goals: calendar + trend (#30) ----------
+// Goal = the per-format words/day from settings (reading-speeds). A day is
+// "met" for a format when that day's logged words reach the format's goal.
+const GOAL_FMTS = [['Ebook','ebook_wpd'],['Audio','audio_wpd'],['Physical','physical_wpd']];
+let goalChart = null;
+let goalGoals = {};          // {ebook_wpd, audio_wpd, physical_wpd}
+let goalMonth = null;        // Date pinned to the 1st of the displayed month
+let goalGran = 'day';
+let goalSelected = null;     // 'YYYY-MM-DD'
+
+function _ymd(y, m, d) { return `${y}-${String(m + 1).padStart(2, '0')}-${String(d).padStart(2, '0')}`; }
+function _todayStr() { const t = new Date(); return _ymd(t.getFullYear(), t.getMonth(), t.getDate()); }
+function _wordsOn(fmt, ds) { const dw = (activityData && activityData.daily_words) || {}; return (dw[fmt] && dw[fmt][ds]) || 0; }
+function _dailyGoalTotal() { return GOAL_FMTS.reduce((s, [, k]) => s + (Number(goalGoals[k]) || 0), 0); }
+function _daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
+function _daysInYear(y) { return ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365; }
+
+async function loadGoals() {
+    try { goalGoals = await GreatReads.apiCall('/settings/reading-speeds') || {}; } catch (_) { goalGoals = {}; }
+    if (!activityData) { try { activityData = await GreatReads.apiCall('/stats/activity'); } catch (_) { activityData = {}; } }
+    if (!goalMonth) { const t = new Date(); goalMonth = new Date(t.getFullYear(), t.getMonth(), 1); }
+    document.getElementById('goalPrevMonth').onclick = () => { goalMonth = new Date(goalMonth.getFullYear(), goalMonth.getMonth() - 1, 1); renderGoalCalendar(); if (goalGran === 'day') renderGoalChart(); };
+    document.getElementById('goalNextMonth').onclick = () => { goalMonth = new Date(goalMonth.getFullYear(), goalMonth.getMonth() + 1, 1); renderGoalCalendar(); if (goalGran === 'day') renderGoalChart(); };
+    renderGoalCalendar();
+    renderGoalChart();
+}
+
+function renderGoalCalendar() {
+    const y = goalMonth.getFullYear(), m = goalMonth.getMonth();
+    document.getElementById('goalMonthLabel').textContent = goalMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    document.getElementById('goalLegend').innerHTML = GOAL_FMTS.map(([f, k]) =>
+        (goalGoals[k] ? `<span class="me-3 d-inline-block"><span class="goal-dot met" style="background:${COLORS[f]}"></span> ${f} ${Number(goalGoals[k]).toLocaleString()}/day</span>` : '')).join('') ||
+        '<span class="text-muted">No per-format word goals set (Settings → reading speeds).</span>';
+
+    let html = '';
+    ['Su', 'Mo', 'Tu', 'We', 'Th', 'Fr', 'Sa'].forEach(d => html += `<div class="goal-cal-dow">${d}</div>`);
+    const startDow = new Date(y, m, 1).getDay();
+    const n = _daysInMonth(y, m);
+    for (let i = 0; i < startDow; i++) html += '<div class="goal-cal-day empty"></div>';
+    const today = _todayStr();
+    for (let d = 1; d <= n; d++) {
+        const ds = _ymd(y, m, d);
+        const dots = GOAL_FMTS.map(([f, k]) => {
+            const goal = goalGoals[k] || 0, w = _wordsOn(f, ds);
+            if (!goal && !w) return '';
+            const met = goal > 0 && w >= goal;
+            return `<span class="goal-dot ${met ? 'met' : ''}" style="background:${COLORS[f]}"></span>`;
+        }).join('');
+        const cls = (ds === today ? ' today' : '') + (ds === goalSelected ? ' selected' : '');
+        html += `<div class="goal-cal-day${cls}" data-date="${ds}" onclick="selectGoalDay('${ds}')"><span class="dnum">${d}</span><span class="goal-dots">${dots}</span></div>`;
+    }
+    document.getElementById('goalCalendar').innerHTML = html;
+}
+
+function selectGoalDay(ds) {
+    goalSelected = (goalSelected === ds) ? null : ds;
+    renderGoalCalendar();
+    const el = document.getElementById('goalDayDetail');
+    if (!goalSelected) { el.innerHTML = ''; return; }
+    const date = new Date(ds + 'T00:00:00');
+    const parts = GOAL_FMTS.map(([f, k]) => {
+        const goal = goalGoals[k] || 0, w = _wordsOn(f, ds);
+        if (!goal && !w) return null;
+        const met = goal > 0 && w >= goal;
+        return `<span style="color:${COLORS[f]}">${f}</span> ${w.toLocaleString()}${goal ? ` / ${Number(goal).toLocaleString()}` : ''} ${met ? '✓' : ''}`;
+    }).filter(Boolean);
+    el.innerHTML = `<strong>${date.toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' })}</strong> — ` +
+        (parts.length ? parts.join(' &nbsp;·&nbsp; ') : 'no reading logged');
+}
+
+function setGoalGranularity(g) {
+    goalGran = g;
+    ['Day', 'Week', 'Month', 'Year'].forEach(x => document.getElementById('goalGran' + x).classList.toggle('active', x.toLowerCase() === g));
+    renderGoalChart();
+}
+
+function renderGoalChart() {
+    const dw = (activityData && activityData.daily_words) || {};
+    const dateSet = new Set();
+    GOAL_FMTS.forEach(([f]) => Object.keys(dw[f] || {}).forEach(d => dateSet.add(d)));
+    const allDates = Array.from(dateSet).sort();
+
+    const labels = [], series = { Ebook: [], Audio: [], Physical: [] }, goalLine = [];
+    const addBucket = (label, days, goalDays) => {
+        labels.push(label);
+        GOAL_FMTS.forEach(([f]) => series[f].push(days.reduce((s, ds) => s + _wordsOn(f, ds), 0)));
+        goalLine.push(_dailyGoalTotal() * goalDays);
+    };
+
+    let title;
+    if (goalGran === 'day') {
+        const y = goalMonth.getFullYear(), m = goalMonth.getMonth(), n = _daysInMonth(y, m);
+        for (let d = 1; d <= n; d++) addBucket(String(d), [_ymd(y, m, d)], 1);
+        title = 'Words per day — ' + goalMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
+    } else if (goalGran === 'week') {
+        const byWeek = {};
+        allDates.forEach(ds => {
+            const dt = new Date(ds + 'T00:00:00'); const sun = new Date(dt); sun.setDate(dt.getDate() - dt.getDay());
+            const key = _ymd(sun.getFullYear(), sun.getMonth(), sun.getDate());
+            (byWeek[key] = byWeek[key] || []).push(ds);
+        });
+        Object.keys(byWeek).sort().slice(-16).forEach(wk => {
+            const dt = new Date(wk + 'T00:00:00');
+            addBucket('wk ' + dt.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }), byWeek[wk], 7);
+        });
+        title = 'Words per week';
+    } else if (goalGran === 'month') {
+        const byMonth = {};
+        allDates.forEach(ds => { const k = ds.slice(0, 7); (byMonth[k] = byMonth[k] || []).push(ds); });
+        Object.keys(byMonth).sort().forEach(k => {
+            const [yy, mm] = k.split('-').map(Number);
+            addBucket(new Date(yy, mm - 1, 1).toLocaleDateString('en-US', { month: 'short', year: '2-digit' }), byMonth[k], _daysInMonth(yy, mm - 1));
+        });
+        title = 'Words per month';
+    } else {
+        const byYear = {};
+        allDates.forEach(ds => { const k = ds.slice(0, 4); (byYear[k] = byYear[k] || []).push(ds); });
+        Object.keys(byYear).sort().forEach(k => addBucket(k, byYear[k], _daysInYear(Number(k))));
+        title = 'Words per year';
+    }
+    document.getElementById('goalChartTitle').textContent = title;
+
+    const datasets = GOAL_FMTS.filter(([f]) => series[f].some(v => v > 0)).map(([f]) => ({
+        label: f, data: series[f], backgroundColor: COLORS[f], borderColor: COLORS[f], borderWidth: 1, borderRadius: 3, stack: 'words'
+    }));
+    if (_dailyGoalTotal() > 0) datasets.push({
+        type: 'line', label: 'Goal', data: goalLine, borderColor: '#dc3545', borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0, fill: false
+    });
+
+    const ctx = document.getElementById('goalChart').getContext('2d');
+    if (goalChart) goalChart.destroy();
+    goalChart = new Chart(ctx, {
+        type: 'bar',
+        data: { labels, datasets },
+        options: { ...commonChartOptions, plugins: { legend: { position: 'top' } },
+            scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: { callback: v => v >= 1000 ? (v / 1000) + 'k' : v } } } }
+    });
+}
+
 document.addEventListener('DOMContentLoaded', async function() {
     // Load chart preference first, then load stats
     await loadChartPreference();
     await loadStats();
-    loadReadingActivity();   // live reading time/speed (#30) — independent of the year/month filter
+    await loadReadingActivity();   // live reading time/speed (#30) — independent of the year/month filter
+    loadGoals();                   // daily goal calendar + trend (#30)
 
     // Charts built inside an inactive tab-pane (display:none) lay out at 0 size;
     // refit them the first time their tab is shown.
