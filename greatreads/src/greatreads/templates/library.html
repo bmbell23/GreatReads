@@ -239,9 +239,13 @@
                                 <div class="mb-2">
                                     <strong>Genre:</strong> <span id="displayBookGenre"></span>
                                 </div>
-                                <div class="mb-2">
-                                    <strong>Pages:</strong> <span id="displayBookPages"></span> |
-                                    <strong>Words:</strong> <span id="displayBookWords"></span>
+                                <div class="mb-2 d-flex align-items-center flex-wrap gap-1">
+                                    <strong>Pages:</strong>
+                                    <input type="number" id="editBookPages" min="0" step="1"
+                                           class="form-control form-control-sm" style="width: 90px;"
+                                           title="Pages in the physical edition you care about — drives the TBR page readout">
+                                    <small class="text-muted me-2">physical edition</small>
+                                    <strong>Words:</strong> <span id="displayBookWords" class="ms-1"></span>
                                 </div>
                                 <div class="mb-2">
                                     <strong>Published:</strong> <span id="displayBookPublished"></span>
@@ -759,7 +763,17 @@ function hideOpenBookModal() {
     if (m) m.hide();
 }
 function libViewDetails(id) { hideOpenBookModal(); viewBookDetails(id); }
-function libAddToTBR(id) { hideOpenBookModal(); addToTBR(id); }
+// Open the real "Add New Reading" modal on the TBR page, pre-selected for this
+// book (#14), instead of silently POSTing a bare reading. Deep-link carries the
+// book id; if the book is owned in exactly one format, pre-pick that media type.
+function libAddToTBR(id) {
+    hideOpenBookModal();
+    const book = allBooks.find(b => b.id === id);
+    const owned = (book && book.media_owned) || [];
+    let url = "{{ url_for('tbr_page') }}?addReading=" + id;
+    if (owned.length === 1) url += '&media=' + encodeURIComponent(owned[0]);
+    window.location.href = url;
+}
 
 // Mark finished, GreatReads-native: finish an existing unfinished reading if there
 // is one, else create a finished reading. (Ratings stay optional — the full rating
@@ -959,26 +973,8 @@ async function viewBookDetails(bookId) {
     }
 }
 
-async function addToTBR(bookId) {
-    try {
-        // Create a new reading for this book
-        const today = new Date().toISOString().split('T')[0];
-        const readingData = {
-            book_id: bookId,
-            date_started: null,
-            date_finished_actual: null
-        };
-
-        await GreatReads.apiCall('/readings/', {
-            method: 'POST',
-            data: readingData
-        });
-
-        GreatReads.showToast('Book added to TBR!', 'success');
-    } catch (error) {
-        console.error('Failed to add to TBR:', error);
-    }
-}
+// (Removed the old bare-reading addToTBR — #14 now deep-links to the full
+// "Add New Reading" modal on the TBR page via libAddToTBR above.)
 
 // Global variable to store uploaded cover image for editing
 let editBookCoverFile = null;
@@ -1279,7 +1275,11 @@ async function showEditBookModal(book) {
     document.getElementById('displayBookSeries').textContent = seriesText;
 
     document.getElementById('displayBookGenre').textContent = book.genre || 'N/A';
-    document.getElementById('displayBookPages').textContent = book.page_count || 'N/A';
+    // Editable physical-edition page count (#11); stash the original so we only
+    // PUT on an actual change.
+    const editBookPages = document.getElementById('editBookPages');
+    editBookPages.value = (book.page_count != null ? book.page_count : '');
+    editBookPages.dataset.original = (book.page_count != null ? String(book.page_count) : '');
     document.getElementById('displayBookWords').textContent = book.word_count ? book.word_count.toLocaleString() : 'N/A';
     document.getElementById('displayBookPublished').textContent = book.date_published || 'N/A';
 
@@ -1381,6 +1381,23 @@ async function submitEditInventory() {
                     shelf_position: shelfPosRaw ? parseInt(shelfPosRaw) : 999
                 }
             });
+        }
+
+        // Persist the physical-edition page count if the user changed it (#11).
+        // Durable: nothing in the Calibre/ABS sync writes page_count, so a manual
+        // value sticks across syncs.
+        const pagesEl = document.getElementById('editBookPages');
+        if (pagesEl) {
+            const raw = (pagesEl.value || '').trim();
+            const newPages = raw === '' ? null : parseInt(raw, 10);
+            const origRaw = pagesEl.dataset.original || '';
+            const origPages = origRaw === '' ? null : parseInt(origRaw, 10);
+            if ((raw === '' || !isNaN(newPages)) && newPages !== origPages) {
+                await GreatReads.apiCall(`/books/${bookId}`, {
+                    method: 'PUT',
+                    data: { page_count: newPages }
+                });
+            }
         }
 
         GreatReads.showToast('Library item updated successfully!', 'success');

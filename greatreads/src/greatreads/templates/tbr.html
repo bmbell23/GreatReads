@@ -1215,6 +1215,16 @@ document.addEventListener('DOMContentLoaded', function() {
         selectSort(a.dataset.sort);
     });
     renderSortUI();
+
+    // Deep-link from the library's "Add to TBR" (#14): open the Add New Reading
+    // modal pre-selected for the given book, then strip the params so a refresh
+    // doesn't reopen it.
+    const params = new URLSearchParams(window.location.search);
+    const addReadingId = params.get('addReading');
+    if (addReadingId) {
+        addNewReading({ bookId: addReadingId, media: params.get('media') });
+        history.replaceState(null, '', window.location.pathname);
+    }
 });
 
 async function loadTBRReadings() {
@@ -1376,9 +1386,12 @@ function createProgressSection(reading, book) {
         ? live.progress * 100
         : (reading.date_started ? (reading.current_progress_percent || 0) : 0);
 
-    // Real page x/y for ebooks when available.
-    const totalPages = (hasLive && live.total) ? live.total : (book.page_count || 0);
-    const targetPage = (hasLive && live.page != null) ? live.page : (reading.current_progress_page || 0);
+    // Physical-edition page readout for the card (#11): "what page would I be on
+    // in the physical copy" = % × the book's physical page_count. Deliberately
+    // NOT the reader's live virtual page/total (page-turns) — those stay in the
+    // reader's own bottom bar; the TBR card speaks in physical-copy pages.
+    const totalPages = book.page_count || 0;
+    const targetPage = totalPages ? Math.round(targetProgress / 100 * totalPages) : 0;
 
     const isStarted = reading.date_started && !reading.date_finished_actual;
     const startIcon = reading.date_started ? 'fa-play-circle' : 'fa-calendar-alt';
@@ -1858,8 +1871,10 @@ function showErrorState() {
     document.getElementById('tbr-container').classList.remove('d-none');
 }
 
-async function addNewReading() {
-    console.log('addNewReading called');
+// `preselect` (optional): {bookId, media} — used by the library's "Add to TBR"
+// deep-link (#14) to open this modal pre-filled for a specific book.
+async function addNewReading(preselect) {
+    console.log('addNewReading called', preselect || '');
 
     // Reset form first
     const form = document.getElementById('addReadingForm');
@@ -1874,9 +1889,23 @@ async function addNewReading() {
     // Load books for selection
     await loadBooksForSelection();
 
-    // Clear the search box AFTER loading books
     const bookSearch = document.getElementById('bookSearch');
-    if (bookSearch) {
+    const selectedBookId = document.getElementById('selectedBookId');
+
+    if (preselect && preselect.bookId) {
+        // Pre-fill the book (mirrors what clicking a search result does) and,
+        // when provided, pre-pick the media type.
+        const book = allBooks.find(b => String(b.id) === String(preselect.bookId));
+        if (book && bookSearch && selectedBookId) {
+            bookSearch.value = `${book.title} by ${book.author}`;
+            selectedBookId.value = book.id;
+        }
+        if (preselect.media) {
+            const radio = document.querySelector(`input[name="mediaType"][value="${preselect.media}"]`);
+            if (radio) radio.checked = true;
+        }
+    } else if (bookSearch) {
+        // Clear the search box AFTER loading books
         bookSearch.value = '';
         // Trigger the input event to reset the filter
         bookSearch.dispatchEvent(new Event('input'));
