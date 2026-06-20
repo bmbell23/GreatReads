@@ -4,7 +4,7 @@ from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import extract, and_
+from sqlalchemy import extract, and_, text
 
 from ..database import get_db
 from ..models.reading import Reading
@@ -731,3 +731,81 @@ def _calc_library_word_counts(db: Session) -> dict:
                 added_to_overall = True
 
     return result
+
+
+# ---------- Reading-activity analytics (#30) ----------
+# Sourced from the reading_activity time-series (written by the ereader app on
+# every progress save). Returns empty until reads accrue — there is no backfill.
+
+def _wpm_from(mpw_sum, mpw_n, minutes, words):
+    """Measured WPM (from real ms-per-word samples) when available, else derive
+    words/minute from the day's totals. Returns None if neither is meaningful."""
+    if mpw_n and mpw_sum and mpw_sum > 0:
+        mpw = mpw_sum / mpw_n
+        if mpw > 0:
+            return round(60000.0 / mpw)
+    if minutes and minutes > 0 and words and words > 0:
+        return round(words / minutes)
+    return None
+
+
+@router.get("/activity")
+async def get_reading_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Daily reading time / words / measured WPM per format (#30 phase 2)."""
+    daily_minutes: Dict[str, Dict[str, float]] = {}
+    daily_words: Dict[str, Dict[str, int]] = {}
+    daily_wpm: Dict[str, float] = {}              # ebook measured WPM by date
+    totals: Dict[str, Dict[str, Any]] = {"minutes": {}, "words": {}}
+    try:
+        rows = db.execute(text(
+            "SELECT activity_date, format, SUM(minutes) AS minutes, SUM(words) AS words, "
+            "SUM(wpm_mpw_sum) AS mpw_sum, SUM(wpm_n) AS mpw_n "
+            "FROM reading_activity GROUP BY activity_date, format ORDER BY activity_date"
+        )).fetchall()
+    except Exception:
+        rows = []   # table not created yet (nothing logged)
+    for d, fmt, minutes, words, mpw_sum, mpw_n in rows:
+        minutes = round(float(minutes or 0), 1)
+        words = int(words or 0)
+        daily_minutes.setdefault(fmt, {})[d] = minutes
+        daily_words.setdefault(fmt, {})[d] = words
+        totals["minutes"][fmt] = round(totals["minutes"].get(fmt, 0) + minutes, 1)
+        totals["words"][fmt] = totals["words"].get(fmt, 0) + words
+        if fmt == "Ebook":
+            w = _wpm_from(mpw_sum, mpw_n, minutes, words)
+            if w:
+                daily_wpm[d] = w
+    return {"daily_minutes": daily_minutes, "daily_words": daily_words,
+            "daily_wpm": daily_wpm, "totals": totals}
+
+
+@router.get("/book-time/{book_id}")
+async def get_book_reading_time(book_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Per-book real reading/listening time (#30), for the card popups. Resolves the
+    book's Calibre/ABS external ids and sums reading_activity across formats."""
+    formats: Dict[str, Any] = {}
+    total_minutes, total_words = 0.0, 0
+    try:
+        rows = db.execute(text(
+            "SELECT ra.format, SUM(ra.minutes) AS minutes, SUM(ra.words) AS words, "
+            "SUM(ra.wpm_mpw_sum) AS mpw_sum, SUM(ra.wpm_n) AS mpw_n "
+            "FROM reading_activity ra WHERE ra.book_key IN ("
+            "  SELECT CASE WHEN ei.source='audiobookshelf' THEN 'abs:' || ei.external_id "
+            "              ELSE ei.external_id END "
+            "  FROM external_imports ei WHERE ei.book_id = :bid) "
+            "GROUP BY ra.format"
+        ), {"bid": book_id}).fetchall()
+    except Exception:
+        rows = []
+    for fmt, minutes, words, mpw_sum, mpw_n in rows:
+        minutes = round(float(minutes or 0), 1)
+        words = int(words or 0)
+        entry: Dict[str, Any] = {"minutes": minutes, "words": words}
+        w = _wpm_from(mpw_sum, mpw_n, minutes, words)
+        if w:
+            entry["wpm"] = w
+        formats[fmt] = entry
+        total_minutes += minutes
+        total_words += words
+    return {"total_minutes": round(total_minutes, 1), "total_words": total_words,
+            "formats": formats}

@@ -754,7 +754,44 @@ function grOpenBookActions(book, opts = {}) {
             .catch(() => {});
     }
 
+    // Real reading/listening time for this book (#30). Lazy-fetched and only shown
+    // once there's logged time — books read before activity logging show nothing.
+    if (book.id != null) {
+        apiCall(`/stats/book-time/${book.id}`).then(d => {
+            if (!d || !(d.total_minutes > 0)) return;
+            const det = document.querySelector('#openBookOptions .open-details');
+            if (!det) return;
+            const parts = [];
+            for (const fmt of ['Ebook', 'Audio', 'Physical']) {
+                const f = d.formats && d.formats[fmt];
+                if (f && f.minutes > 0) {
+                    parts.push(`<div class="d-flex justify-content-between gap-3">
+                        <span class="text-muted">Time read${parts.length || hasOther(d, fmt) ? ` (${fmt})` : ''}</span>
+                        <span class="fw-medium text-end">${formatDuration(f.minutes)}${f.wpm ? ` · ${f.wpm} wpm` : ''}</span>
+                    </div>`);
+                }
+            }
+            det.insertAdjacentHTML('beforeend', parts.join(''));
+        }).catch(() => {});
+    }
+
     if (typeof opts.onShow === 'function') opts.onShow(book);
+}
+
+// True if the book has logged time in a format OTHER than `fmt` (so we know to
+// qualify the "Time read" label by format instead of leaving it bare).
+function hasOther(d, fmt) {
+    return ['Ebook', 'Audio', 'Physical'].some(f =>
+        f !== fmt && d.formats && d.formats[f] && d.formats[f].minutes > 0);
+}
+
+// Minutes → "2h 15m" / "45m" / "30s" for small values.
+function formatDuration(min) {
+    if (min == null) return '';
+    if (min < 1) return `${Math.round(min * 60)}s`;
+    const h = Math.floor(min / 60);
+    const m = Math.round(min % 60);
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
 }
 
 // Export functions for global use
