@@ -643,6 +643,11 @@ async function loadLibraryData() {
         initializeFiltersFromURL();
         applyFilters();
 
+        // Deep-link from the cover popup's "Edit Book" action (#27): open the
+        // book's edit modal directly.
+        const editId = parseInt(new URLSearchParams(location.search).get('editBook'));
+        if (editId) viewBookDetails(editId);
+
     } catch (error) {
         console.error('Library data loading failed:', error);
         showErrorState();

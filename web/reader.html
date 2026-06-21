@@ -1626,7 +1626,8 @@
         //      reading sessions.
         let _wakeLock = null;
         async function applyWakeLock() {
-            const want = localStorage.getItem('ereader.settings.keepAwake') === '1';
+            // Always keep the screen awake while a book is open — you're reading.
+            const want = true;
             if (!want) { releaseWakeLock(); return; }
             // 1. Android bridge — most reliable when present.
             if (window.Android && typeof window.Android.keepScreenOn === 'function') {
@@ -1742,6 +1743,8 @@
             const sel = document.getElementById('ambient-track-select');
             if (sel) sel.innerHTML = tracks.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
             let tid = localStorage.getItem(_ambKT) || localStorage.getItem(_ambKL);
+            // Fall back to the first track if the saved one was deleted/renamed away.
+            if (tid && !tracks.some(t => t.id === tid)) tid = null;
             if (!tid && tracks.length) tid = tracks[0].id;
             if (!tid) return;
             if (sel) sel.value = tid;

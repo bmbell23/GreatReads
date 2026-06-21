@@ -590,7 +590,7 @@ function readingExtraInfoHtml(reading) {
         const label = pct > 0 ? `${pct.toFixed(1)}%${page ? ' · p. ' + page : ''}` : 'In progress';
         return `
           <div class="open-extra">
-            <div class="open-extra-label"><i class="fas fa-bookmark me-1"></i>Currently reading</div>
+            <div class="open-extra-label"><i class="fas fa-bookmark me-1"></i>Currently reading <span class="small fw-normal opacity-75">· tap to log progress</span></div>
             <div class="open-progress">
               <div class="open-progress-fill" style="width:${pct}%;background:${color};"></div>
               <div class="open-progress-text">${label}</div>
@@ -670,11 +670,19 @@ function grOpenBookActions(book, opts = {}) {
     if (book.page_count) rows.push(['Pages', Number(book.page_count).toLocaleString()]);
     if (Array.isArray(opts.detailRows)) rows.push(...opts.detailRows.filter(Boolean));
 
-    // Physical card — shows for any physically-owned book. Identical layout to the
-    // static location card; when there's an in-progress PHYSICAL reading it also
-    // gets a progress sub-line and becomes tappable to update progress (#33).
+    // Logging progress / a physical session belongs to the READING, not inventory:
+    // any in-progress reading qualifies — a physical library book you don't own, or
+    // one in progress as ebook/audio you also read physically (#41). The tap entry
+    // is the progress display below; pages convert to %, so shared progress stays
+    // consistent and physical time logs separately.
+    const r = opts.reading;
+    const ipReading = (r && r.is_started && !r.is_finished && r.status !== 'paused') ? r : null;
+    grActivePhysicalReading = ipReading;
+
+    // Physical card — shown when a physical copy is owned (shelf location). Also a
+    // tap-to-log shortcut when in progress (same as tapping the progress below).
+    // (The progress display is the universal entry incl. non-owned library books.)
     let locationCard = '';
-    grActivePhysicalReading = null;
     const phys = (book.inventory || []).find(i => i.owned_physical);
     if (phys) {
         let loc = phys.location || '';
@@ -684,17 +692,11 @@ function grOpenBookActions(book, opts = {}) {
                   (phys.shelf_position != null ? `, pos ${phys.shelf_position}` : '');
         }
         const locLine = loc ? `<div class="small">${loc}</div>` : '';
-        const r = opts.reading;
-        const physIP = r && r.media &&
-            ['physical', 'hardcover', 'paperback'].includes(String(r.media).toLowerCase()) &&
-            r.is_started && !r.is_finished && r.status !== 'paused';
-        let progLine = '';
-        let clickAttrs = '';
-        if (physIP) {
-            grActivePhysicalReading = r;
-            const pct = r.current_progress_percent || 0;
-            const pg = r.current_progress_page || 0;
-            const prog = pct > 0 ? `${pct.toFixed(1)}%${pg ? ' · p. ' + pg : ''}` : 'No progress logged';
+        let progLine = '', clickAttrs = '';
+        if (ipReading) {
+            const pct = ipReading.current_progress_percent || 0;
+            const pg = ipReading.current_progress_page || 0;
+            const prog = pct > 0 ? `${pct.toFixed(1)}%${pg ? ' · p. ' + pg : ''}` : 'Tap to log progress';
             progLine = `<div class="small">${prog}</div>`;
             clickAttrs = ' onclick="GreatReads.updatePhysicalProgress()" style="cursor:pointer"';
         }
@@ -741,7 +743,11 @@ function grOpenBookActions(book, opts = {}) {
             <i class="fas fa-book me-1"></i>Tracked book — no ebook or audiobook file linked.
         </div>`;
 
-    const extraInfo = opts.extraInfoHtml ? `<div class="col-12">${opts.extraInfoHtml}</div>` : '';
+    // The progress display is the tap-to-log entry for any in-progress reading
+    // (update %/page, start a physical session) — independent of inventory. (#41)
+    const extraInfo = opts.extraInfoHtml
+        ? `<div class="col-12"${ipReading ? ' onclick="GreatReads.updatePhysicalProgress()" style="cursor:pointer"' : ''}>${opts.extraInfoHtml}</div>`
+        : '';
 
     // Highlights link — shown on any page when the book is a linked ebook. Hidden
     // until the async count below confirms there are some. (Library/TBR/Journal all
@@ -754,7 +760,16 @@ function grOpenBookActions(book, opts = {}) {
                     <span id="hlCount" class="badge bg-secondary ms-auto">0</span>
                 </a>` : '';
 
-    const secondaryInner = `${hlLink}${opts.actionsHtml || ''}`;
+    // Edit Book — jump to the book's edit view (page count, etc.). Shown on every
+    // page via the deep-link library?editBook=<id> (#27). Opt out with
+    // opts.editBook === false.
+    const editBookLink = (opts.editBook !== false && book.id != null) ? `
+                <a class="btn btn-sm btn-outline-secondary"
+                   href="${BASE_PATH}/library?editBook=${book.id}">
+                    <i class="fas fa-pen-to-square me-2 text-primary"></i>Edit Book
+                </a>` : '';
+
+    const secondaryInner = `${hlLink}${opts.actionsHtml || ''}${editBookLink}`;
     const secondary = secondaryInner.trim() ? `
         <div class="col-12">
             <div class="open-secondary">${secondaryInner}</div>
@@ -888,6 +903,7 @@ function grUpdatePhysicalProgress(addMinutes) {
 // "Done" hands the elapsed minutes back to the popup to add to today's total. (#40)
 let _sess = null;          // { readingId, accSec, startMs, running, tid }
 let _grWake = null;
+let _grForceWake = false;   // true during an active reading session → always awake
 
 // Global "keep screen awake" — honors the app-wide setting (ereader.settings.keepAwake)
 // EVERYWHERE in the app (not just while actively reading; not released on pause).
@@ -897,7 +913,7 @@ function _grKeepAwakeWanted() {
     try { return localStorage.getItem('ereader.settings.keepAwake') === '1'; } catch (_) { return false; }
 }
 async function grApplyGlobalWakeLock() {
-    if (_grKeepAwakeWanted()) {
+    if (_grForceWake || _grKeepAwakeWanted()) {
         if (window.Android && typeof window.Android.keepScreenOn === 'function') {
             try { window.Android.keepScreenOn(true); return; } catch (_) {}
         }
@@ -928,10 +944,19 @@ function _sessTick() { const t = document.getElementById('sessTimer'); if (t) t.
 function grStartReadingSession() {
     const reading = grActivePhysicalReading;
     if (!reading) return;
+    // Physical reading is page-based — require a page count first (#41). Route to
+    // Edit Book to set it if missing.
+    if (!(reading.book && reading.book.page_count)) {
+        if (confirm("This book has no page count, which physical reading needs. Set it now?")) {
+            window.location.href = `${BASE_PATH}/library?editBook=${reading.book ? reading.book.id : ''}`;
+        }
+        return;
+    }
     const pm = bootstrap.Modal.getInstance(document.getElementById('physProgressModal'));
     if (pm) pm.hide();
 
     _sess = { readingId: reading.id, accSec: 0, startMs: Date.now(), running: true, tid: null };
+    _grForceWake = true;   // never let the screen time out during a reading session
     document.getElementById('sessBookTitle').textContent = (reading.book && reading.book.title) || '';
     document.getElementById('sessState').textContent = 'Reading…';
     document.getElementById('sessResumeBtn').classList.add('d-none');
@@ -983,6 +1008,7 @@ function grSessionDone() {
     const mins = Math.round(_sessElapsedSec() / 60);
     if (_sess.tid) clearInterval(_sess.tid);
     document.removeEventListener('visibilitychange', _sessVis);
+    _grForceWake = false;             // session over → revert to the global setting
     grApplyGlobalWakeLock();
     _sess = null;
     grSessAmbientStop();
@@ -1054,6 +1080,7 @@ async function grSessAmbientStart(reading) {
     }
     if (sel) sel.innerHTML = _appAmbTracks.map(t => `<option value="${t.id}">${t.name}</option>`).join('');
     let tid = localStorage.getItem('gr_ambient_track_' + _appAmbKey) || localStorage.getItem('gr_ambient_last_track');
+    if (tid && !_appAmbTracks.some(t => t.id === tid)) tid = null;   // saved track was deleted
     if (!tid && _appAmbTracks.length) tid = _appAmbTracks[0].id;
     grSessAmbientSetEditable(false);   // running → locked
     _appAmbIcon();

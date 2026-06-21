@@ -1362,39 +1362,123 @@ def list_books(limit: int | None = None, offset: int = 0, query: str | None = No
     }
 
 # ---- Ambient reading music (#32) -------------------------------------------
-# Curated long-form ambient tracks served by clean id from the read-only /music
-# mount. FileResponse handles HTTP Range, so the <audio> element can seek/resume.
-AMBIENT_TRACKS = {
-    'highfantasy': {
-        'name': 'High Fantasy Ambiance',
-        'path': '/music/Youtube/Fantasy Ambiance/Playlist for reading or writing High Fantasy ｜ ambient fantasy music.mp3',
-    },
-    'wow': {
-        'name': 'World of Warcraft',
-        'path': '/music/World of Warcraft/Relax Study Sleep Focus/World of Warcraft ｜ Teldrassil Music & Ambience, Peaceful and Tranquil Fantasy Forests.mp3',
-    },
-    'ffxiv': {
-        'name': 'FFXIV - Shadowbringers',
-        'path': '/music/FFXIV/Final Fantasy XIV - Shadowbringers Music Best of Mix.mp3',
-    },
-    'malazan': {
-        'name': 'Malazan Book of the Fallen',
-        'path': '/music/Malazan/Malazan Book of the Fallen ｜ Gardens of the Moon (Original Album).mp3',
-    },
+# Tracks are user-managed (Settings → Music Manager) in an editable JSON store;
+# seeded once with the original curated set. Audio files live under the read-only
+# media mount; FileResponse handles HTTP Range so <audio> can seek/resume.
+MEDIA_ROOT = '/media'        # /mnt/boston/media mounted read-only
+AMBIENT_TRACKS_FILE = os.path.join(DATA_DIR, 'ambient_tracks.json')
+_ambient_lock = threading.Lock()
+_AMBIENT_AUDIO_EXTS = ('.mp3', '.m4a', '.ogg', '.opus', '.flac', '.wav', '.aac')
+_AMBIENT_SEED = {
+    'highfantasy': {'name': 'High Fantasy Ambiance', 'path': '/media/music/Youtube/Fantasy Ambiance/Playlist for reading or writing High Fantasy ｜ ambient fantasy music.mp3'},
+    'wow': {'name': 'World of Warcraft', 'path': '/media/music/World of Warcraft/Relax Study Sleep Focus/World of Warcraft ｜ Teldrassil Music & Ambience, Peaceful and Tranquil Fantasy Forests.mp3'},
+    'ffxiv': {'name': 'FFXIV - Shadowbringers', 'path': '/media/music/FFXIV/Final Fantasy XIV - Shadowbringers Music Best of Mix.mp3'},
+    'malazan': {'name': 'Malazan Book of the Fallen', 'path': '/media/music/Malazan/Malazan Book of the Fallen ｜ Gardens of the Moon (Original Album).mp3'},
 }
+
+def _load_ambient():
+    try:
+        with open(AMBIENT_TRACKS_FILE, 'r', encoding='utf-8') as f:
+            return json.load(f)
+    except Exception:
+        try:
+            with open(AMBIENT_TRACKS_FILE, 'w', encoding='utf-8') as f:
+                json.dump(_AMBIENT_SEED, f, ensure_ascii=False, indent=2)
+        except Exception:
+            pass
+        return dict(_AMBIENT_SEED)
+
+def _save_ambient(d):
+    with open(AMBIENT_TRACKS_FILE, 'w', encoding='utf-8') as f:
+        json.dump(d, f, ensure_ascii=False, indent=2)
+
+def _safe_media_path(p):
+    """Resolve p (absolute, or relative to MEDIA_ROOT) and confirm it stays inside
+    MEDIA_ROOT — guards against path traversal. Returns the realpath or None."""
+    if not p:
+        return None
+    cand = p if os.path.isabs(p) else os.path.join(MEDIA_ROOT, p)
+    rp = os.path.realpath(cand)
+    root = os.path.realpath(MEDIA_ROOT)
+    return rp if (rp == root or rp.startswith(root + os.sep)) else None
 
 @router.get('/api/ambient/tracks')
 def ambient_tracks():
-    """List available ambient tracks (id + display name)."""
-    return {'tracks': [{'id': k, 'name': v['name']} for k, v in AMBIENT_TRACKS.items()]}
+    """List ambient tracks (id + display name)."""
+    d = _load_ambient()
+    return {'tracks': [{'id': k, 'name': v.get('name', k)} for k, v in d.items()]}
+
+@router.post('/api/ambient/tracks')
+async def ambient_add(request: Request):
+    """Add a track: {name, path} where path is under the media root."""
+    body = await request.json()
+    name = (body.get('name') or '').strip()
+    safe = _safe_media_path((body.get('path') or '').strip())
+    if not name or not safe or not os.path.isfile(safe):
+        raise HTTPException(status_code=400, detail='Need a name and a valid audio file under the media root')
+    with _ambient_lock:
+        d = _load_ambient()
+        tid = uuid.uuid4().hex[:10]
+        d[tid] = {'name': name, 'path': safe}
+        _save_ambient(d)
+    return {'id': tid, 'name': name}
+
+@router.put('/api/ambient/tracks/{track_id}')
+async def ambient_rename(track_id: str, request: Request):
+    """Rename a track."""
+    body = await request.json()
+    name = (body.get('name') or '').strip()
+    if not name:
+        raise HTTPException(status_code=400, detail='Name required')
+    with _ambient_lock:
+        d = _load_ambient()
+        if track_id not in d:
+            raise HTTPException(status_code=404, detail='Track not found')
+        d[track_id]['name'] = name
+        _save_ambient(d)
+    return {'id': track_id, 'name': name}
+
+@router.delete('/api/ambient/tracks/{track_id}')
+def ambient_delete(track_id: str):
+    """Delete a track."""
+    with _ambient_lock:
+        d = _load_ambient()
+        if track_id not in d:
+            raise HTTPException(status_code=404, detail='Track not found')
+        del d[track_id]
+        _save_ambient(d)
+    return {'ok': True}
+
+@router.get('/api/ambient/browse')
+def ambient_browse(path: str = ''):
+    """List subfolders + audio files under the media root for the file picker."""
+    safe = _safe_media_path(path) if path else os.path.realpath(MEDIA_ROOT)
+    if not safe or not os.path.isdir(safe):
+        raise HTTPException(status_code=404, detail='Not a directory')
+    root = os.path.realpath(MEDIA_ROOT)
+    rel = '' if safe == root else os.path.relpath(safe, root)
+    dirs, files = [], []
+    try:
+        for entry in sorted(os.listdir(safe), key=lambda s: s.lower()):
+            if entry.startswith('.'):
+                continue
+            full = os.path.join(safe, entry)
+            if os.path.isdir(full):
+                dirs.append(entry)
+            elif entry.lower().endswith(_AMBIENT_AUDIO_EXTS):
+                files.append(entry)
+    except Exception:
+        raise HTTPException(status_code=500, detail='Cannot list directory')
+    return {'path': rel, 'parent': ('' if not rel else os.path.dirname(rel)), 'dirs': dirs, 'files': files}
 
 @router.get('/api/ambient/{track_id}')
 def ambient_stream(track_id: str):
     """Stream a track (Range-capable via FileResponse) so audio can seek/resume."""
-    t = AMBIENT_TRACKS.get(track_id)
-    if not t or not os.path.exists(t['path']):
+    t = _load_ambient().get(track_id)
+    safe = _safe_media_path(t.get('path', '')) if t else None
+    if not safe or not os.path.isfile(safe):
         raise HTTPException(status_code=404, detail='Track not found')
-    return FileResponse(t['path'], media_type='audio/mpeg')
+    return FileResponse(safe, media_type='audio/mpeg')
 
 @router.get('/api/ebooks/{book_id}')
 def get_book_info(book_id):

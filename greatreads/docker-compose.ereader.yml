@@ -23,8 +23,8 @@ services:
       # cover fallback now and Calibre/ABS sync later (Story 2). Never written.
       - /home/brandon/projects/docker/calibre/config/library:/calibre:ro
       - /home/brandon/projects/docker/audiobookshelf/data:/audiobookshelf:ro
-      # Ambient reading music (#32) — read-only; served by /api/ambient/{id}.
-      - /mnt/boston/media/music:/music:ro
+      # Ambient reading music (#32) — read-only; browsed/served by /api/ambient/*.
+      - /mnt/boston/media:/media:ro
     environment:
       - HOST=0.0.0.0
       - PORT=8006

@@ -268,6 +268,19 @@
             </div>
         </div>
 
+        <!-- Music Manager Card (#32) -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-music me-2"></i>Ambient Music</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">Manage the ambient tracks available while reading ebooks and physical books.</p>
+                <button type="button" class="btn btn-outline-primary" onclick="openMusicManager()">
+                    <i class="fas fa-sliders-h me-2"></i>Music Manager
+                </button>
+            </div>
+        </div>
+
         <!-- Change Password Card -->
         <div class="card mb-4">
             <div class="card-header">
@@ -479,10 +492,139 @@ chapter remain = (chapterEnd − pageIndex) × avg</pre>
         </div>
     </div>
 </div>
+
+<!-- Music Manager modal (#32) -->
+<div class="modal fade" id="musicManagerModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><i class="fas fa-music me-2"></i>Music Manager</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div id="mmList" class="list-group"></div>
+                <button type="button" class="btn btn-success mt-3" onclick="mmStartAdd()"><i class="fas fa-plus me-2"></i>Add track</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- File picker modal (browse the media library) -->
+<div class="modal fade" id="mmBrowseModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Pick an audio file</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="small text-muted mb-2"><i class="fas fa-folder-open me-1"></i><span id="mmBrowsePath">/</span></div>
+                <div id="mmBrowseList" class="list-group" style="max-height:55vh; overflow:auto;"></div>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
+// ---- Music Manager (#32) ---------------------------------------------------
+function _mmEsc(s) { return (s || '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function openMusicManager() {
+    // One-time: when the file picker closes (pick or cancel), reopen the manager
+    // so the two never stack/show-through each other.
+    if (!openMusicManager._wired) {
+        openMusicManager._wired = true;
+        document.getElementById('mmBrowseModal').addEventListener('hidden.bs.modal', async () => {
+            bootstrap.Modal.getOrCreateInstance(document.getElementById('musicManagerModal')).show();
+            await mmRenderList();
+        });
+    }
+    await mmRenderList();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('musicManagerModal')).show();
+}
+
+async function mmRenderList() {
+    const el = document.getElementById('mmList');
+    let tracks = [];
+    try { tracks = (await GreatReads.apiCall('/ambient/tracks')).tracks || []; } catch (_) {}
+    if (!tracks.length) { el.innerHTML = '<div class="text-muted small py-2">No tracks yet — add one below.</div>'; return; }
+    el.innerHTML = tracks.map(t => `
+        <div class="list-group-item d-flex align-items-center justify-content-between">
+            <span class="text-truncate me-2">${_mmEsc(t.name)}</span>
+            <span class="flex-shrink-0">
+                <button class="btn btn-sm btn-outline-secondary me-1" onclick="mmRename('${t.id}', this)" data-name="${_mmEsc(t.name)}"><i class="fas fa-pen"></i></button>
+                <button class="btn btn-sm btn-outline-danger" onclick="mmDelete('${t.id}', this)" data-name="${_mmEsc(t.name)}"><i class="fas fa-trash"></i></button>
+            </span>
+        </div>`).join('');
+}
+
+async function mmRename(id, btn) {
+    const cur = btn.getAttribute('data-name') || '';
+    const name = prompt('Rename track:', cur);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+        await GreatReads.apiCall('/ambient/tracks/' + id, { method: 'PUT', data: { name: trimmed } });
+        GreatReads.showToast('Renamed', 'success');
+        await mmRenderList();
+    } catch (_) {}
+}
+
+async function mmDelete(id, btn) {
+    const cur = btn.getAttribute('data-name') || 'this track';
+    if (!confirm('Delete "' + cur + '"? Books using it will fall back to another track.')) return;
+    try {
+        await GreatReads.apiCall('/ambient/tracks/' + id, { method: 'DELETE' });
+        GreatReads.showToast('Deleted', 'success');
+        await mmRenderList();
+    } catch (_) {}
+}
+
+function mmStartAdd() {
+    const mm = bootstrap.Modal.getInstance(document.getElementById('musicManagerModal'));
+    if (mm) mm.hide();   // reopened by the picker's hidden handler
+    mmBrowse('');
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('mmBrowseModal')).show();
+}
+
+async function mmBrowse(path) {
+    const listEl = document.getElementById('mmBrowseList');
+    let d;
+    try { d = await GreatReads.apiCall('/ambient/browse?path=' + encodeURIComponent(path || '')); }
+    catch (_) { listEl.innerHTML = '<div class="text-danger small p-2">Could not open that folder.</div>'; return; }
+    document.getElementById('mmBrowsePath').textContent = '/' + (d.path || '');
+    let html = '';
+    if (d.path) {
+        html += `<button type="button" class="list-group-item list-group-item-action" onclick="mmBrowse('${_mmEsc(d.parent)}')"><i class="fas fa-level-up-alt me-2 text-muted"></i>..</button>`;
+    }
+    html += (d.dirs || []).map(name => {
+        const child = (d.path ? d.path + '/' : '') + name;
+        return `<button type="button" class="list-group-item list-group-item-action" onclick="mmBrowse('${_mmEsc(child)}')"><i class="fas fa-folder me-2 text-warning"></i>${_mmEsc(name)}</button>`;
+    }).join('');
+    html += (d.files || []).map(name => {
+        const full = (d.path ? d.path + '/' : '') + name;
+        return `<button type="button" class="list-group-item list-group-item-action" onclick="mmPick('${_mmEsc(full)}','${_mmEsc(name)}')"><i class="fas fa-music me-2 text-primary"></i>${_mmEsc(name)}</button>`;
+    }).join('');
+    listEl.innerHTML = html || '<div class="text-muted small p-2">Empty folder.</div>';
+}
+
+async function mmPick(relPath, filename) {
+    const def = filename.replace(/\.[^.]+$/, '');
+    const name = prompt('Name this track:', def);
+    if (name === null) return;
+    const trimmed = name.trim();
+    if (!trimmed) return;
+    try {
+        await GreatReads.apiCall('/ambient/tracks', { method: 'POST', data: { name: trimmed, path: relPath } });
+        GreatReads.showToast('Track added', 'success');
+        const bm = bootstrap.Modal.getInstance(document.getElementById('mmBrowseModal'));
+        if (bm) bm.hide();   // hidden handler reopens the manager + refreshes the list
+    } catch (_) {}
+}
+
 // Load current settings on page load
 document.addEventListener('DOMContentLoaded', function() {
     loadWpdMode();

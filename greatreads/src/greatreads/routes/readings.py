@@ -343,6 +343,39 @@ async def update_reading_progress(
 
     db.commit()
 
+    # Mirror this % into the cross-format progress store (ereader_progress) so
+    # opening the ebook / audiobook resumes here — e.g. physical reading drives the
+    # ebook's resume point. Keyed by the unified key (calibre id, else abs:<id>);
+    # percent-based, no chapter anchor. Best-effort; never blocks the save. (#42)
+    try:
+        from sqlalchemy import text as _sql
+        import time as _t, json as _j
+        ext = db.execute(_sql(
+            "SELECT source, external_id FROM external_imports WHERE book_id=:b"),
+            {"b": db_reading.book_id}).fetchall()
+        cal = next((e[1] for e in ext if e[0] == 'calibre'), None)
+        abs_id = next((e[1] for e in ext if e[0] == 'audiobookshelf'), None)
+        key = str(cal) if cal else (('abs:' + str(abs_id)) if abs_id else None)
+        if key:
+            media_l = (db_reading.media or '').lower()
+            mt = 'audiobook' if media_l in ('audio', 'audiobook') else (
+                'physical' if media_l in ('physical', 'hardcover', 'paperback') else 'ebook')
+            frac = max(0.0, min(1.0, current_percent / 100.0))
+            now_ms = int(_t.time() * 1000)
+            rec = _j.dumps({'progress': frac, 'updated': now_ms, 'mediaType': mt, 'source': 'greatreads'})
+            db.execute(_sql(
+                "CREATE TABLE IF NOT EXISTS ereader_progress ("
+                " book_key TEXT PRIMARY KEY, data TEXT NOT NULL, progress REAL, updated INTEGER)"))
+            db.execute(_sql(
+                "INSERT INTO ereader_progress(book_key,data,progress,updated) "
+                "VALUES(:k,:d,:p,:u) ON CONFLICT(book_key) DO UPDATE SET "
+                "data=excluded.data, progress=excluded.progress, updated=excluded.updated"),
+                {"k": key, "d": rec, "p": frac, "u": now_ms})
+            db.commit()
+    except Exception as _e:
+        db.rollback()
+        print(f"cross-format progress mirror failed: {_e}")
+
     # Recalculate chains to update estimated end date
     calculator = ChainCalculator(db)
     calculator.recalculate_all_chains()
