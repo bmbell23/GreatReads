@@ -14,6 +14,29 @@
   changes, edit the issue. The issues — not memory, not docs — are what the next
   session should trust.
 
+## Every piece of work has a ticket, and moves through the board in order
+- **No work without a GitHub issue.** Every change — feature, fix, chore,
+  refactor — needs a ticket first. If you're about to touch code and there's no
+  issue for it, create one (in **Scoping**) before starting.
+- The board (Project #3 "GreatReads",
+  https://github.com/users/bmbell23/projects/3) has one Status flow, and tickets
+  move through it **in order**:
+  1. **Scoping** — default for new tickets. The ask exists but isn't yet
+     detailed enough to build confidently.
+  2. **Ready to Implement** — promote here **only when the ticket is thoroughly
+     scoped**: clear tasks/acceptance criteria, key files/approach identified,
+     open decisions resolved — i.e. someone could pick it up and build it with no
+     further questions. If you're not confident you could implement it as
+     written, it's not ready — ask the user the questions needed to get it there
+     first.
+  3. **In progress** — move here when you start implementing.
+  4. **In Review** — move here **as soon as you make code changes**. Work stays
+     in Review until **the user explicitly blesses it for closing**.
+  5. **Done** — only the **user** closes/marks Done. Don't self-close a ticket;
+     wait for the bless.
+- Don't skip columns (e.g. don't jump Scoping → In progress). Keep the ticket's
+  Status current as the work moves.
+
 ## Rebuild the container yourself when needed
 - When a change to the GreatReads side needs the container rebuilt, **do it** —
   don't ask the user to. The command is:
