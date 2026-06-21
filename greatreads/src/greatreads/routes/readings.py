@@ -252,6 +252,7 @@ async def update_reading(reading_id: int, reading: ReadingUpdate, db: Session = 
 async def update_reading_progress(
     reading_id: int,
     current_percent: float,
+    minutes_read: float = 0,
     db: Session = Depends(get_db)
 ):
     """Realign the current progress percentage for an in-progress reading.
@@ -304,6 +305,42 @@ async def update_reading_progress(
     db_reading.current_percent_manual_override = True
     db_reading.date_progress_set = datetime.now()
 
+    # Physical books log no reading time, so derive their daily "words read" from
+    # the page/percent delta and record it to reading_activity so they appear on
+    # the stats words/day chart + goal calendar (#39). A day's physical words =
+    # (today's end position − previous logged days' total) × word_count: we
+    # overwrite today's row so multiple updates/day collapse to the latest, and
+    # words land only on days the user actually logs. (key per-reading to keep
+    # rereads / the ebook edition's own activity separate.)
+    media_lower = (db_reading.media or "").lower()
+    if media_lower in ("physical", "hardcover", "paperback") and db_reading.book and db_reading.book.word_count:
+        from sqlalchemy import text as _sql
+        today_str = date.today().isoformat()
+        book_key = f"phys:{db_reading.id}"
+        word_count = db_reading.book.word_count
+        target_total = (current_percent / 100.0) * word_count
+        db.execute(_sql(
+            "CREATE TABLE IF NOT EXISTS reading_activity ("
+            " activity_date TEXT NOT NULL, book_key TEXT NOT NULL, format TEXT NOT NULL,"
+            " minutes REAL NOT NULL DEFAULT 0, words INTEGER NOT NULL DEFAULT 0,"
+            " wpm_mpw_sum REAL NOT NULL DEFAULT 0, wpm_n INTEGER NOT NULL DEFAULT 0,"
+            " PRIMARY KEY(activity_date, book_key, format))"))
+        logged_before = db.execute(_sql(
+            "SELECT COALESCE(SUM(words),0) FROM reading_activity "
+            "WHERE book_key=:bk AND format='Physical' AND activity_date < :d"),
+            {"bk": book_key, "d": today_str}).scalar() or 0
+        today_words = max(0, round(target_total - logged_before))
+        # Both words and minutes OVERWRITE today's row: words = position-based delta
+        # from prior days; minutes_read is the *today total* the UI carries (loaded
+        # via /today-minutes, edited up, re-sent). Naturally resets at midnight (new
+        # date = new row). (#39/#40)
+        db.execute(_sql(
+            "INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) "
+            "VALUES(:d,:bk,'Physical',:mins,:w,0,0) "
+            "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET "
+            "words=excluded.words, minutes=excluded.minutes"),
+            {"d": today_str, "bk": book_key, "w": today_words, "mins": max(0.0, float(minutes_read or 0))})
+
     db.commit()
 
     # Recalculate chains to update estimated end date
@@ -316,6 +353,22 @@ async def update_reading_progress(
     ).filter(Reading.id == reading_id).first()
 
     return db_reading.to_dict()
+
+
+@router.get("/{reading_id}/today-minutes")
+async def get_reading_today_minutes(reading_id: int, db: Session = Depends(get_db)):
+    """Today's logged physical reading minutes for this reading (#40). The popup
+    loads this so 'Time read today' shows the running total it can edit up."""
+    from sqlalchemy import text as _sql
+    from datetime import date as _date
+    try:
+        m = db.execute(_sql(
+            "SELECT COALESCE(SUM(minutes),0) FROM reading_activity "
+            "WHERE book_key=:bk AND format='Physical' AND activity_date=:d"),
+            {"bk": f"phys:{reading_id}", "d": _date.today().isoformat()}).scalar() or 0
+    except Exception:
+        m = 0
+    return {"minutes": round(float(m))}
 
 
 @router.delete("/{reading_id}")

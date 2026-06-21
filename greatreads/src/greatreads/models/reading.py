@@ -155,7 +155,26 @@ class Reading(Base):
         # kept below ONLY as a fallback for untracked books with no recorded
         # position yet (e.g. a physical book you haven't logged progress for).
         if self.current_percent is not None:
-            return min(100.0, max(0.0, self.current_percent))
+            base = min(100.0, max(0.0, self.current_percent))
+            # Physical books aren't tracked live (no Ereader writes a position), so
+            # keep the estimate moving: project forward from the manually-anchored
+            # point using the configured physical WPD (honors wpd_mode). Ebook/audio
+            # keep their directly-tracked value as-is. (#33)
+            media_lower = self.media.lower()
+            if (media_lower in ("physical", "hardcover", "paperback")
+                    and not self.is_paused and self.date_progress_set
+                    and self.book and self.book.word_count and base < 100.0):
+                from ..services.settings_service import get_wpd_for_media
+                from sqlalchemy.orm import object_session
+
+                db = object_session(self)
+                if db:
+                    days_since = (date.today() - self.date_progress_set.date()).days
+                    if days_since > 0:
+                        wpd = get_wpd_for_media(db, self.media)
+                        added = (days_since * wpd) / self.book.word_count * 100
+                        return min(100.0, max(0.0, base + added))
+            return base
 
         # ----- Legacy fallback: time/WPD estimate (no recorded position) -----
         if self.is_paused:

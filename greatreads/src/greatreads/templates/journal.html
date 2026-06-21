@@ -833,6 +833,7 @@ function openReadingActions(readingId) {
         </button>`;
 
     GreatReads.openBookActions(reading.book, {
+        reading: reading,
         extraInfoHtml: GreatReads.readingExtraInfoHtml(reading) + journalRatingsHtml(reading),
         actionsHtml,
     });

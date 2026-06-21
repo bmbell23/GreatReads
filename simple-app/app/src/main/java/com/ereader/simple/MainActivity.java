@@ -341,6 +341,18 @@ public class MainActivity extends Activity {
                 }
             });
         }
+        // Screen-as-light "reading lamp" (#40): set the activity window brightness
+        // (0.0–1.0). Pass -1 (BRIGHTNESS_OVERRIDE_NONE) to restore the system
+        // default. Window-level brightness needs no WRITE_SETTINGS permission and
+        // only applies while this app is foreground — exactly like a lamp app.
+        @JavascriptInterface
+        public void setBrightness(final float level) {
+            runOnUiThread(() -> {
+                WindowManager.LayoutParams lp = getWindow().getAttributes();
+                lp.screenBrightness = level;
+                getWindow().setAttributes(lp);
+            });
+        }
         // ---- Background audiobook playback + media controls ----
         // The player (player.js) calls these to drive the foreground
         // PlaybackService that keeps audio alive when the screen locks and

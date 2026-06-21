@@ -753,6 +753,7 @@ function openBookActions(bookId) {
                 </button>`;
 
     GreatReads.openBookActions(book, {
+        reading: relevant,
         extraInfoHtml: GreatReads.readingExtraInfoHtml(relevant),
         actionsHtml,
     });

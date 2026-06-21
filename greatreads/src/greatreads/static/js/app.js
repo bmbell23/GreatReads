@@ -633,6 +633,10 @@ function grOpenAudio(absId, titleEnc, authorEnc, calibreId) {
     window.location.href = url;
 }
 
+// The in-progress physical reading backing the currently-open cover popup, so the
+// tappable Physical card's onclick can open the progress editor for it (#33).
+let grActivePhysicalReading = null;
+
 // Build & show the unified cover-tap popup. Used by Library, TBR, and Journal.
 //   book : enriched book dict (calibre_id, abs_id, inventory, series, counts…)
 //   opts : {
@@ -666,9 +670,12 @@ function grOpenBookActions(book, opts = {}) {
     if (book.page_count) rows.push(['Pages', Number(book.page_count).toLocaleString()]);
     if (Array.isArray(opts.detailRows)) rows.push(...opts.detailRows.filter(Boolean));
 
-    // Physical shelf location — a non-clickable format-styled card at the top.
+    // Physical card — shows for any physically-owned book. Identical layout to the
+    // static location card; when there's an in-progress PHYSICAL reading it also
+    // gets a progress sub-line and becomes tappable to update progress (#33).
     let locationCard = '';
-    const phys = (book.inventory || []).find(i => i.owned_physical && (i.shelf_bookshelf || i.location));
+    grActivePhysicalReading = null;
+    const phys = (book.inventory || []).find(i => i.owned_physical);
     if (phys) {
         let loc = phys.location || '';
         if (phys.shelf_bookshelf) {
@@ -676,13 +683,29 @@ function grOpenBookActions(book, opts = {}) {
                   (phys.shelf_shelf != null ? `-${phys.shelf_shelf}` : '') +
                   (phys.shelf_position != null ? `, pos ${phys.shelf_position}` : '');
         }
-        if (loc) locationCard = `
+        const locLine = loc ? `<div class="small">${loc}</div>` : '';
+        const r = opts.reading;
+        const physIP = r && r.media &&
+            ['physical', 'hardcover', 'paperback'].includes(String(r.media).toLowerCase()) &&
+            r.is_started && !r.is_finished && r.status !== 'paused';
+        let progLine = '';
+        let clickAttrs = '';
+        if (physIP) {
+            grActivePhysicalReading = r;
+            const pct = r.current_progress_percent || 0;
+            const pg = r.current_progress_page || 0;
+            const prog = pct > 0 ? `${pct.toFixed(1)}%${pg ? ' · p. ' + pg : ''}` : 'No progress logged';
+            progLine = `<div class="small">${prog}</div>`;
+            clickAttrs = ' onclick="GreatReads.updatePhysicalProgress()" style="cursor:pointer"';
+        }
+        locationCard = `
             <div class="col-12">
-                <div class="open-type-btn open-type-physical open-type-static">
+                <div class="open-type-btn open-type-physical open-type-static"${clickAttrs}>
                     <i class="fas fa-book fa-lg me-2"></i>
                     <div class="text-start">
                         <div class="fw-bold">Physical</div>
-                        <div class="small">${loc}</div>
+                        ${locLine}
+                        ${progLine}
                     </div>
                 </div>
             </div>`;
@@ -778,6 +801,280 @@ function grOpenBookActions(book, opts = {}) {
     if (typeof opts.onShow === 'function') opts.onShow(book);
 }
 
+// Tap the Physical card (in-progress physical book) → lightweight progress popup.
+// Reuses PUT /readings/{id}/progress, which sets the manual override + recalcs
+// days_estimate/chains; physical progress then keeps advancing via WPD (#33).
+function grUpdatePhysicalProgress(addMinutes) {
+    const reading = grActivePhysicalReading;
+    if (!reading) return;
+
+    const coverModal = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+    if (coverModal) coverModal.hide();
+
+    const modalEl = document.getElementById('physProgressModal');
+    if (!modalEl) return;
+
+    const totalPages = (reading.book && reading.book.page_count) || 0;
+    const pageWrap = document.getElementById('upPageWrap');
+    const pctWrap = document.getElementById('upPercentWrap');
+    const pageEl = document.getElementById('upPage');
+    const pctEl = document.getElementById('upPercent');
+
+    document.getElementById('upReadingId').value = reading.id;
+    document.getElementById('upBookTitle').textContent = (reading.book && reading.book.title) || '';
+
+    // "Time read today" = today's running total (persists across opens, resets at
+    // midnight = a new day's row). Load the saved total, then add any minutes
+    // handed in from a just-finished reading session. The +/- stepper edits the
+    // total; Save overwrites today's logged minutes with it. (#39/#40)
+    const minEl = document.getElementById('upMinutes');
+    const extra = Math.max(0, parseInt(addMinutes) || 0);
+    minEl.value = extra;
+    apiCall(`/readings/${reading.id}/today-minutes`)
+        .then(d => { minEl.value = ((d && typeof d.minutes === 'number') ? d.minutes : 0) + extra; })
+        .catch(() => {});
+    const stepMin = (delta) => { minEl.value = Math.max(0, (parseInt(minEl.value) || 0) + delta); };
+    document.getElementById('upMinutesMinus').onclick = () => stepMin(-5);
+    document.getElementById('upMinutesPlus').onclick = () => stepMin(5);
+
+    // Physical progress is entered by PAGE (percent is derived and shown on the
+    // card/progress, not prompted here). Percent input is only a fallback for a
+    // book with no page count, since the API stores a percent. (#33)
+    if (totalPages > 0) {
+        pageWrap.style.display = '';
+        pctWrap.style.display = 'none';
+        pageEl.value = reading.current_progress_page || '';
+        pageEl.max = totalPages;
+        document.getElementById('upTotalPages').textContent = `of ${totalPages}`;
+    } else {
+        pageWrap.style.display = 'none';
+        pctWrap.style.display = '';
+        const curPct = reading.current_progress_percent || 0;
+        pctEl.value = curPct ? curPct.toFixed(1) : '';
+    }
+
+    document.getElementById('upSaveBtn').onclick = async () => {
+        let pct;
+        if (totalPages > 0) {
+            const p = parseInt(pageEl.value);
+            if (isNaN(p)) { showToast('Enter a page number', 'warning'); return; }
+            pct = (p / totalPages) * 100;
+        } else {
+            pct = parseFloat(pctEl.value);
+            if (isNaN(pct)) { showToast('Enter a percent', 'warning'); return; }
+        }
+        pct = Math.max(0, Math.min(100, pct));
+        const minutes = Math.max(0, parseInt(minEl.value) || 0);
+        try {
+            await apiCall(`/readings/${reading.id}/progress`, {
+                method: 'PUT',
+                params: { current_percent: pct, minutes_read: minutes }
+            });
+            const inst = bootstrap.Modal.getInstance(modalEl);
+            if (inst) inst.hide();
+            showToast('Progress updated', 'success');
+            // Re-fetch so the new % / page / WPD-derived estimates show everywhere.
+            if (typeof refreshReadings === 'function') refreshReadings();
+            else location.reload();
+        } catch (e) { /* handled by apiCall */ }
+    };
+
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+}
+
+// ---- Reading session (Start Reading → live timer) --------------------------
+// Launched from the physical progress popup. Full-screen timer, keeps the screen
+// awake, auto-pauses on screen lock / background, prompts to resume on return.
+// "Done" hands the elapsed minutes back to the popup to add to today's total. (#40)
+let _sess = null;          // { readingId, accSec, startMs, running, tid }
+let _grWake = null;
+
+async function grApplyReadingWakeLock(on) {
+    if (on) {
+        if (window.Android && typeof window.Android.keepScreenOn === 'function') {
+            try { window.Android.keepScreenOn(true); return; } catch (_) {}
+        }
+        if ('wakeLock' in navigator) { try { _grWake = await navigator.wakeLock.request('screen'); } catch (_) {} }
+    } else {
+        if (window.Android && typeof window.Android.keepScreenOn === 'function') {
+            try { window.Android.keepScreenOn(false); } catch (_) {}
+        }
+        if (_grWake && !_grWake.released) { try { _grWake.release(); } catch (_) {} }
+        _grWake = null;
+    }
+}
+
+function _sessElapsedSec() { return _sess.accSec + (_sess.running ? (Date.now() - _sess.startMs) / 1000 : 0); }
+function _fmtTimer(sec) {
+    sec = Math.floor(sec);
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60), s = sec % 60;
+    const ss = String(s).padStart(2, '0');
+    return h ? `${h}:${String(m).padStart(2, '0')}:${ss}` : `${m}:${ss}`;
+}
+function _sessTick() { const t = document.getElementById('sessTimer'); if (t) t.textContent = _fmtTimer(_sessElapsedSec()); }
+
+function grStartReadingSession() {
+    const reading = grActivePhysicalReading;
+    if (!reading) return;
+    const pm = bootstrap.Modal.getInstance(document.getElementById('physProgressModal'));
+    if (pm) pm.hide();
+
+    _sess = { readingId: reading.id, accSec: 0, startMs: Date.now(), running: true, tid: null };
+    document.getElementById('sessBookTitle').textContent = (reading.book && reading.book.title) || '';
+    document.getElementById('sessState').textContent = 'Reading…';
+    document.getElementById('sessResumeBtn').classList.add('d-none');
+    document.getElementById('sessPauseBtn').classList.remove('d-none');
+    _sessTick();
+    _sess.tid = setInterval(_sessTick, 1000);
+    grApplyReadingWakeLock(true);
+
+    document.getElementById('sessPauseBtn').onclick = grSessionPause;
+    document.getElementById('sessResumeBtn').onclick = grSessionResume;
+    document.getElementById('sessLampBtn').onclick = grFlashlight;
+    document.getElementById('sessDoneBtn').onclick = grSessionDone;
+    document.addEventListener('visibilitychange', _sessVis);
+
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('readingSessionModal')).show();
+}
+
+function grSessionPause() {
+    if (!_sess || !_sess.running) return;
+    _sess.accSec = _sessElapsedSec();
+    _sess.running = false;
+    if (_sess.tid) { clearInterval(_sess.tid); _sess.tid = null; }
+    document.getElementById('sessPauseBtn').classList.add('d-none');
+    document.getElementById('sessResumeBtn').classList.remove('d-none');
+    document.getElementById('sessState').textContent = 'Paused';
+    grApplyReadingWakeLock(false);
+}
+
+function grSessionResume() {
+    if (!_sess || _sess.running) return;
+    _sess.startMs = Date.now();
+    _sess.running = true;
+    _sessTick();
+    _sess.tid = setInterval(_sessTick, 1000);
+    document.getElementById('sessResumeBtn').classList.add('d-none');
+    document.getElementById('sessPauseBtn').classList.remove('d-none');
+    document.getElementById('sessState').textContent = 'Reading…';
+    grApplyReadingWakeLock(true);
+}
+
+// Screen lock / app background → auto-pause; the Resume button shows on return.
+function _sessVis() { if (document.hidden && _sess && _sess.running) grSessionPause(); }
+
+function grSessionDone() {
+    if (!_sess) return;
+    const mins = Math.round(_sessElapsedSec() / 60);
+    if (_sess.tid) clearInterval(_sess.tid);
+    document.removeEventListener('visibilitychange', _sessVis);
+    grApplyReadingWakeLock(false);
+    _sess = null;
+    const sm = bootstrap.Modal.getInstance(document.getElementById('readingSessionModal'));
+    if (sm) sm.hide();
+    grUpdatePhysicalProgress(mins);   // reopen popup, add session minutes to today's total
+}
+
+// ---- Reading lamp / screen flashlight (#40) --------------------------------
+// Full-screen colored light at a chosen brightness. Native window brightness via
+// window.Android.setBrightness when present (true lamp brightness); otherwise a
+// dim layer approximates it. Color (full-spectrum square) + brightness are
+// remembered. Launched from the reading session; exits on the back gesture or
+// screen lock, revealing the session underneath.
+let _flBackPushed = false;
+let _flSquareWired = false;
+function _flHasNative() { return !!(window.Android && typeof window.Android.setBrightness === 'function'); }
+
+function _flHslHex(h, s, l) {
+    s /= 100; l /= 100;
+    const k = n => (n + h / 30) % 12;
+    const a = s * Math.min(l, 1 - l);
+    const f = n => l - a * Math.max(-1, Math.min(k(n) - 3, Math.min(9 - k(n), 1)));
+    const toHex = x => Math.round(x * 255).toString(16).padStart(2, '0');
+    return `#${toHex(f(0))}${toHex(f(8))}${toHex(f(4))}`;
+}
+function _flPlaceMarker(fx, fy) {
+    const m = document.getElementById('flColorMarker');
+    if (fx == null || fy == null || isNaN(fx) || isNaN(fy)) { m.style.display = 'none'; return; }
+    m.style.display = 'block';
+    m.style.left = (fx * 100) + '%';
+    m.style.top = (fy * 100) + '%';
+}
+function _flWireSquare() {
+    if (_flSquareWired) return; _flSquareWired = true;
+    const sq = document.getElementById('flColorSquare');
+    let down = false;
+    const pick = (e) => {
+        const rect = sq.getBoundingClientRect();
+        const cx = e.touches ? e.touches[0].clientX : e.clientX;
+        const cy = e.touches ? e.touches[0].clientY : e.clientY;
+        const fx = Math.max(0, Math.min(1, (cx - rect.left) / rect.width));
+        const fy = Math.max(0, Math.min(1, (cy - rect.top) / rect.height));
+        const hex = _flHslHex(fx * 360, 100, (1 - fy) * 100);
+        document.getElementById('flColor').value = hex;
+        _flPlaceMarker(fx, fy);
+        localStorage.setItem('gr_lamp_color', hex);
+        localStorage.setItem('gr_lamp_fx', String(fx));
+        localStorage.setItem('gr_lamp_fy', String(fy));
+    };
+    sq.addEventListener('pointerdown', e => { down = true; pick(e); });
+    sq.addEventListener('pointermove', e => { if (down) pick(e); });
+    window.addEventListener('pointerup', () => { down = false; });
+}
+
+function grFlashlight() {
+    _flWireSquare();
+    const color = localStorage.getItem('gr_lamp_color') || '#ffd9a0';
+    const level = parseInt(localStorage.getItem('gr_lamp_bright') || '80');
+    const fx = parseFloat(localStorage.getItem('gr_lamp_fx'));
+    const fy = parseFloat(localStorage.getItem('gr_lamp_fy'));
+    document.getElementById('flColor').value = color;
+    _flPlaceMarker(isNaN(fx) ? null : fx, isNaN(fy) ? null : fy);
+    const bright = document.getElementById('flBright');
+    bright.value = level;
+    document.getElementById('flBrightVal').textContent = String(level);
+    bright.oninput = function () { document.getElementById('flBrightVal').textContent = this.value; };
+    document.getElementById('flOnBtn').onclick = grFlashlightOn;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('flashlightSettingsModal')).show();
+}
+
+function grFlashlightOn() {
+    const color = document.getElementById('flColor').value;
+    const level = Math.max(1, Math.min(100, parseInt(document.getElementById('flBright').value) || 80));
+    localStorage.setItem('gr_lamp_color', color);
+    localStorage.setItem('gr_lamp_bright', String(level));
+    const sm = bootstrap.Modal.getInstance(document.getElementById('flashlightSettingsModal'));
+    if (sm) sm.hide();
+
+    document.getElementById('flashlightFill').style.background = color;
+    if (_flHasNative()) {
+        try { window.Android.setBrightness(level / 100); } catch (_) {}
+        document.getElementById('flashlightDim').style.opacity = '0';
+    } else {
+        document.getElementById('flashlightDim').style.opacity = String(1 - level / 100);
+    }
+    document.getElementById('flashlightOverlay').style.display = 'block';
+
+    try { history.pushState({ fl: 1 }, ''); _flBackPushed = true; } catch (_) { _flBackPushed = false; }
+    window.addEventListener('popstate', grFlashlightPop);
+    document.addEventListener('visibilitychange', grFlashlightVis);
+}
+
+function grFlashlightPop() { grFlashlightExit(false); }
+function grFlashlightVis() { if (document.hidden) grFlashlightExit(true); }
+
+function grFlashlightExit(popHistory) {
+    const ov = document.getElementById('flashlightOverlay');
+    if (!ov || ov.style.display === 'none') return;
+    ov.style.display = 'none';
+    if (_flHasNative()) { try { window.Android.setBrightness(-1); } catch (_) {} }
+    window.removeEventListener('popstate', grFlashlightPop);
+    document.removeEventListener('visibilitychange', grFlashlightVis);
+    if (popHistory && _flBackPushed) { try { history.back(); } catch (_) {} }
+    _flBackPushed = false;
+    // The reading session modal remains underneath; nothing to reopen.
+}
+
 // True if the book has logged time in a format OTHER than `fmt` (so we know to
 // qualify the "Time read" label by format instead of leaving it bare).
 function hasOther(d, fmt) {
@@ -811,6 +1108,9 @@ window.GreatReads = {
     recalculateChains,
     showEditModal,
     openBookActions: grOpenBookActions,
+    updatePhysicalProgress: grUpdatePhysicalProgress,
+    flashlight: grFlashlight,
+    startReadingSession: grStartReadingSession,
     formatDateSmart,
     readingExtraInfoHtml,
     saveReadingChanges,

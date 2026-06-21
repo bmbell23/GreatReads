@@ -81,43 +81,12 @@
 
 <!-- ===== Reading Speed tab ===== -->
 <div class="tab-pane fade show active" id="pane-speed" role="tabpanel" aria-labelledby="tab-speed-btn">
-<div class="row">
-    <div class="col-12 col-lg-6 mb-4">
-        <div class="card">
-            <div class="card-header d-flex justify-content-between align-items-center py-2">
-                <h6 class="mb-0"><i class="fas fa-stopwatch me-2"></i>Reading Time &amp; Speed</h6>
-                <div class="btn-group btn-group-sm" role="group">
-                    <button type="button" class="btn btn-outline-secondary active" id="actMetricMinutes" onclick="switchActivityMetric('minutes')">Time</button>
-                    <button type="button" class="btn btn-outline-secondary" id="actMetricWords" onclick="switchActivityMetric('words')">Words</button>
-                </div>
-            </div>
-            <div class="card-body py-2">
-                <div id="activityEmpty" class="text-center text-muted py-3 small d-none">
-                    <i class="fas fa-hourglass-half me-2"></i>No reading time logged yet — read or listen and this fills in.
-                </div>
-                <div style="position:relative;height:150px;"><canvas id="activityChart"></canvas></div>
-                <div id="activitySummary" class="small text-muted mt-2 text-center"></div>
-            </div>
-        </div>
-    </div>
-    <div class="col-12 col-lg-6 mb-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0"><i class="fas fa-tachometer-alt me-2"></i>Finished Books WPD</h5>
-            </div>
-            <div class="card-body">
-                <div style="position:relative;height:300px;"><canvas id="speedBarChart"></canvas></div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Daily reading goals: calendar + trend chart (#30) -->
+<!-- Daily reading goals: calendar + trend chart (#30) — TOP of the tab (#39) -->
 <style>
     .goal-calendar { display: grid; grid-template-columns: repeat(7, 1fr); gap: 4px; }
     .goal-cal-dow { text-align: center; font-size: 0.7rem; color: #999; font-weight: 600; padding: 2px 0; }
     .goal-cal-day { min-height: 46px; border: 1px solid #e9ecef; border-radius: 6px; padding: 3px 4px;
-        cursor: pointer; display: flex; flex-direction: column; transition: background .12s; }
+        cursor: pointer; display: flex; flex-direction: column; transition: background .12s; position: relative; }
     .goal-cal-day:hover { background: #f1f3f5; }
     .goal-cal-day.empty { border: none; cursor: default; background: transparent; }
     .goal-cal-day .dnum { font-size: 0.72rem; color: #666; line-height: 1; }
@@ -126,6 +95,11 @@
     .goal-dots { margin-top: auto; display: flex; gap: 3px; justify-content: center; align-items: center; }
     .goal-dot { width: 9px; height: 9px; border-radius: 50%; opacity: 0.22; display: inline-block; }
     .goal-dot.met { opacity: 1; }
+    /* Every set goal met that day — celebrate (#39). */
+    .goal-cal-day.allmet { background: linear-gradient(135deg, #fff8e1, #ffe39a); border-color: #e0a800; }
+    .goal-cal-day.allmet:hover { background: linear-gradient(135deg, #fff3cd, #ffd766); }
+    .goal-cal-day.allmet .dnum { color: #8a6d00; font-weight: 700; }
+    .goal-cal-day .allmet-star { position: absolute; top: 2px; right: 4px; font-size: 0.7rem; line-height: 1; }
 </style>
 <div class="row">
     <div class="col-12 mb-4">
@@ -153,6 +127,48 @@
                     </div>
                 </div>
                 <div style="position:relative;height:280px;"><canvas id="goalChart"></canvas></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Historical reading time + speed (split, side by side, #39) -->
+<div class="row">
+    <div class="col-12 col-lg-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header py-2"><h6 class="mb-0"><i class="fas fa-stopwatch me-2"></i>Historical Reading Time</h6></div>
+            <div class="card-body py-2">
+                <div id="activityTimeEmpty" class="text-center text-muted py-3 small d-none">
+                    <i class="fas fa-hourglass-half me-2"></i>No reading time logged yet — read or listen and this fills in.
+                </div>
+                <div style="position:relative;height:180px;"><canvas id="activityTimeChart"></canvas></div>
+                <div id="activityTimeSummary" class="small text-muted mt-2 text-center"></div>
+            </div>
+        </div>
+    </div>
+    <div class="col-12 col-lg-6 mb-4">
+        <div class="card h-100">
+            <div class="card-header py-2"><h6 class="mb-0"><i class="fas fa-tachometer-alt me-2"></i>Historical Reading Speed</h6></div>
+            <div class="card-body py-2">
+                <div id="activitySpeedEmpty" class="text-center text-muted py-3 small d-none">
+                    <i class="fas fa-gauge-high me-2"></i>No reading speed yet — needs time-tracked reads (ebook/audio).
+                </div>
+                <div style="position:relative;height:180px;"><canvas id="activitySpeedChart"></canvas></div>
+                <div id="activitySpeedSummary" class="small text-muted mt-2 text-center"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Finished books WPD (bottom, #39) -->
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="card">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-tachometer-alt me-2"></i>Finished Books WPD</h5>
+            </div>
+            <div class="card-body">
+                <div style="position:relative;height:300px;"><canvas id="speedBarChart"></canvas></div>
             </div>
         </div>
     </div>
@@ -1842,12 +1858,11 @@ document.getElementById('yearFilter').addEventListener('change', loadStats);
 document.getElementById('monthFilter').addEventListener('change', loadStats);
 
 // Load stats on page load
-// ---------- Reading Time & Speed (#30) ----------
-// One compact horizontal bar chart: total time (or words) per format, with the
-// measured/derived WPM in a caption underneath.
-let activityChart = null;
+// ---------- Historical Reading Time + Speed (#30, split #39) ----------
+// Two horizontal bar charts: total time per format, and WPM per format.
+let activityTimeChart = null;
+let activitySpeedChart = null;
 let activityData = null;
-let currentActivityMetric = 'minutes';
 
 function _fmtHours(min) {
     if (!min) return '0m';
@@ -1862,19 +1877,30 @@ async function loadReadingActivity() {
     renderActivity();
 }
 
+function _hBarChart(canvasId, fmts, vals, tooltipLabel, xTick) {
+    const ctx = document.getElementById(canvasId).getContext('2d');
+    return new Chart(ctx, {
+        type: 'bar',
+        data: { labels: fmts, datasets: [{
+            data: vals,
+            backgroundColor: fmts.map(f => COLORS[f]),
+            borderColor: fmts.map(f => COLORS[f]),
+            borderWidth: 1, borderRadius: 4, barThickness: 22
+        }] },
+        options: { ...commonChartOptions, indexAxis: 'y',
+            plugins: { legend: { display: false }, tooltip: { callbacks: { label: tooltipLabel } } },
+            scales: { x: { beginAtZero: true, ticks: { callback: xTick } }, y: { grid: { display: false } } } }
+    });
+}
+
 function renderActivity() {
     if (!activityData) return;
     const totals = activityData.totals || { minutes: {}, words: {} };
     const dailyWpm = activityData.daily_wpm || {};
     const FMTS = ['Ebook', 'Audio', 'Physical'];
 
-    const present = FMTS.filter(f => (totals.minutes[f] || 0) > 0);
-    const hasData = present.length > 0;
-    document.getElementById('activityEmpty').classList.toggle('d-none', hasData);
-    document.getElementById('activityChart').style.display = hasData ? '' : 'none';
-    if (!hasData) { document.getElementById('activitySummary').textContent = ''; return; }
-
-    // Per-format WPM: measured ebook avg when available, else words/minute.
+    // Per-format WPM (words/minute): measured ebook avg when available, else
+    // derived from totals. Physical has no logged time → no WPM.
     const wpmFor = (f) => {
         if (f === 'Ebook') {
             const v = Object.values(dailyWpm);
@@ -1884,42 +1910,38 @@ function renderActivity() {
         return mn > 0 && w > 0 ? Math.round(w / mn) : null;
     };
 
-    const useWords = currentActivityMetric === 'words';
-    const vals = present.map(f => useWords ? (totals.words[f] || 0) : (totals.minutes[f] || 0));
-    const ctx = document.getElementById('activityChart').getContext('2d');
-    if (activityChart) activityChart.destroy();
-    activityChart = new Chart(ctx, {
-        type: 'bar',
-        data: { labels: present, datasets: [{
-            data: vals,
-            backgroundColor: present.map(f => COLORS[f]),
-            borderColor: present.map(f => COLORS[f]),
-            borderWidth: 1, borderRadius: 4, barThickness: 22
-        }] },
-        options: { ...commonChartOptions, indexAxis: 'y',
-            plugins: { legend: { display: false },
-                tooltip: { callbacks: { label: (c) => {
-                    const f = c.label, w = wpmFor(f);
-                    return useWords
-                        ? `${Number(c.raw).toLocaleString()} words${w ? ` · ${w} wpm` : ''}`
-                        : `${_fmtHours(c.raw)}${w ? ` · ${w} wpm` : ''}`;
-                } } } },
-            scales: { x: { beginAtZero: true, ticks: { callback: (v) => useWords
-                ? (v >= 1000 ? (v / 1000) + 'k' : v) : v + 'm' } }, y: { grid: { display: false } } } }
-    });
+    // ----- Historical Reading Time: total minutes per format -----
+    const timeFmts = FMTS.filter(f => (totals.minutes[f] || 0) > 0);
+    const hasTime = timeFmts.length > 0;
+    document.getElementById('activityTimeEmpty').classList.toggle('d-none', hasTime);
+    document.getElementById('activityTimeChart').style.display = hasTime ? '' : 'none';
+    if (activityTimeChart) { activityTimeChart.destroy(); activityTimeChart = null; }
+    if (hasTime) {
+        activityTimeChart = _hBarChart('activityTimeChart', timeFmts,
+            timeFmts.map(f => totals.minutes[f] || 0),
+            (c) => _fmtHours(c.raw), (v) => v + 'm');
+        const totalMin = timeFmts.reduce((s, f) => s + (totals.minutes[f] || 0), 0);
+        document.getElementById('activityTimeSummary').textContent = `Total ${_fmtHours(totalMin)}`;
+    } else {
+        document.getElementById('activityTimeSummary').textContent = '';
+    }
 
-    // Caption: total + per-format WPM (always visible, no second chart).
-    const totalMin = present.reduce((s, f) => s + (totals.minutes[f] || 0), 0);
-    const speeds = present.map(f => { const w = wpmFor(f); return w ? `${f} ${w} wpm` : null; }).filter(Boolean);
-    document.getElementById('activitySummary').innerHTML =
-        `Total ${_fmtHours(totalMin)}${speeds.length ? ' · ' + speeds.join(' · ') : ''}`;
-}
-
-function switchActivityMetric(m) {
-    currentActivityMetric = m;
-    document.getElementById('actMetricMinutes').classList.toggle('active', m === 'minutes');
-    document.getElementById('actMetricWords').classList.toggle('active', m === 'words');
-    renderActivity();
+    // ----- Historical Reading Speed: WPM per format -----
+    const speedFmts = FMTS.filter(f => wpmFor(f));
+    const hasSpeed = speedFmts.length > 0;
+    document.getElementById('activitySpeedEmpty').classList.toggle('d-none', hasSpeed);
+    document.getElementById('activitySpeedChart').style.display = hasSpeed ? '' : 'none';
+    if (activitySpeedChart) { activitySpeedChart.destroy(); activitySpeedChart = null; }
+    if (hasSpeed) {
+        activitySpeedChart = _hBarChart('activitySpeedChart', speedFmts,
+            speedFmts.map(f => wpmFor(f)),
+            (c) => `${Number(c.raw).toLocaleString()} wpm`,
+            (v) => v >= 1000 ? (v / 1000) + 'k' : v);
+        document.getElementById('activitySpeedSummary').textContent =
+            speedFmts.map(f => `${f} ${wpmFor(f).toLocaleString()} wpm`).join(' · ');
+    } else {
+        document.getElementById('activitySpeedSummary').textContent = '';
+    }
 }
 
 // ---------- Daily Goals: calendar + trend (#30) ----------
@@ -1962,6 +1984,7 @@ function renderGoalCalendar() {
     const n = _daysInMonth(y, m);
     for (let i = 0; i < startDow; i++) html += '<div class="goal-cal-day empty"></div>';
     const today = _todayStr();
+    const goalsSet = GOAL_FMTS.filter(([, k]) => (goalGoals[k] || 0) > 0);
     for (let d = 1; d <= n; d++) {
         const ds = _ymd(y, m, d);
         const dots = GOAL_FMTS.map(([f, k]) => {
@@ -1970,8 +1993,11 @@ function renderGoalCalendar() {
             const met = goal > 0 && w >= goal;
             return `<span class="goal-dot ${met ? 'met' : ''}" style="background:${COLORS[f]}"></span>`;
         }).join('');
-        const cls = (ds === today ? ' today' : '') + (ds === goalSelected ? ' selected' : '');
-        html += `<div class="goal-cal-day${cls}" data-date="${ds}" onclick="selectGoalDay('${ds}')"><span class="dnum">${d}</span><span class="goal-dots">${dots}</span></div>`;
+        // Celebrate a day where EVERY format that has a goal set is met (#39).
+        const allMet = goalsSet.length > 0 && goalsSet.every(([f, k]) => _wordsOn(f, ds) >= goalGoals[k]);
+        const cls = (ds === today ? ' today' : '') + (ds === goalSelected ? ' selected' : '') + (allMet ? ' allmet' : '');
+        const star = allMet ? '<span class="allmet-star">⭐</span>' : '';
+        html += `<div class="goal-cal-day${cls}" data-date="${ds}" onclick="selectGoalDay('${ds}')">${star}<span class="dnum">${d}</span><span class="goal-dots">${dots}</span></div>`;
     }
     document.getElementById('goalCalendar').innerHTML = html;
 }
@@ -2048,7 +2074,11 @@ function renderGoalChart() {
         label: f, data: series[f], backgroundColor: COLORS[f], borderColor: COLORS[f], borderWidth: 1, borderRadius: 3, stack: 'words'
     }));
     if (_dailyGoalTotal() > 0) datasets.push({
-        type: 'line', label: 'Goal', data: goalLine, borderColor: '#dc3545', borderDash: [5, 4], borderWidth: 1.5, pointRadius: 0, fill: false
+        // Show points when there are few buckets (week/month/year often collapse
+        // to 1–2 points — a 0-radius line would be invisible); clean dashed line
+        // for the many-point day view. (#39)
+        type: 'line', label: 'Goal', data: goalLine, borderColor: '#dc3545', borderDash: [5, 4], borderWidth: 1.5,
+        pointRadius: labels.length <= 2 ? 4 : 0, pointHoverRadius: 5, pointBackgroundColor: '#dc3545', fill: false
     });
 
     const ctx = document.getElementById('goalChart').getContext('2d');
