@@ -133,13 +133,15 @@ class Reading(Base):
 
     @property
     def current_progress_percent(self) -> Optional[float]:
-        """Calculate current progress percentage for IP books.
+        """Current progress (0-100) for IP books — the LOGGED position only.
 
-        Returns the percentage of the book completed (0-100).
+        No estimates. Progress only ever reflects positions actually recorded:
+        the Ereader writes ebook/audio on every read; the physical reading timer
+        and the in-app "update progress" control write physical. If nothing has
+        been logged yet, this is 0 — we do NOT project/guess from WPD. (#53)
 
-        If paused, returns the current_percent (frozen progress).
-        If manual progress was set, calculates additional progress from that point
-        based on WPD. Otherwise, calculates based on WPD from the start date.
+        (Schedule/queue date estimates are separate — see effective_days_estimate
+        / date_finished_estimate — and are unaffected by this.)
         """
         if not self.is_started or self.is_finished:
             return None
@@ -147,67 +149,18 @@ class Reading(Base):
         if not self.date_started or not self.book or not self.book.word_count or not self.media:
             return None
 
-        # Progress is now DIRECTLY TRACKED: the Ereader writes the real reading
-        # position into current_percent on every read, and the in-app "update
-        # progress" control sets it too. So whenever we have an actual value, return
-        # it as-is — no daily WPD projection. We used to project a moving "daily
-        # goal" forward because we didn't know the real position; that estimate is
-        # kept below ONLY as a fallback for untracked books with no recorded
-        # position yet (e.g. a physical book you haven't logged progress for).
         if self.current_percent is not None:
-            base = min(100.0, max(0.0, self.current_percent))
-            # Physical books aren't tracked live (no Ereader writes a position), so
-            # keep the estimate moving: project forward from the manually-anchored
-            # point using the configured physical WPD (honors wpd_mode). Ebook/audio
-            # keep their directly-tracked value as-is. (#33)
-            media_lower = self.media.lower()
-            if (media_lower in ("physical", "hardcover", "paperback")
-                    and not self.is_paused and self.date_progress_set
-                    and self.book and self.book.word_count and base < 100.0):
-                from ..services.settings_service import get_wpd_for_media
-                from sqlalchemy.orm import object_session
+            return min(100.0, max(0.0, self.current_percent))
 
-                db = object_session(self)
-                if db:
-                    days_since = (date.today() - self.date_progress_set.date()).days
-                    if days_since > 0:
-                        wpd = get_wpd_for_media(db, self.media)
-                        added = (days_since * wpd) / self.book.word_count * 100
-                        return min(100.0, max(0.0, base + added))
-            return base
-
-        # ----- Legacy fallback: time/WPD estimate (no recorded position) -----
-        if self.is_paused:
-            return 0.0
-
-        from ..services.settings_service import get_wpd_for_media
-        from sqlalchemy.orm import object_session
-
-        today = date.today()
-        if self.date_started > today:
-            return 0.0
-        days_elapsed_today = (today - self.date_started).days + 1  # inclusive
-        if days_elapsed_today <= 0:
-            return 0.0
-
-        db = object_session(self)
-        if not db:
-            if not self.effective_days_estimate:
-                return None
-            progress = (days_elapsed_today / self.effective_days_estimate) * 100
-            return min(100.0, max(0.0, progress))
-
-        wpd = get_wpd_for_media(db, self.media)
-        words_read = days_elapsed_today * wpd
-        progress = (words_read / self.book.word_count) * 100
-        return min(100.0, max(0.0, progress))
+        # No logged position yet → 0%. No WPD estimation of any kind. (#53)
+        return 0.0
 
     @property
     def current_progress_page(self) -> Optional[int]:
-        """Calculate current page for IP books based on current progress percentage.
+        """Current page for IP books, from the logged progress percentage.
 
-        Returns the page number the user should be on.
-        Only works if the book has page_count.
+        Returns the page the user is actually on (no estimate). Only works if
+        the book has page_count.
         """
         if not self.is_started or self.is_finished:
             return None
