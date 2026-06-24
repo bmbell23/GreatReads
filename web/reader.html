@@ -1232,6 +1232,7 @@
     </style>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <script src="quotes.js?v=1"></script>
 </head>
 <body>
     <!-- Brightness dim overlay (#50). Fallback dimmer used when the native
@@ -7832,10 +7833,13 @@
             updateFlip180Buttons();
         }
 
-        // Load the book
+        // Load the book. Show saved-highlight quotes on the loading screen
+        // while the EPUB/PDF paginates (#55) — auto-stops when .loading hides.
         if (format.toLowerCase() === 'pdf') {
+            if (window.GreatReadsQuotes) GreatReadsQuotes.start(document.querySelector('.loading'), API_URL);
             loadPDF();
         } else if (format.toLowerCase() === 'epub') {
+            if (window.GreatReadsQuotes) GreatReadsQuotes.start(document.querySelector('.loading'), API_URL);
             loadEPUB();
         } else {
             document.querySelector('.loading').textContent = `${format.toUpperCase()} format not supported yet. Download to read in another app.`;

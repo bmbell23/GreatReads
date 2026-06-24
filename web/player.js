@@ -71,9 +71,21 @@ function fmt(s) {
 
 function setMsg(text) {
     const el = $('overlay-msg');
+    // Any real message (errors) or a dismiss stops the loading-quote rotation
+    // (#55) so it can't paint over the message / a started player.
+    if (window.GreatReadsQuotes) GreatReadsQuotes.stop();
     if (!text) { el.classList.add('hidden'); return; }
     el.textContent = text;
     el.classList.remove('hidden');
+}
+
+// Loading state: show saved-highlight quotes instead of a bare "Loading…"
+// while the ABS session spins up (#55). Idempotent via GreatReadsQuotes.start.
+function setLoading() {
+    const el = $('overlay-msg');
+    el.classList.remove('hidden');
+    if (window.GreatReadsQuotes) GreatReadsQuotes.start(el, API_URL);
+    else el.textContent = 'Loading…';
 }
 
 // Lightweight auto-dismissing toast (bottom-centre). Created lazily so we don't
@@ -129,6 +141,8 @@ async function init() {
     $('title').textContent = TITLE;
     $('author').textContent = AUTHOR;
     $('now-playing').textContent = TITLE;
+    // Saved-highlight quotes while we resolve resume + spin up the ABS session.
+    setLoading();
     if (ABS_ID) $('cover').src = `${API_URL}/audiobooks/${encodeURIComponent(ABS_ID)}/cover`;
     // Always offer search. It opens the matching ebook to search; for audio-only
     // books (no linked ebook) the handler explains there's nothing to search.
@@ -202,7 +216,7 @@ async function loadPart(i, seekTo, autoplay) {
     if (i < 0 || i >= PARTS.length) return;
     if (sid && !closed) closePartSession(sid);
     curPart = i;
-    setMsg('Loading…');
+    setLoading();
     let s;
     try {
         const res = await fetch(`${API_URL}/audiobooks/${encodeURIComponent(PARTS[i].absId)}/play`, {
