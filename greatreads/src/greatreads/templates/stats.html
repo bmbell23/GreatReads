@@ -852,6 +852,8 @@ function updateSpeedChart(data) {
         },
         options: {
             ...commonChartOptions,
+            // Horizontal bars, to match Historical Reading Time / Speed.
+            indexAxis: 'y',
             plugins: {
                 legend: {
                     display: false
@@ -859,22 +861,14 @@ function updateSpeedChart(data) {
                 tooltip: {
                     callbacks: {
                         label: function(context) {
-                            return `${context.parsed.y.toLocaleString()} words/day`;
+                            return `${context.parsed.x.toLocaleString()} words/day`;
                         }
                     }
                 }
             },
             scales: {
+                // Value axis (now horizontal).
                 x: {
-                    ticks: {
-                        font: {
-                            size: 12,
-                            weight: '500'
-                        },
-                        color: '#333'
-                    }
-                },
-                y: {
                     beginAtZero: true,
                     ticks: {
                         callback: function(value) {
@@ -889,6 +883,16 @@ function updateSpeedChart(data) {
                     title: {
                         display: true,
                         text: 'Words per Day',
+                        font: {
+                            size: 12,
+                            weight: '500'
+                        },
+                        color: '#333'
+                    }
+                },
+                // Category axis (book labels, now vertical).
+                y: {
+                    ticks: {
                         font: {
                             size: 12,
                             weight: '500'
