@@ -216,11 +216,16 @@
            run to a single block carrying THIS class — a wider, more elegant
            glyph than the mid-chapter ⁂ — and drops the opener. Easy to retune:
            swap the `content` glyph (e.g. ❧ ❦ ⸎ ✶) and letter-spacing. */
+        /* The inline chapter-end ornament is no longer rendered (#58): its
+           trailing margin, right before the next chapter's forced column break,
+           produced an extra completely-blank page. The end-of-chapter indicator
+           is now a fixed-position marker (✦✦✦ or a tappable summary) shown only
+           on the chapter's last page — see updateChapterEndAffordance(). Its
+           class is still applied (so the inline glyph is suppressed) but it
+           occupies no space. */
         #epub-content p.epub-chapter-end-break,
         #epub-content div.epub-chapter-end-break {
-            min-height: 1em;
-            margin: 1.7em 0;
-            text-align: center;
+            display: none;
         }
         #epub-content p.epub-chapter-end-break::before,
         #epub-content div.epub-chapter-end-break::before {
@@ -1436,11 +1441,18 @@
     <!-- End-of-chapter summary nudge. Shown by updateChapterEndAffordance()
          only on the last page of a chapter that has a matching summary; tapping
          opens that chapter's summary. Sits just above the bottom progress bar. -->
-    <button id="chapter-end-summary" onclick="openSummary()" style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:34px;z-index:9100;-webkit-user-select:none;user-select:none;
-         padding:9px 16px;border:none;border-radius:20px;cursor:pointer;font-size:14px;font-weight:600;color:#fff;
-         background:linear-gradient(90deg,#4067EF,#8640C0,#C940B0);box-shadow:0 2px 10px rgba(0,0,0,0.35);">
-        📖 Chapter summary
-    </button>
+    <button id="chapter-end-summary" onclick="openSummary()" title="Chapter summary"
+        style="display:none;position:fixed;top:26px;right:40px;width:28px;height:28px;z-index:9500;padding:0;
+               background:transparent;border:none;cursor:pointer;text-align:center;line-height:28px;font-size:20px;
+               filter:grayscale(1);opacity:0.5;-webkit-tap-highlight-color:transparent;-webkit-user-select:none;user-select:none;">📖</button>
+
+    <!-- Fixed end-of-chapter mark (#58): shown by updateChapterEndAffordance()
+         only on the last page of a chapter that has NO summary — replaces the old
+         inline ✦✦✦ ornament so it adds no page. Passive (not tappable). -->
+    <div id="chapter-end-mark" aria-hidden="true"
+         style="display:none;position:fixed;left:50%;transform:translateX(-50%);bottom:36px;z-index:9100;
+                pointer-events:none;-webkit-user-select:none;user-select:none;
+                color:#000;opacity:0.32;font-size:1.05em;letter-spacing:0.6em;text-indent:0.6em;">✦ ✦ ✦</div>
 
     <!-- Transparent page progress bar at bottom — two stacked rows.
          Row 1 (metrics, top):  chapter time left | time on current page |
@@ -3466,7 +3478,11 @@
         let _pageHiddenAt       = null;   // timestamp when WebView went hidden
 
         function _currentWPP() {
-            if (!_bookWordCount || !totalPages) return null;
+            // totalPages starts at 1 and only becomes the real count once EPUB
+            // pagination settles. Guarding on >1 stops a page-turn fired during
+            // that race from making words-per-page = the WHOLE book (#59), which
+            // otherwise logs an impossible-WPM reading-activity burst.
+            if (!_bookWordCount || totalPages <= 1) return null;
             return _bookWordCount / totalPages;
         }
         function _pageTimeMs() {
@@ -3725,8 +3741,44 @@
             _pushTimer = setTimeout(flushReadingState, PUSH_DEBOUNCE_MS);
         }
 
+        // ---------- Reading session (#57) ----------
+        // A session id ties every progress flush from one reading sitting
+        // together so the backend can build per-book session stats. Re-opening
+        // the SAME book+format within the coalesce window continues the same
+        // session (a quick close+reopen isn't two sessions). The backend applies
+        // the >=60s/>=250-word "real session" threshold when deriving stats.
+        const SESSION_COALESCE_MS = 10 * 60 * 1000; // 10 min
+        let _session = null;
+        function _sessionUUID() {
+            try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (_) {}
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+                const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+        function _initSession() {
+            const now = Date.now();
+            let prev = null;
+            try { prev = JSON.parse(localStorage.getItem('gr.session.ebook.' + bookId) || 'null'); } catch (_) {}
+            if (prev && prev.id && (now - (prev.last || 0)) < SESSION_COALESCE_MS) {
+                _session = { id: prev.id, start: prev.start || now };   // continue the sitting
+            } else {
+                _session = { id: _sessionUUID(), start: now };          // new sitting
+            }
+            _persistSession();
+        }
+        function _persistSession() {
+            if (!_session || !bookId) return;
+            try {
+                localStorage.setItem('gr.session.ebook.' + bookId, JSON.stringify({
+                    id: _session.id, start: _session.start, last: Date.now()
+                }));
+            } catch (_) {}
+        }
+
         function flushReadingState(useKeepalive) {
             if (!_pendingState || !bookId) return;
+            if (!_session) _initSession();
             const body = JSON.stringify({
                 bookTitle:   title,
                 format:      format,
@@ -3754,7 +3806,11 @@
                 activityMs:    _activityMsSinceFlush,
                 activityWords: _activityWordsSinceFlush,
                 clientDate:    _localDateStr(),
+                // Per-session event log (#57): id + start of the current sitting.
+                sessionId:    _session ? _session.id : undefined,
+                sessionStart: _session ? _session.start : undefined,
             });
+            _persistSession();   // keep the coalesce timestamp fresh
             // Reset the per-flush activity accumulators — the backend sums these
             // deltas, so they must not be resent on the next flush.
             _activityMsSinceFlush = 0;
@@ -7618,10 +7674,14 @@
         // Show/hide the floating end-of-chapter nudge. Called from updateProgress
         // with the current chapter title and whether we're on its last page.
         function updateChapterEndAffordance(chapterTitle, isLastPage) {
-            const btn = document.getElementById('chapter-end-summary');
-            if (!btn) return;
-            const show = !!bookSummaries && isLastPage && !!_summaryForTitle(chapterTitle);
-            btn.style.display = show ? 'block' : 'none';
+            const btn  = document.getElementById('chapter-end-summary');
+            const mark = document.getElementById('chapter-end-mark');
+            // On a chapter's last page: a tappable summary when this chapter has
+            // one, otherwise the ✦✦✦ mark. Both are fixed-position, so neither
+            // adds a page (#58).
+            const hasSummary = !!bookSummaries && !!_summaryForTitle(chapterTitle);
+            if (btn)  btn.style.display  = (isLastPage && hasSummary)  ? 'block' : 'none';
+            if (mark) mark.style.display = (isLastPage && !hasSummary) ? 'block' : 'none';
         }
 
         function toggleTOC() {
@@ -7856,6 +7916,9 @@
             updateHyphenButtons();
             updateFlip180Buttons();
         }
+
+        // Start (or coalesce) the reading session for this sitting (#57).
+        _initSession();
 
         // Load the book. Show saved-highlight quotes on the loading screen
         // while the EPUB/PDF paginates (#55) — auto-stops when .loading hides.

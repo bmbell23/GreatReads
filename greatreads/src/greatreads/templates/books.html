@@ -383,6 +383,19 @@
                         </div>
                     </div>
 
+                    <!-- Reading sessions (#57): read-only stats from the ereader
+                         session log; populated by loadBookSessionStats(). -->
+                    <div class="row mb-4" id="editBookSessionStatsRow" style="display:none;">
+                        <div class="col-12">
+                            <div class="card bg-light border-0">
+                                <div class="card-body py-3">
+                                    <h6 class="mb-2"><i class="fas fa-chart-line me-2"></i>Reading sessions</h6>
+                                    <div id="editBookSessionStats" class="small text-muted">Loading…</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <div class="row">
                         <div class="col-12 mb-3">
                             <label for="editBookTitle" class="form-label">Title <span class="text-danger">*</span></label>
@@ -1356,9 +1369,45 @@ async function submitNewSeries() {
     }
 }
 
+// Per-book reading-session stats (#57). Pulls from the ereader session log
+// (GR_EREADER_API) by GreatReads book id and renders a compact read-only card.
+async function loadBookSessionStats(bookId) {
+    const row = document.getElementById('editBookSessionStatsRow');
+    const el = document.getElementById('editBookSessionStats');
+    if (!row || !el) return;
+    row.style.display = 'none';
+    el.innerHTML = 'Loading…';
+    try {
+        const base = (typeof GR_EREADER_API !== 'undefined') ? GR_EREADER_API : '/api';
+        const res = await fetch(`${base}/sessions-summary-gr/${encodeURIComponent(bookId)}`);
+        if (!res.ok) return;
+        const d = await res.json();
+        if (!d || !d.sessions) {
+            el.innerHTML = '<span class="text-muted">No reading sessions logged yet.</span>';
+            row.style.display = '';
+            return;
+        }
+        const plural = (n) => n === 1 ? '' : 's';
+        const fmtRows = Object.entries(d.byFormat || {}).map(([fmt, s]) => {
+            const pct = (s.percentOfBook != null) ? ` &middot; ${s.percentOfBook}% of book` : '';
+            return `<div class="d-flex justify-content-between flex-wrap">`
+                 + `<span><strong>${fmt}</strong> — ${s.sessions} session${plural(s.sessions)}</span>`
+                 + `<span>${Math.round(s.minutes)} min &middot; ${s.words.toLocaleString()} words${pct}</span></div>`;
+        }).join('');
+        const totalPct = (d.percentOfBook != null) ? ` &middot; ${d.percentOfBook}% of book` : '';
+        el.innerHTML =
+            `<div class="mb-1"><strong>${d.sessions}</strong> session${plural(d.sessions)} &middot; `
+          + `${Math.round(d.minutes)} min &middot; ${d.words.toLocaleString()} words${totalPct}</div>`
+          + fmtRows;
+        row.style.display = '';
+    } catch (e) { /* non-fatal */ }
+}
+
 function showEditBookModal(book) {
     // Reset cover file
     editBookCoverFile = null;
+    // Reading-session stats (#57) — async; hidden until it resolves.
+    loadBookSessionStats(book.id);
 
     // Populate form fields
     document.getElementById('editBookId').value = book.id;

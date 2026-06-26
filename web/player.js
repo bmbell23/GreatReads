@@ -141,6 +141,8 @@ async function init() {
     $('title').textContent = TITLE;
     $('author').textContent = AUTHOR;
     $('now-playing').textContent = TITLE;
+    // Start (or coalesce) the listening session for this sitting (#57).
+    if (PROGRESS_KEY) initSession();
     // Saved-highlight quotes while we resolve resume + spin up the ABS session.
     setLoading();
     if (ABS_ID) $('cover').src = `${API_URL}/audiobooks/${encodeURIComponent(ABS_ID)}/cover`;
@@ -848,6 +850,40 @@ $('bm-add').addEventListener('click', addBookmark);
 $('bm-list-btn').addEventListener('click', openBookmarks);
 $('bm-backdrop').addEventListener('click', (e) => { if (e.target === $('bm-backdrop')) closeBookmarks(); });
 
+// ---------- Reading session (#57) ----------
+// A session id ties every progress save from one listening sitting together so
+// the backend can build per-book session stats. Re-opening the same audiobook
+// within the coalesce window continues the same session. Keyed per book+format.
+const SESSION_COALESCE_MS = 10 * 60 * 1000; // 10 min
+const SESSION_LS_KEY = 'gr.session.audio.' + (PROGRESS_KEY || ABS_ID);
+let _session = null;
+function _sessionUUID() {
+    try { if (window.crypto && crypto.randomUUID) return crypto.randomUUID(); } catch (_) {}
+    return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function (c) {
+        const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+    });
+}
+function initSession() {
+    const now = Date.now();
+    let prev = null;
+    try { prev = JSON.parse(localStorage.getItem(SESSION_LS_KEY) || 'null'); } catch (_) {}
+    if (prev && prev.id && (now - (prev.last || 0)) < SESSION_COALESCE_MS) {
+        _session = { id: prev.id, start: prev.start || now };
+    } else {
+        _session = { id: _sessionUUID(), start: now };
+    }
+    persistSession();
+}
+function persistSession() {
+    if (!_session || !PROGRESS_KEY) return;
+    try {
+        localStorage.setItem(SESSION_LS_KEY, JSON.stringify({
+            id: _session.id, start: _session.start, last: Date.now()
+        }));
+    } catch (_) {}
+}
+
 // ---------- Progress sync ----------
 // Persist book-global resume position to localStorage (for instant library
 // updates) AND our backend (keyed by abs:<id>) so it survives across
@@ -871,6 +907,7 @@ function saveProgress() {
     // Don't persist until the resume seek has landed — otherwise a save fired
     // during the load window (pause/leave/sync) writes ~0 over the real spot.
     if (!PROGRESS_KEY || !resumeApplied) return;
+    if (!_session) initSession();
     saveReadingState();
     const pos = globalTime();
     const total = bookTotal();
@@ -887,9 +924,13 @@ function saveProgress() {
             progress: total ? Math.min(1, pos / total) : 0,
             chapterTitle: stamp ? stamp.title : undefined,
             chapterFraction: stamp ? stamp.fraction : undefined,
+            // Per-session event log (#57): id + start of the current sitting.
+            sessionId:    _session ? _session.id : undefined,
+            sessionStart: _session ? _session.start : undefined,
         }),
         keepalive: true,
     }).catch(() => {});
+    persistSession();   // keep the coalesce timestamp fresh
 }
 
 // timeListened is a DELTA (seconds since the previous sync), not cumulative.

@@ -290,6 +290,29 @@ def _ensure_reading_activity_table(conn):
         ' wpm_n         INTEGER NOT NULL DEFAULT 0,'
         ' PRIMARY KEY(activity_date, book_key, format))')
 
+def _ensure_reading_sessions_table(conn):
+    # Append/upsert per-session event log (#57) — source of truth going forward;
+    # the daily reading_activity rollup is derived from this. One row per reading
+    # sitting (coalesced client-side within a 10-min gap), keyed by a client uuid.
+    conn.execute(
+        'CREATE TABLE IF NOT EXISTS reading_sessions ('
+        ' id            TEXT PRIMARY KEY,'      # client-minted uuid (upsert key)
+        ' book_key      TEXT NOT NULL,'
+        ' format        TEXT NOT NULL,'         # Ebook | Audio | Physical
+        ' started_at    INTEGER NOT NULL,'      # epoch ms (fixed on insert)
+        ' ended_at      INTEGER,'               # epoch ms, last flush
+        ' activity_date TEXT,'                  # client-local date of start
+        ' minutes       REAL    NOT NULL DEFAULT 0,'
+        ' words         INTEGER NOT NULL DEFAULT 0,'
+        ' start_pct     REAL,'
+        ' end_pct       REAL,'
+        ' wpm_mpw_sum   REAL    NOT NULL DEFAULT 0,'
+        ' wpm_n         INTEGER NOT NULL DEFAULT 0,'
+        ' device        TEXT,'
+        ' updated       INTEGER)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_rs_book ON reading_sessions(book_key, format)')
+    conn.execute('CREATE INDEX IF NOT EXISTS idx_rs_date ON reading_sessions(activity_date)')
+
 def _kv_get(key, default=None):
     try:
         conn = _gr_db()
@@ -326,6 +349,12 @@ def _kv_set(key, value):
 # so it transfers across books/devices. EMA so it tracks the user's pace over time.
 _READING_SPEED_KEY = 'reading_speed_baseline'
 _RS_ALPHA = 0.2  # weight of each fresh session estimate
+
+# Reject impossible ebook words-per-flush (#59). Real readers sit ~300-600 WPM;
+# the fastest speed-readers don't sustain past ~1500. A client pagination race
+# (totalPages momentarily 1 → words-per-page = the WHOLE book) can imply ~70k WPM.
+# Generous ceiling so legitimate fast reading is never clipped.
+_EBOOK_MAX_WPM = 2000.0
 
 def _update_reading_baseline(ms_per_word):
     """Fold a fresh ebook ms-per-word estimate (the reader's current real avg)
@@ -420,29 +449,96 @@ def _record_reading_activity(book_key, item, prev, body):
                 dprog = _progress_delta(item, prev)
                 if wc and dprog > 0:
                     words = int(round(dprog * wc))
+            # Sanity gate (#59): a client pagination race — totalPages momentarily 1
+            # before EPUB pagination settles — makes words-per-page equal the WHOLE
+            # book, accruing thousands of words against a few seconds of real page
+            # time (an impossible WPM). Mirror the audio/baseline gates: when we have
+            # measured time and the implied speed exceeds a generous human ceiling,
+            # drop the bogus words but keep the honest minutes.
+            if words > 0 and minutes > 0 and (words / minutes) > _EBOOK_MAX_WPM:
+                print(f'reading_activity: dropped implausible ebook words={words} '
+                      f'min={minutes:.3f} wpm={words / minutes:.0f} for {bk}')
+                words = 0
             bmpw = body.get('msPerWord')
             if isinstance(bmpw, (int, float)) and bmpw > 0:
                 mpw = float(bmpw)   # measured WPM trend, independent of derived minutes
-        if minutes <= 0 and words <= 0 and mpw is None:
-            return
         # Prefer the client's local date (correct day across the UTC boundary); else server date.
         cd = body.get('clientDate')
         from datetime import datetime
         today = cd if (isinstance(cd, str) and len(cd) == 10) else datetime.now().strftime('%Y-%m-%d')
+        # Daily rollup (#30) — only when something was actually measured.
+        if minutes > 0 or words > 0 or mpw is not None:
+            conn = _gr_db()
+            try:
+                _ensure_reading_activity_table(conn)
+                with conn:
+                    conn.execute(
+                        'INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) '
+                        'VALUES(?,?,?,?,?,?,?) ON CONFLICT(activity_date,book_key,format) DO UPDATE SET '
+                        ' minutes=minutes+excluded.minutes, words=words+excluded.words, '
+                        ' wpm_mpw_sum=wpm_mpw_sum+excluded.wpm_mpw_sum, wpm_n=wpm_n+excluded.wpm_n',
+                        (today, bk, fmt, minutes, words, mpw or 0.0, 1 if mpw else 0))
+            finally:
+                conn.close()
+        # Per-session event log (#57): the going-forward source of truth. Recorded
+        # whenever the client supplies a sessionId — even on a zero-delta flush —
+        # so the row exists from session start and ended_at/end_pct stay current.
+        _record_reading_session(book_key, body, today, fmt, minutes, words, mpw, item)
+    except Exception as e:
+        print(f'reading_activity record failed for {book_key}: {e}')
+
+# Per-session reading event log (#57). The client mints a sessionId on book-open
+# (coalescing re-opens of the same book+format within 10 min onto the same id),
+# and sends it on every progress flush; we upsert by id, accumulating the same
+# per-flush minutes/words computed above. Threshold (>=60s OR >=250 words) and
+# pruning of never-qualified sessions are applied when deriving stats — here we
+# just capture, so nothing real is lost. start_pct is fixed on first insert;
+# ended_at / end_pct advance with each flush.
+def _record_reading_session(book_key, body, today, fmt, minutes, words, mpw, item):
+    sid = body.get('sessionId')
+    if not sid:
+        return  # no session id → legacy client; reading_activity above still logs
+    try:
+        now = int(time.time() * 1000)
+        started = body.get('sessionStart')
+        started = int(started) if isinstance(started, (int, float)) else now
+        pct = item.get('progress')
+        pct = float(pct) if isinstance(pct, (int, float)) else None
+        device = str(body.get('device') or '')
         conn = _gr_db()
         try:
-            _ensure_reading_activity_table(conn)
+            _ensure_reading_sessions_table(conn)
             with conn:
                 conn.execute(
-                    'INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) '
-                    'VALUES(?,?,?,?,?,?,?) ON CONFLICT(activity_date,book_key,format) DO UPDATE SET '
+                    'INSERT INTO reading_sessions'
+                    '(id,book_key,format,started_at,ended_at,activity_date,minutes,words,'
+                    'start_pct,end_pct,wpm_mpw_sum,wpm_n,device,updated) '
+                    'VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?) '
+                    'ON CONFLICT(id) DO UPDATE SET '
                     ' minutes=minutes+excluded.minutes, words=words+excluded.words, '
-                    ' wpm_mpw_sum=wpm_mpw_sum+excluded.wpm_mpw_sum, wpm_n=wpm_n+excluded.wpm_n',
-                    (today, bk, fmt, minutes, words, mpw or 0.0, 1 if mpw else 0))
+                    ' ended_at=excluded.ended_at, end_pct=excluded.end_pct, '
+                    ' wpm_mpw_sum=wpm_mpw_sum+excluded.wpm_mpw_sum, wpm_n=wpm_n+excluded.wpm_n, '
+                    ' updated=excluded.updated',
+                    (str(sid), str(book_key), fmt, started, now, today,
+                     minutes, words, pct, pct, mpw or 0.0, 1 if mpw else 0, device, now))
         finally:
             conn.close()
     except Exception as e:
-        print(f'reading_activity record failed for {book_key}: {e}')
+        print(f'reading_session record failed for {book_key}: {e}')
+
+# A session is "real" once it reaches >=60s OR >=250 words (#57). Reads/stats
+# filter on this; this prunes sessions that clearly ended (no update within the
+# 10-min coalesce window) yet never qualified — the transient-open junk.
+_SESSION_QUALIFIED_SQL = '(minutes >= 1.0 OR words >= 250)'
+def _prune_reading_sessions(conn):
+    try:
+        cutoff = int(time.time() * 1000) - 10 * 60 * 1000
+        with conn:
+            conn.execute(
+                'DELETE FROM reading_sessions WHERE COALESCE(ended_at,0) < ? '
+                'AND minutes < 1.0 AND words < 250', (cutoff,))
+    except Exception:
+        pass
 
 def _load_progress_json():
     if not os.path.exists(PROGRESS_FILE):
@@ -2521,6 +2617,114 @@ async def put_progress(book_id, request: Request):
     # Log today's reading activity for the analytics time-series (#30). Best-effort.
     _record_reading_activity(book_id, item, prev, body)
     return item
+
+# Reader keys (calibre id / "abs:<id>") under which a GreatReads book's sessions
+# are stored, resolved via external_imports (#57). Dual-format audio sittings are
+# saved under the calibre key; audio-only under the abs key — including both
+# covers every case.
+def _session_keys_for_gr_book(gr_book_id):
+    keys = []
+    try:
+        conn = _gr_db()
+        try:
+            rows = conn.execute(
+                'SELECT source, external_id FROM external_imports WHERE book_id=?',
+                (gr_book_id,)).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            src = (r['source'] or '').lower()
+            ext = r['external_id']
+            if not ext:
+                continue
+            if 'calibre' in src:
+                keys.append(str(ext))
+            elif 'audiobookshelf' in src or src == 'abs':
+                keys.append('abs:' + str(ext))
+    except Exception:
+        pass
+    return keys
+
+# Aggregate qualified sessions across a set of book_keys into the summary shape.
+def _sessions_summary_for_keys(keys, wc=None):
+    keys = [str(k) for k in (keys or []) if k]
+    by_format = {}
+    total_sessions = 0
+    total_minutes = 0.0
+    total_words = 0
+    first_at = None
+    last_at = None
+    if keys:
+        ph = ','.join(['?'] * len(keys))
+        conn = _gr_db()
+        try:
+            _ensure_reading_sessions_table(conn)
+            _prune_reading_sessions(conn)
+            rows = conn.execute(
+                'SELECT format, COUNT(*) n, COALESCE(SUM(minutes),0) mins, '
+                ' COALESCE(SUM(words),0) words, MIN(started_at) first_at, MAX(ended_at) last_at '
+                'FROM reading_sessions WHERE book_key IN (' + ph + ') AND ' + _SESSION_QUALIFIED_SQL +
+                ' GROUP BY format', keys).fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            by_format[r['format']] = {
+                'sessions': r['n'],
+                'minutes': round(r['mins'], 1),
+                'words': int(r['words']),
+                'percentOfBook': (round(100.0 * r['words'] / wc, 1) if wc else None),
+                'firstAt': r['first_at'],
+                'lastAt': r['last_at'],
+            }
+            total_sessions += r['n']
+            total_minutes += r['mins']
+            total_words += int(r['words'])
+            if r['first_at'] and (first_at is None or r['first_at'] < first_at): first_at = r['first_at']
+            if r['last_at'] and (last_at is None or r['last_at'] > last_at): last_at = r['last_at']
+    return {
+        'sessions': total_sessions,
+        'minutes': round(total_minutes, 1),
+        'words': total_words,
+        'wordCount': wc,
+        'percentOfBook': (round(100.0 * total_words / wc, 1) if wc else None),
+        'firstAt': first_at,
+        'lastAt': last_at,
+        'byFormat': by_format,
+    }
+
+@router.get('/api/sessions-summary/{book_key:path}')
+def book_sessions_summary(book_key):
+    """Per-book reading-session stats by READER key (calibre id or abs:<id>):
+    qualified-session count + minutes/words per format (+ % by words). A session
+    counts once it reaches >=60s or >=250 words; transient opens are pruned. (#57)"""
+    try:
+        out = _sessions_summary_for_keys([book_key], _gr_word_count_for(str(book_key)))
+        out['bookKey'] = str(book_key)
+        return out
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+@router.get('/api/sessions-summary-gr/{gr_book_id}')
+def gr_book_sessions_summary(gr_book_id):
+    """Same stats keyed by a GreatReads book id — resolves its reader keys via
+    external_imports and aggregates (ebook + audio sittings together). This is
+    what the book-detail modal calls. (#57)"""
+    try:
+        wc = None
+        try:
+            conn = _gr_db()
+            try:
+                row = conn.execute('SELECT word_count FROM books WHERE id=?', (gr_book_id,)).fetchone()
+                wc = int(row['word_count']) if row and row['word_count'] else None
+            finally:
+                conn.close()
+        except Exception:
+            pass
+        out = _sessions_summary_for_keys(_session_keys_for_gr_book(gr_book_id), wc)
+        out['bookId'] = str(gr_book_id)
+        return out
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
 
 @router.get('/api/reading-speed')
 def get_reading_speed():
