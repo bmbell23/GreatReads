@@ -195,8 +195,16 @@
            the lower controls get clipped and the middle squishes. Lay the cover
            beside the controls instead so everything fits without scrolling.
            Gated on max-height so tablets / large landscape (where the portrait
-           stack fits fine) are unaffected. */
-        @media (orientation: landscape) and (max-height: 600px) {
+           stack fits fine) are unaffected.
+
+           The second clause also fires this side-by-side layout on a foldable
+           unfolded in landscape (Pixel 10 Fold Pro, #60): those are wide but
+           NOT short (height ~800px), so max-height:600 misses them and the tall
+           portrait stack overflows into a square box (controls overlap the
+           bars). The near-square aspect ratio (5/6–6/5) catches foldables
+           without hitting 4:3 tablets (1.33) or tall phones (~0.46). */
+        @media (orientation: landscape) and (max-height: 600px),
+               (orientation: landscape) and (min-aspect-ratio: 5/6) and (max-aspect-ratio: 6/5) {
             .stage {
                 flex-direction: row;
                 align-items: center;
@@ -229,6 +237,24 @@
             .bottom-bar {
                 padding: 6px 20px;
                 margin-bottom: calc(6px + env(safe-area-inset-bottom, 0px));
+            }
+        }
+
+        /* ---- Foldable held upright (near-square portrait, #60) ----
+           A foldable unfolded in portrait is ~1:1, so the full portrait stack
+           (cover + meta + two bars + controls) is roughly the entire viewport
+           height and overflows — squishing the controls into the bars. Shrink
+           the cover, tighten the gaps, and drop the reserved nav-bar margin so
+           it fits. Gated on the near-square aspect ratio: min 5/6 (0.83)
+           excludes tall phones (~0.46) and 3:4 tablets (0.75). */
+        @media (orientation: portrait) and (min-aspect-ratio: 5/6) {
+            .stage { gap: 10px; padding: 6px 24px; }
+            .cover { width: min(46vh, 300px); max-height: 40vh; }
+            .meta .title { font-size: 18px; }
+            .bars { gap: 8px; }
+            .bottom-bar {
+                padding: 8px 20px;
+                margin-bottom: calc(8px + env(safe-area-inset-bottom, 0px));
             }
         }
     </style>
