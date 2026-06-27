@@ -451,13 +451,15 @@ def _record_reading_activity(book_key, item, prev, body):
                     words = int(round(dprog * wc))
             # Sanity gate (#59): a client pagination race — totalPages momentarily 1
             # before EPUB pagination settles — makes words-per-page equal the WHOLE
-            # book, accruing thousands of words against a few seconds of real page
-            # time (an impossible WPM). Mirror the audio/baseline gates: when we have
-            # measured time and the implied speed exceeds a generous human ceiling,
-            # drop the bogus words but keep the honest minutes.
-            if words > 0 and minutes > 0 and (words / minutes) > _EBOOK_MAX_WPM:
+            # book, accruing thousands of words against ~no real page time. Drop the
+            # bogus words but keep the honest minutes whenever the speed can't be
+            # validated: zero/negative measured time (the race flushes with ~0 ms →
+            # infinite WPM, which the old `minutes > 0` guard let straight through)
+            # or an implied speed past the human ceiling.
+            if words > 0 and (minutes <= 0 or (words / minutes) > _EBOOK_MAX_WPM):
+                _wpm = (words / minutes) if minutes > 0 else float('inf')
                 print(f'reading_activity: dropped implausible ebook words={words} '
-                      f'min={minutes:.3f} wpm={words / minutes:.0f} for {bk}')
+                      f'min={minutes:.3f} wpm={_wpm:.0f} for {bk}')
                 words = 0
             bmpw = body.get('msPerWord')
             if isinstance(bmpw, (int, float)) and bmpw > 0:
@@ -466,8 +468,25 @@ def _record_reading_activity(book_key, item, prev, body):
         cd = body.get('clientDate')
         from datetime import datetime
         today = cd if (isinstance(cd, str) and len(cd) == 10) else datetime.now().strftime('%Y-%m-%d')
-        # Daily rollup (#30) — only when something was actually measured.
-        if minutes > 0 or words > 0 or mpw is not None:
+        # Per-session event log (#57): the going-forward source of truth. Recorded
+        # whenever the client supplies a sessionId — even on a zero-delta flush —
+        # so the row exists from session start and ended_at/end_pct stay current.
+        # Record FIRST so the ebook rollup recompute below sees this flush.
+        sid = _record_reading_session(book_key, body, today, fmt, minutes, words, mpw, item)
+        # Daily rollup (#30/#59). For ebooks with a session log, reading_activity is
+        # a DERIVED projection of *qualifying* sessions — only ones that are (a) an
+        # in-progress book, (b) >= 60s wall-clock, and (c) <= 2000 WPM (also rejects
+        # zero-time/race dumps). Recompute & replace today's row so peek/race opens
+        # never pollute stats. Everything else (audio, or a legacy ebook client with
+        # no session id) keeps the additive path, now with the fixed guard above.
+        if sid and fmt == 'Ebook':
+            conn = _gr_db()
+            try:
+                _ensure_reading_activity_table(conn)
+                _rederive_ebook_activity_row(conn, today, bk)
+            finally:
+                conn.close()
+        elif minutes > 0 or words > 0 or mpw is not None:
             conn = _gr_db()
             try:
                 _ensure_reading_activity_table(conn)
@@ -480,10 +499,6 @@ def _record_reading_activity(book_key, item, prev, body):
                         (today, bk, fmt, minutes, words, mpw or 0.0, 1 if mpw else 0))
             finally:
                 conn.close()
-        # Per-session event log (#57): the going-forward source of truth. Recorded
-        # whenever the client supplies a sessionId — even on a zero-delta flush —
-        # so the row exists from session start and ended_at/end_pct stay current.
-        _record_reading_session(book_key, body, today, fmt, minutes, words, mpw, item)
     except Exception as e:
         print(f'reading_activity record failed for {book_key}: {e}')
 
@@ -495,9 +510,12 @@ def _record_reading_activity(book_key, item, prev, body):
 # just capture, so nothing real is lost. start_pct is fixed on first insert;
 # ended_at / end_pct advance with each flush.
 def _record_reading_session(book_key, body, today, fmt, minutes, words, mpw, item):
+    """Upsert the per-session row and return the session id (or None for a legacy
+    client without one). The caller uses the returned id to decide whether to
+    derive the ebook daily rollup from sessions (#57/#59)."""
     sid = body.get('sessionId')
     if not sid:
-        return  # no session id → legacy client; reading_activity above still logs
+        return None  # no session id → legacy client; reading_activity above still logs
     try:
         now = int(time.time() * 1000)
         started = body.get('sessionStart')
@@ -523,8 +541,66 @@ def _record_reading_session(book_key, body, today, fmt, minutes, words, mpw, ite
                      minutes, words, pct, pct, mpw or 0.0, 1 if mpw else 0, device, now))
         finally:
             conn.close()
+        return str(sid)
     except Exception as e:
         print(f'reading_session record failed for {book_key}: {e}')
+        return None
+
+# reading_activity for ebooks is a derived projection of the qualifying sessions
+# of a day (#59). A session counts toward the daily rollup only if it is (a) a
+# book with an in-progress GreatReads reading active on that date, (b) >= 60s of
+# wall-clock, and (c) <= _EBOOK_MAX_WPM implied speed (which also rejects the
+# zero-time, infinite-WPM pagination-race dumps). This replaces the old additive
+# rollup, which counted every flush and let peek/race opens inflate the stats.
+_SESSION_MIN_MS = 60_000  # rule (b): a real reading session is >= 60 seconds
+
+def _book_in_progress_on(conn, bk, date):
+    """True if the reader book_key maps to a GreatReads reading that was active
+    (started on/before `date`, not finished before it). Best-effort → False on error."""
+    try:
+        source, ext_id = ('audiobookshelf', bk[4:]) if bk.startswith('abs:') else ('calibre', bk)
+        row = conn.execute(
+            'SELECT 1 FROM read r JOIN external_imports ei ON ei.book_id = r.book_id '
+            'WHERE ei.source=? AND ei.external_id=? AND r.date_started IS NOT NULL '
+            'AND date(r.date_started) <= date(?) '
+            'AND (r.date_finished_actual IS NULL OR date(r.date_finished_actual) >= date(?)) '
+            'LIMIT 1', (source, ext_id, date, date)).fetchone()
+        return row is not None
+    except Exception:
+        return False
+
+def _rederive_ebook_activity_row(conn, date, bk):
+    """Recompute reading_activity[(date, bk, 'Ebook')] from that day's qualifying
+    sessions, replacing whatever was there; delete the row when nothing qualifies
+    (peek/race-only sessions, or the book isn't in progress). (#59)"""
+    try:
+        if not _book_in_progress_on(conn, bk, date):
+            with conn:
+                conn.execute('DELETE FROM reading_activity WHERE activity_date=? AND book_key=? AND format=?',
+                             (date, bk, 'Ebook'))
+            return
+        agg = conn.execute(
+            'SELECT COALESCE(SUM(minutes),0) m, COALESCE(SUM(words),0) w, '
+            'COALESCE(SUM(wpm_mpw_sum),0) ws, COALESCE(SUM(wpm_n),0) wn '
+            'FROM reading_sessions WHERE activity_date=? AND book_key=? AND format=? '
+            'AND (COALESCE(ended_at,0) - COALESCE(started_at,0)) >= ? '
+            'AND minutes > 0 AND (words = 0 OR (words * 1.0 / minutes) <= ?)',
+            (date, bk, 'Ebook', _SESSION_MIN_MS, _EBOOK_MAX_WPM)).fetchone()
+        m = float(agg['m'] or 0.0); w = int(agg['w'] or 0)
+        ws = float(agg['ws'] or 0.0); wn = int(agg['wn'] or 0)
+        with conn:
+            if m > 0 or w > 0 or wn > 0:
+                conn.execute(
+                    'INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) '
+                    'VALUES(?,?,?,?,?,?,?) ON CONFLICT(activity_date,book_key,format) DO UPDATE SET '
+                    ' minutes=excluded.minutes, words=excluded.words, '
+                    ' wpm_mpw_sum=excluded.wpm_mpw_sum, wpm_n=excluded.wpm_n',
+                    (date, bk, 'Ebook', m, w, ws, wn))
+            else:
+                conn.execute('DELETE FROM reading_activity WHERE activity_date=? AND book_key=? AND format=?',
+                             (date, bk, 'Ebook'))
+    except Exception as e:
+        print(f'reading_activity ebook rederive failed for {bk}/{date}: {e}')
 
 # A session is "real" once it reaches >=60s OR >=250 words (#57). Reads/stats
 # filter on this; this prunes sessions that clearly ended (no update within the
