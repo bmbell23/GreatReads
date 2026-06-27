@@ -3,10 +3,71 @@
 {% block title %}GreatReads - Home{% endblock %}
 
 {% block content %}
+<!-- High-level stats first (the 5 counts + this-year momentum), tight padding (#65) -->
 <div class="row">
-    <!-- Currently Reading -->
-    <div class="col-md-6 mb-4">
-        <div class="card h-100">
+    <div class="col-12 mb-3">
+        <div class="card">
+            <div class="card-body py-2">
+                <div class="row text-center g-0">
+                    <div class="col">
+                        <div class="py-1">
+                            <i class="fas fa-book-reader text-success mb-1"></i>
+                            <div class="small text-muted" style="font-size: 0.72rem; line-height: 1.15;">Total<br>Readings</div>
+                            <div class="h5 fw-bold text-success mb-0" id="total-readings">-</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="py-1">
+                            <i class="fas fa-book text-primary mb-1"></i>
+                            <div class="small text-muted" style="font-size: 0.72rem; line-height: 1.15;">Books<br>Owned</div>
+                            <div class="h5 fw-bold text-primary mb-0" id="total-books">-</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="py-1">
+                            <i class="fas fa-book mb-1" style="color:#6B4BA3;"></i>
+                            <div class="small text-muted" style="font-size: 0.72rem; line-height: 1.15;">Physical<br>TBR</div>
+                            <div class="h5 fw-bold mb-0" style="color:#6B4BA3;" id="physical-tbr">-</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="py-1">
+                            <i class="fas fa-headphones mb-1" style="color:#FF6600;"></i>
+                            <div class="small text-muted" style="font-size: 0.72rem; line-height: 1.15;">Audio<br>TBR</div>
+                            <div class="h5 fw-bold mb-0" style="color:#FF6600;" id="audio-tbr">-</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="py-1">
+                            <i class="fas fa-tablet-alt mb-1" style="color:#0066CC;"></i>
+                            <div class="small text-muted" style="font-size: 0.72rem; line-height: 1.15;">Ebook<br>TBR</div>
+                            <div class="h5 fw-bold mb-0" style="color:#0066CC;" id="ebook-tbr">-</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="py-1">
+                            <i class="fas fa-trophy text-danger mb-1"></i>
+                            <div class="small text-muted" style="font-size: 0.72rem; line-height: 1.15;">Books<br>This Year</div>
+                            <div class="h5 fw-bold text-danger mb-0" id="books-this-year">-</div>
+                        </div>
+                    </div>
+                    <div class="col">
+                        <div class="py-1">
+                            <i class="fas fa-feather-alt text-secondary mb-1"></i>
+                            <div class="small text-muted" style="font-size: 0.72rem; line-height: 1.15;">Words<br>This Year</div>
+                            <div class="h5 fw-bold text-secondary mb-0" id="words-this-year">-</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Currently Reading (in-progress books live here now, #65) -->
+<div class="row">
+    <div class="col-12 mb-4">
+        <div class="card">
             <div class="card-header">
                 <h5 class="mb-0">
                     <i class="fas fa-book-open me-2"></i>Currently Reading
@@ -22,975 +83,196 @@
             </div>
         </div>
     </div>
-
-    <!-- Quick Actions & Stats -->
-    <div class="col-md-6 mb-4">
-        <div class="d-flex flex-column h-100">
-            <!-- Quick Actions -->
-            <div class="card mb-3">
-                <div class="card-header">
-                    <h5 class="mb-0">
-                        <i class="fas fa-bolt me-2"></i>Quick Actions
-                    </h5>
-                </div>
-                <div class="card-body">
-                    <div class="d-grid gap-2">
-                        <button class="btn btn-primary" onclick="showBulkUpdateProgressModal()">
-                            <i class="fas fa-chart-line me-2"></i>Update Progress
-                        </button>
-                        <button class="btn btn-success" onclick="addNewReading()">
-                            <i class="fas fa-plus me-2"></i>Add New Reading
-                        </button>
-                        <button class="btn btn-info" onclick="showAddBookModal()">
-                            <i class="fas fa-plus me-2"></i>Add New Book
-                        </button>
-                        <button class="btn btn-secondary" onclick="window.location.href='{{ url_for('stats_page') }}'">
-                            <i class="fas fa-chart-bar me-2"></i>View Stats
-                        </button>
-                        <button class="btn btn-warning" onclick="recalculateChains()">
-                            <i class="fas fa-sync me-2"></i>Recalculate Chains
-                        </button>
-                    </div>
-                </div>
-            </div>
-
-            <!-- Quick Stats (Compact) - Fills remaining space -->
-            <div class="card mt-auto">
-                <div class="card-body py-3">
-                    <div class="row text-center g-0">
-                        <div class="col">
-                            <div class="py-2">
-                                <i class="fas fa-book-reader text-success mb-2"></i>
-                                <div class="small text-muted" style="font-size: 0.75rem; line-height: 1.2;">Total<br>Readings</div>
-                                <div class="h5 fw-bold text-success mb-0" id="total-readings">-</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="py-2">
-                                <i class="fas fa-check-circle text-success mb-2"></i>
-                                <div class="small text-muted" style="font-size: 0.75rem; line-height: 1.2;">Unique<br>Readings</div>
-                                <div class="h5 fw-bold text-success mb-0" id="unique-books">-</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="py-2">
-                                <i class="fas fa-book text-primary mb-2"></i>
-                                <div class="small text-muted" style="font-size: 0.75rem; line-height: 1.2;">Books<br>Owned</div>
-                                <div class="h5 fw-bold text-primary mb-0" id="total-books">-</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="py-2">
-                                <i class="fas fa-bookmark text-warning mb-2"></i>
-                                <div class="small text-muted" style="font-size: 0.75rem; line-height: 1.2;">Library<br>TBR</div>
-                                <div class="h5 fw-bold text-warning mb-0" id="owned-tbr">-</div>
-                            </div>
-                        </div>
-                        <div class="col">
-                            <div class="py-2">
-                                <i class="fas fa-list text-info mb-2"></i>
-                                <div class="small text-muted" style="font-size: 0.75rem; line-height: 1.2;">Total<br>TBR</div>
-                                <div class="h5 fw-bold text-info mb-0" id="general-tbr">-</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Recently Finished -->
-<div class="row">
-    <div class="col-12 mb-4">
-        <div class="card">
-            <div class="card-header">
-                <h5 class="mb-0">
-                    <i class="fas fa-check-circle me-2"></i>Recently Finished
-                </h5>
-            </div>
-            <div class="card-body">
-                <div id="recently-finished">
-                    <div class="text-center text-muted">
-                        <i class="fas fa-spinner fa-spin"></i>
-                        Loading recently finished books...
-                    </div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Add Reading Modal -->
-<div class="modal fade" id="addReadingModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-fullscreen-sm-down">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">Add New Reading</h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="addReadingForm">
-                    <div class="row">
-                        <div class="col-12 col-md-8 mb-2 mb-md-0">
-                            <div class="mb-3">
-                                <label for="bookSearch" class="form-label">Search Books</label>
-                                <div class="position-relative">
-                                    <input type="text" class="form-control" id="bookSearch" placeholder="Type to search books..." autocomplete="off">
-                                    <input type="hidden" id="selectedBookId" required>
-                                    <div id="bookSearchResults" class="list-group position-absolute w-100" style="max-height: 300px; overflow-y: auto; z-index: 1000; display: none;"></div>
-                                </div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-4">
-                            <div class="mb-3">
-                                <label for="mediaSelect" class="form-label">Media Type</label>
-                                <select class="form-select" id="mediaSelect" required>
-                                    <option value="">Choose media...</option>
-                                    <option value="Ebook">Ebook</option>
-                                    <option value="Physical">Physical</option>
-                                    <option value="Audio">Audio</option>
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                    <div class="row">
-                        <div class="col-12 col-md-6 mb-2 mb-md-0">
-                            <div class="mb-3">
-                                <label for="dateStarted" class="form-label">Start Date (Optional)</label>
-                                <input type="date" class="form-control" id="dateStarted">
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6">
-                            <div class="mb-3">
-                                <label for="dateFinished" class="form-label">Finish Date (Optional)</label>
-                                <input type="date" class="form-control" id="dateFinished">
-                            </div>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="submitNewReading()">Add Reading</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Bulk Update Progress Modal -->
-<div class="modal fade" id="bulkUpdateProgressModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-dialog-scrollable">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-chart-line me-2"></i>Update Progress for In-Progress Books
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <div id="bulkProgressContainer">
-                    <div class="text-center text-muted">
-                        <i class="fas fa-spinner fa-spin"></i>
-                        Loading in-progress books...
-                    </div>
-                </div>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
-                <button type="button" class="btn btn-primary" onclick="saveBulkProgress()">
-                    <i class="fas fa-save me-2"></i>Save All Progress
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Add Book to Library Modal -->
-<div class="modal fade" id="addBookToLibraryModal" tabindex="-1">
-    <div class="modal-dialog modal-lg">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-plus me-2"></i>Add to Library
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="addToLibraryForm">
-                    <!-- Book Search -->
-                    <div class="mb-4">
-                        <label for="libraryBookSearch" class="form-label fs-5 fw-bold mb-3">
-                            <i class="fas fa-search me-2"></i>Search Books
-                        </label>
-                        <div class="position-relative">
-                            <input type="text" class="form-control form-control-lg" id="libraryBookSearch" placeholder="Type to search books..." autocomplete="off">
-                            <input type="hidden" id="selectedLibraryBookId" required>
-                            <div id="libraryBookSearchResults" class="list-group position-absolute w-100" style="max-height: 300px; overflow-y: auto; z-index: 1000; display: none;"></div>
-                        </div>
-                    </div>
-
-                    <!-- Formats Owned -->
-                    <div class="mb-4">
-                        <label class="form-label fs-5 fw-bold mb-3">
-                            <i class="fas fa-warehouse me-2"></i>Formats Owned
-                        </label>
-                        <div class="d-flex gap-3 justify-content-center">
-                            <div class="format-type-option">
-                                <input type="checkbox" class="btn-check" id="addOwnedEbook" name="owned_ebook">
-                                <label class="btn btn-outline-primary" for="addOwnedEbook">
-                                    <i class="fas fa-tablet-alt fa-2x mb-2 d-block"></i>
-                                    <div class="fw-bold small">Ebook</div>
-                                </label>
-                            </div>
-                            <div class="format-type-option">
-                                <input type="checkbox" class="btn-check" id="addOwnedAudio" name="owned_audio">
-                                <label class="btn btn-outline-primary" for="addOwnedAudio">
-                                    <i class="fas fa-headphones fa-2x mb-2 d-block"></i>
-                                    <div class="fw-bold small">Audio</div>
-                                </label>
-                            </div>
-                            <div class="format-type-option">
-                                <input type="checkbox" class="btn-check" id="addOwnedPhysical" name="owned_physical">
-                                <label class="btn btn-outline-primary" for="addOwnedPhysical">
-                                    <i class="fas fa-book fa-2x mb-2 d-block"></i>
-                                    <div class="fw-bold small">Physical</div>
-                                </label>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Purchase and Location Info -->
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="addDatePurchased" class="form-label">Date Purchased</label>
-                            <input type="date" class="form-control" id="addDatePurchased" name="date_purchased">
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="addLocation" class="form-label">Location</label>
-                            <input type="text" class="form-control" id="addLocation" name="location" placeholder="e.g., B6">
-                        </div>
-                    </div>
-
-                    <!-- ISBN Information -->
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="addIsbn10" class="form-label">ISBN-10</label>
-                            <input type="text" class="form-control" id="addIsbn10" name="isbn_10" maxlength="10" placeholder="e.g., 1234567890">
-                            <small class="text-muted">10-digit ISBN for your specific edition</small>
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="addIsbn13" class="form-label">ISBN-13</label>
-                            <input type="text" class="form-control" id="addIsbn13" name="isbn_13" maxlength="13" placeholder="e.g., 9781234567890">
-                            <small class="text-muted">13-digit ISBN for your specific edition</small>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="submitAddToLibrary()">
-                    <i class="fas fa-plus me-2"></i>Add to Library
-                </button>
-            </div>
-        </div>
-    </div>
 </div>
 {% endblock %}
 
 {% block extra_scripts %}
 <script>
-// Helper function to build API URLs with base path
-function apiUrl(path) {
-    const basePath = window.APP_BASE_PATH || '';
-    return basePath + path;
-}
+// Slim Home (#65): in-progress books + high-level stats. No quick-action buttons
+// or modals — navigate elsewhere via the navbar. Format-dominance theming/breakdown
+// is a follow-up once #67 lands; for now cards theme by the reading's designated media.
 
-// Load dashboard data
 document.addEventListener('DOMContentLoaded', function() {
     loadDashboardStats();
+    loadMomentum();
     loadCurrentlyReading();
-    loadRecentlyFinished();
 });
 
 async function loadDashboardStats() {
     try {
-        const response = await GreatReads.apiCall('/library/stats');
-        const stats = response;
-
+        const stats = await GreatReads.apiCall('/library/stats');
         document.getElementById('total-readings').textContent = stats.total_readings || 0;
-        document.getElementById('unique-books').textContent = stats.total_read_books || 0;
         document.getElementById('total-books').textContent = stats.total_books || 0;
-        document.getElementById('owned-tbr').textContent = stats.unread_books || 0;
-        document.getElementById('general-tbr').textContent = stats.general_tbr || 0;
+        document.getElementById('physical-tbr').textContent = stats.physical_tbr || 0;
+        document.getElementById('audio-tbr').textContent = stats.audio_tbr || 0;
+        document.getElementById('ebook-tbr').textContent = stats.ebook_tbr || 0;
     } catch (error) {
         console.error('Error loading dashboard stats:', error);
-        // Set to 0 on error
-        document.getElementById('total-readings').textContent = '0';
-        document.getElementById('unique-books').textContent = '0';
-        document.getElementById('total-books').textContent = '0';
-        document.getElementById('owned-tbr').textContent = '0';
-        document.getElementById('general-tbr').textContent = '0';
+        ['total-readings','total-books','physical-tbr','audio-tbr','ebook-tbr']
+            .forEach(id => document.getElementById(id).textContent = '0');
     }
 }
 
-// Helper function to get media icon and color
-function getMediaStyle(media) {
-    if (media === 'Ebook') {
-        return { icon: 'tablet-alt', color: '#0066CC' };
-    } else if (media === 'Audio') {
-        return { icon: 'headphones', color: '#FF6600' };
-    } else if (media === 'Physical') {
-        return { icon: 'book', color: '#6B4BA3' };
-    } else {
-        return { icon: 'question', color: '#6c757d' };
+// Compact a count: 317679 -> "317K", 2340000 -> "2.34M", <1000 stays as-is.
+function fmtCount(n) {
+    n = n || 0;
+    if (n >= 1000000) return (n / 1000000).toFixed(2) + 'M';
+    if (n >= 1000) return Math.floor(n / 1000) + 'K';
+    return String(n);
+}
+
+async function loadMomentum() {
+    try {
+        const m = await GreatReads.apiCall('/stats/home-momentum');
+        document.getElementById('books-this-year').textContent = m.books_this_year || 0;
+        document.getElementById('words-this-year').textContent = fmtCount(m.words_this_year);
+    } catch (error) {
+        console.error('Error loading momentum:', error);
+        document.getElementById('books-this-year').textContent = '0';
+        document.getElementById('words-this-year').textContent = '0';
     }
+}
+
+// Media icon + color (themes the card by the reading's designated media for now).
+function getMediaStyle(media) {
+    if (media === 'Ebook')    return { icon: 'tablet-alt', color: '#0066CC' };
+    if (media === 'Audio')    return { icon: 'headphones', color: '#FF6600' };
+    if (media === 'Physical') return { icon: 'book',       color: '#6B4BA3' };
+    return { icon: 'question', color: '#6c757d' };
+}
+
+// "2026-06-12" -> "6/12" (parse the parts to avoid timezone shifts).
+function formatMD(iso) {
+    if (!iso) return '';
+    const p = String(iso).split('-');
+    if (p.length < 3) return '';
+    return `${parseInt(p[1], 10)}/${parseInt(p[2], 10)}`;
+}
+
+// Format a minutes value as "Xh Ym" / "Ym".
+function fmtMinutes(mins) {
+    mins = Math.round(mins || 0);
+    if (mins <= 0) return '0m';
+    const h = Math.floor(mins / 60), m = mins % 60;
+    return h > 0 ? `${h}h ${m}m` : `${m}m`;
+}
+
+// Small owned-format icons (like the Library) from media_owned.
+function ownedFormatIcons(mediaOwned) {
+    if (!mediaOwned || !mediaOwned.length) return '';
+    const order = ['Ebook', 'Audio', 'Physical'];
+    return '<span class="d-inline-flex gap-2 align-items-center">' +
+        order.filter(f => mediaOwned.includes(f)).map(f => {
+            const s = getMediaStyle(f);
+            return `<i class="fas fa-${s.icon}" style="color:${s.color};" title="${f}"></i>`;
+        }).join('') + '</span>';
 }
 
 async function loadCurrentlyReading() {
+    const container = document.getElementById('currently-reading');
     try {
         const readings = await GreatReads.apiCall('/readings/?status=in_progress&limit=1000');
-        const container = document.getElementById('currently-reading');
 
         if (!readings || readings.length === 0) {
-            container.innerHTML = '<p class="text-muted">No books currently in progress</p>';
+            container.innerHTML = '<p class="text-muted mb-0">No books currently in progress.</p>';
             return;
         }
 
-        let html = '<div class="d-flex flex-column gap-3">';
+        container.innerHTML = '<div class="d-flex flex-column gap-4" id="ip-list"></div>';
+        const list = document.getElementById('ip-list');
+
         readings.forEach(reading => {
             const book = reading.book;
             const mediaStyle = getMediaStyle(reading.media);
             const coverUrl = `${window.APP_BASE_PATH}/static/covers/${book.id}.jpg`;
-
-            // Use the current_progress_percent from the API (which handles manual overrides)
             const progress = reading.current_progress_percent || 0;
             const targetPage = reading.current_progress_page || 0;
+            const startMD = formatMD(reading.date_started);
+            const endMD = formatMD(reading.date_est_end);
 
-            html += `
-                <div class="d-flex gap-3">
-                    <!-- Book Cover (left side) -->
-                    <div class="flex-shrink-0">
-                        <div style="position: relative; height: 200px; width: 133px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.15); background: #f8f9fa; display: flex; align-items: center; justify-content: center;">
-                            ${book.cover ?
-                                `<img src="${coverUrl}" class="img-fluid" alt="${book.title}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
-                                 <div style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; color: #adb5bd;"><i class="fas fa-book fa-3x"></i></div>` :
-                                `<i class="fas fa-book fa-3x" style="color: #adb5bd;"></i>`
-                            }
-                        </div>
-                    </div>
+            let seriesLine = '';
+            if (book.series) {
+                seriesLine = book.series + (book.series_number != null ? ` #${book.series_number}` : '');
+            }
 
-                    <!-- Book Info (right side) -->
-                    <div class="flex-grow-1 d-flex flex-column justify-content-center">
-                        <h6 class="mb-2" style="font-size: 1rem; font-weight: 600; line-height: 1.3;">${book.title}</h6>
-                        <p class="text-muted mb-2" style="font-size: 0.85rem;">${book.author}</p>
-                        <div class="mb-2">
-                            <span style="color: ${mediaStyle.color}; font-weight: 500; font-size: 0.9rem;">
-                                <i class="fas fa-${mediaStyle.icon} me-1"></i>${reading.media}
-                            </span>
-                        </div>
-                        <div class="mb-3">
-                            <small class="text-muted">${book.word_count?.toLocaleString() || '?'} words • ${book.page_count || '?'} pages</small>
-                        </div>
-                        <div style="position: relative; height: 28px; background-color: #e9ecef; border-radius: 6px; overflow: visible;">
-                            <div style="position: absolute; left: 0; top: 0; height: 100%; background-color: ${mediaStyle.color}; border-radius: 6px; width: ${progress.toFixed(1)}%;"></div>
-                            <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 0.75rem; font-weight: 600; color: #495057; background-color: white; border: 1px solid #dee2e6; border-radius: 12px; padding: 3px 10px; z-index: 1; box-shadow: 0 1px 3px rgba(0,0,0,0.1);">
-                                ${progress.toFixed(1)}% ${targetPage > 0 ? 'p. ' + targetPage : ''}
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-        html += '</div>';
-
-        container.innerHTML = html;
-    } catch (error) {
-        console.error('Error loading currently reading:', error);
-        document.getElementById('currently-reading').innerHTML =
-            '<p class="text-danger">Error loading current books</p>';
-    }
-}
-
-async function loadRecentlyFinished() {
-    try {
-        const readings = await GreatReads.apiCall('/readings/?limit=1000');
-        const container = document.getElementById('recently-finished');
-
-        if (!readings || readings.length === 0) {
-            container.innerHTML = '<p class="text-muted">No recently finished books</p>';
-            return;
-        }
-
-        // Filter to only finished books, then sort by most recent finish date
-        const finishedReadings = readings.filter(r => r.date_finished_actual);
-        finishedReadings.sort((a, b) => {
-            return b.date_finished_actual.localeCompare(a.date_finished_actual);
-        });
-
-        // Take top 7 most recently finished
-        const recentReadings = finishedReadings.slice(0, 7);
-
-        let html = '<div class="d-flex flex-wrap gap-3 justify-content-center">';
-        recentReadings.forEach(reading => {
-            const book = reading.book;
-            const mediaStyle = getMediaStyle(reading.media);
-            const coverUrl = `${window.APP_BASE_PATH}/static/covers/${book.id}.jpg`;
-
-            html += `
-                <div class="card" style="width: 160px;">
-                    <div style="position: relative; height: 240px; background: #f8f9fa; display: flex; align-items: center; justify-content: center; overflow: hidden;">
+            const el = document.createElement('div');
+            el.className = 'd-flex gap-3';
+            el.innerHTML = `
+                <div class="flex-shrink-0">
+                    <div style="position: relative; height: 200px; width: 133px; border-radius: 8px; overflow: hidden; box-shadow: 0 2px 8px rgba(0,0,0,0.15); background: #f8f9fa; display: flex; align-items: center; justify-content: center; border-left: 4px solid ${mediaStyle.color};">
                         ${book.cover ?
-                            `<img src="${coverUrl}" class="card-img-top" alt="${book.title}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
+                            `<img src="${coverUrl}" class="img-fluid" alt="${book.title}" style="width: 100%; height: 100%; object-fit: cover;" onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">
                              <div style="display: none; width: 100%; height: 100%; align-items: center; justify-content: center; color: #adb5bd;"><i class="fas fa-book fa-3x"></i></div>` :
                             `<i class="fas fa-book fa-3x" style="color: #adb5bd;"></i>`
                         }
                     </div>
-                    <div class="card-body p-2 d-flex flex-column">
-                        <h6 class="card-title mb-1" style="font-size: 0.8rem; line-height: 1.2; min-height: 2.4rem; overflow: hidden; display: flex; align-items: center; justify-content: center; text-align: center;">${book.title}</h6>
-                        <p class="card-text text-muted mb-2" style="font-size: 0.7rem; height: 1.4rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center;">${book.author}</p>
-                        <div class="mb-2 text-center">
-                            <span style="color: ${mediaStyle.color}; font-weight: 500;">
-                                <i class="fas fa-${mediaStyle.icon} me-1"></i>${reading.media}
-                            </span>
+                </div>
+                <div class="flex-grow-1 d-flex flex-column justify-content-center">
+                    <h6 class="mb-1" style="font-size: 1rem; font-weight: 600; line-height: 1.3;">${book.title}</h6>
+                    <p class="text-muted mb-1" style="font-size: 0.85rem;">${book.author || ''}</p>
+                    ${seriesLine ? `<p class="text-muted mb-2" style="font-size: 0.78rem;">${seriesLine}</p>` : ''}
+                    <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
+                        <span style="color: ${mediaStyle.color}; font-weight: 500; font-size: 0.85rem;">
+                            <i class="fas fa-${mediaStyle.icon} me-1"></i>${reading.media || ''}
+                        </span>
+                        ${ownedFormatIcons(book.media_owned)}
+                    </div>
+                    <div class="mb-2 small text-muted" data-time-for="${book.id}">
+                        <i class="fas fa-clock me-1"></i><span class="text-muted">…</span>
+                    </div>
+                    <div style="position: relative; height: 26px; background-color: #e9ecef; border-radius: 6px; overflow: visible; max-width: 420px;">
+                        <div style="position: absolute; left: 0; top: 0; height: 100%; background-color: ${mediaStyle.color}; border-radius: 6px; width: ${progress.toFixed(1)}%;"></div>
+                        <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 0.72rem; font-weight: 600; color: #495057; background-color: white; border: 1px solid #dee2e6; border-radius: 12px; padding: 2px 10px; z-index: 1; white-space: nowrap;">
+                            ${progress.toFixed(1)}%${targetPage > 0 ? ' · p. ' + targetPage : ''}
                         </div>
-                        <div class="text-center">
-                            <small class="text-muted" style="font-size: 0.65rem;">${book.word_count?.toLocaleString() || '?'} words • ${book.page_count || '?'} pages</small>
-                        </div>
+                    </div>
+                    <div class="d-flex justify-content-between text-muted mt-1" style="max-width: 420px; font-size: 0.72rem;">
+                        <span>${startMD ? '<i class="fas fa-play-circle me-1"></i>' + startMD : ''}</span>
+                        <span>${endMD ? endMD + '<i class="fas fa-flag-checkered ms-1"></i>' : ''}</span>
                     </div>
                 </div>
             `;
-        });
-        html += '</div>';
-
-        container.innerHTML = html;
-    } catch (error) {
-        console.error('Error loading recently finished:', error);
-        document.getElementById('recently-finished').innerHTML =
-            '<p class="text-danger">Error loading recently finished books</p>';
-    }
-}
-
-let booksLoadedOnce = false;
-let allBooks = [];
-
-async function addNewReading() {
-    console.log('addNewReading called');
-
-    // Reset form first
-    const form = document.getElementById('addReadingForm');
-    form.reset();
-
-    // Show the add reading modal
-    const modal = new bootstrap.Modal(document.getElementById('addReadingModal'));
-    modal.show();
-
-    console.log('Modal shown, loading books...');
-
-    // Load books for selection
-    await loadBooksForSelection();
-
-    // Clear the search box AFTER loading books
-    const bookSearch = document.getElementById('bookSearch');
-    if (bookSearch) {
-        bookSearch.value = '';
-        // Trigger the input event to reset the filter
-        bookSearch.dispatchEvent(new Event('input'));
-    }
-
-    console.log('Books loaded');
-}
-
-async function loadBooksForSelection() {
-    console.log('loadBooksForSelection called');
-    try {
-        console.log('Fetching books from API...');
-        // Add cache-busting parameter to ensure fresh data
-        const timestamp = new Date().getTime();
-        const response = await fetch(apiUrl(`/api/books/?limit=10000&_t=${timestamp}`));
-        console.log('Response status:', response.status);
-
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-        const books = await response.json();
-        console.log('Loaded books:', books.length, books);
-
-        // Store books data for reread detection and autocomplete
-        window.booksData = books;
-
-        // Sort books alphabetically by title
-        allBooks = books.sort((a, b) => a.title.localeCompare(b.title));
-
-        // Set up event listeners only once
-        if (!booksLoadedOnce) {
-            console.log('Setting up autocomplete');
-            booksLoadedOnce = true;
-            setupAutocomplete();
-        }
-
-    } catch (error) {
-        console.error('Error loading books:', error);
-        GreatReads.showToast('Error loading books: ' + error.message, 'error');
-    }
-}
-
-function setupAutocomplete() {
-    const bookSearch = document.getElementById('bookSearch');
-    const resultsDiv = document.getElementById('bookSearchResults');
-    const selectedBookId = document.getElementById('selectedBookId');
-
-    if (!bookSearch || !resultsDiv || !selectedBookId) {
-        console.error('Autocomplete elements not found!');
-        return;
-    }
-
-    // Show results when typing
-    bookSearch.addEventListener('input', (e) => {
-        const searchTerm = e.target.value.toLowerCase().trim();
-
-        // Clear selection when user types
-        selectedBookId.value = '';
-
-        if (searchTerm.length < 2) {
-            resultsDiv.style.display = 'none';
-            return;
-        }
-
-        // Filter books
-        const matches = allBooks.filter(book =>
-            book.title.toLowerCase().includes(searchTerm) ||
-            book.author.toLowerCase().includes(searchTerm)
-        ).slice(0, 50); // Limit to 50 results
-
-        if (matches.length === 0) {
-            resultsDiv.innerHTML = '<div class="list-group-item text-muted">No books found</div>';
-            resultsDiv.style.display = 'block';
-            return;
-        }
-
-        // Display results
-        resultsDiv.innerHTML = matches.map(book => `
-            <a href="#" class="list-group-item list-group-item-action" data-book-id="${book.id}" data-book-title="${book.title}" data-book-author="${book.author}">
-                <div class="fw-bold">${book.title}</div>
-                <small class="text-muted">${book.author}</small>
-            </a>
-        `).join('');
-
-        resultsDiv.style.display = 'block';
-    });
-
-    // Handle result selection
-    resultsDiv.addEventListener('click', (e) => {
-        e.preventDefault();
-        const item = e.target.closest('.list-group-item');
-        if (!item) return;
-
-        const bookId = item.dataset.bookId;
-        const bookTitle = item.dataset.bookTitle;
-        const bookAuthor = item.dataset.bookAuthor;
-
-        bookSearch.value = `${bookTitle} by ${bookAuthor}`;
-        selectedBookId.value = bookId;
-        resultsDiv.style.display = 'none';
-    });
-
-    // Hide results when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!bookSearch.contains(e.target) && !resultsDiv.contains(e.target)) {
-            resultsDiv.style.display = 'none';
-        }
-    });
-
-    // Show results when focusing on search box if there's text
-    bookSearch.addEventListener('focus', (e) => {
-        if (e.target.value.length >= 2 && resultsDiv.children.length > 0) {
-            resultsDiv.style.display = 'block';
-        }
-    });
-}
-
-async function submitNewReading() {
-    const form = document.getElementById('addReadingForm');
-    const bookId = document.getElementById('selectedBookId').value;
-    const media = document.getElementById('mediaSelect').value;
-    const dateStarted = document.getElementById('dateStarted').value;
-    const dateFinished = document.getElementById('dateFinished').value;
-
-    if (!bookId || !media) {
-        GreatReads.showToast('Please select a book and media type', 'error');
-        return;
-    }
-
-    try {
-        // Auto-detect if this is a reread by checking if book has been read before
-        let isReread = false;
-        try {
-            const readings = await GreatReads.apiCall('/readings/?limit=10000');
-            isReread = readings.some(r => r.book_id == bookId && r.is_finished);
-        } catch (error) {
-            console.error('Error checking for rereads:', error);
-        }
-
-        const readingData = {
-            book_id: parseInt(bookId),
-            media: media,
-            reread: isReread
-        };
-
-        if (dateStarted) {
-            readingData.date_started = dateStarted;
-        }
-
-        if (dateFinished) {
-            readingData.date_finished_actual = dateFinished;
-        }
-
-        const response = await fetch(apiUrl('/api/readings/'), {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(readingData)
-        });
-
-        if (response.ok) {
-            GreatReads.showToast('Reading added successfully!', 'success');
-
-            // Close modal
-            const modal = bootstrap.Modal.getInstance(document.getElementById('addReadingModal'));
-            modal.hide();
-
-            // Reset form
-            form.reset();
-
-            // Reload dashboard data
-            loadDashboardStats();
-            loadCurrentlyReading();
-            loadRecentlyFinished();
-        } else {
-            const error = await response.json();
-            GreatReads.showToast(`Error adding reading: ${error.detail}`, 'error');
-        }
-    } catch (error) {
-        console.error('Error adding reading:', error);
-        GreatReads.showToast('Error adding reading', 'error');
-    }
-}
-
-async function recalculateChains() {
-    try {
-        await GreatReads.apiCall('/chains/recalculate', 'POST');
-        GreatReads.showToast('Chains recalculated successfully!', 'success');
-        loadDashboardStats(); // Refresh stats
-        loadCurrentlyReading(); // Refresh currently reading
-        loadRecentlyFinished(); // Refresh recently finished
-    } catch (error) {
-        console.error('Error recalculating chains:', error);
-        GreatReads.showToast('Error recalculating chains', 'error');
-    }
-}
-
-// ── Bulk Update Progress Modal ───────────────────────────────────────────────
-
-let inProgressReadings = [];
-
-async function showBulkUpdateProgressModal() {
-    const modal = new bootstrap.Modal(document.getElementById('bulkUpdateProgressModal'));
-    modal.show();
-
-    // Load in-progress readings
-    await loadInProgressReadings();
-}
-
-async function loadInProgressReadings() {
-    try {
-        const readings = await GreatReads.apiCall('/readings/?status=in_progress&limit=1000');
-        inProgressReadings = readings;
-
-        const container = document.getElementById('bulkProgressContainer');
-
-        if (!readings || readings.length === 0) {
-            container.innerHTML = '<p class="text-muted text-center">No books currently in progress</p>';
-            return;
-        }
-
-        let html = '<div class="list-group">';
-        readings.forEach(reading => {
-            const book = reading.book;
-            const currentPercent = reading.current_progress_percent || 0;
-            const currentPage = reading.current_progress_page || 0;
-            const totalPages = book.page_count || 0;
-
-            html += `
-                <div class="list-group-item">
-                    <div class="d-flex justify-content-between align-items-start mb-2">
-                        <div>
-                            <h6 class="mb-1">${book.title}</h6>
-                            <small class="text-muted">${book.author}</small>
-                        </div>
-                    </div>
-                    <div class="row g-2">
-                        <div class="col-6">
-                            <label class="form-label small">Percentage</label>
-                            <div class="input-group input-group-sm">
-                                <input type="number" class="form-control progress-percent-input"
-                                       data-reading-id="${reading.id}"
-                                       min="0" max="100" step="0.1"
-                                       value="${currentPercent.toFixed(1)}"
-                                       onchange="syncProgressPage(${reading.id}, ${totalPages})">
-                                <span class="input-group-text">%</span>
-                            </div>
-                        </div>
-                        <div class="col-6">
-                            <label class="form-label small">Page</label>
-                            <div class="input-group input-group-sm">
-                                <input type="number" class="form-control progress-page-input"
-                                       data-reading-id="${reading.id}"
-                                       min="0" max="${totalPages}"
-                                       value="${currentPage}"
-                                       onchange="syncProgressPercent(${reading.id}, ${totalPages})">
-                                <span class="input-group-text">/ ${totalPages}</span>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            `;
-        });
-        html += '</div>';
-
-        container.innerHTML = html;
-    } catch (error) {
-        console.error('Error loading in-progress readings:', error);
-        document.getElementById('bulkProgressContainer').innerHTML =
-            '<p class="text-danger text-center">Error loading books</p>';
-    }
-}
-
-function syncProgressPage(readingId, totalPages) {
-    const percentInput = document.querySelector(`.progress-percent-input[data-reading-id="${readingId}"]`);
-    const pageInput = document.querySelector(`.progress-page-input[data-reading-id="${readingId}"]`);
-
-    if (percentInput && pageInput && totalPages > 0) {
-        const percent = parseFloat(percentInput.value) || 0;
-        const page = Math.round((percent / 100) * totalPages);
-        pageInput.value = page;
-    }
-}
-
-function syncProgressPercent(readingId, totalPages) {
-    const percentInput = document.querySelector(`.progress-percent-input[data-reading-id="${readingId}"]`);
-    const pageInput = document.querySelector(`.progress-page-input[data-reading-id="${readingId}"]`);
-
-    if (percentInput && pageInput && totalPages > 0) {
-        const page = parseInt(pageInput.value) || 0;
-        const percent = ((page / totalPages) * 100).toFixed(1);
-        percentInput.value = percent;
-    }
-}
-
-async function saveBulkProgress() {
-    const percentInputs = document.querySelectorAll('.progress-percent-input');
-    let successCount = 0;
-    let errorCount = 0;
-
-    for (const input of percentInputs) {
-        const readingId = input.dataset.readingId;
-        const newPercent = parseFloat(input.value);
-
-        // Find the original reading to compare
-        const reading = inProgressReadings.find(r => r.id == readingId);
-        if (!reading) continue;
-
-        const originalPercent = reading.current_progress_percent || 0;
-
-        // Only update if changed
-        if (Math.abs(newPercent - originalPercent) > 0.01) {
-            try {
-                await GreatReads.apiCall(`/readings/${readingId}/progress`, {
-                    method: 'PUT',
-                    params: { current_percent: newPercent }
+            // Tap the card → shared book-actions popup (Read / Listen / physical),
+            // same entry point TBR uses. Restores reading from Home (#65).
+            el.style.cursor = 'pointer';
+            el.addEventListener('click', () => {
+                GreatReads.openBookActions(book, {
+                    reading,
+                    extraInfoHtml: (GreatReads.readingExtraInfoHtml
+                        ? GreatReads.readingExtraInfoHtml(reading) : undefined),
                 });
-                successCount++;
-            } catch (error) {
-                console.error(`Error updating reading ${readingId}:`, error);
-                errorCount++;
-            }
-        }
-    }
+            });
+            list.appendChild(el);
 
-    if (successCount > 0) {
-        GreatReads.showToast(`Updated ${successCount} book(s) successfully!`, 'success');
-    }
-    if (errorCount > 0) {
-        GreatReads.showToast(`Failed to update ${errorCount} book(s)`, 'error');
-    }
-
-    // Close modal
-    const modal = bootstrap.Modal.getInstance(document.getElementById('bulkUpdateProgressModal'));
-    modal.hide();
-
-    // Refresh dashboard
-    loadDashboardStats();
-    loadCurrentlyReading();
-}
-
-// ── Add Book to Library Modal ────────────────────────────────────────────────
-
-let allBooksForLibrary = [];
-let libraryBooksLoadedOnce = false;
-
-async function showAddBookModal() {
-    // Clear the form
-    document.getElementById('addToLibraryForm').reset();
-    document.getElementById('libraryBookSearch').value = '';
-    document.getElementById('selectedLibraryBookId').value = '';
-    document.getElementById('libraryBookSearchResults').style.display = 'none';
-
-    // Show the modal
-    const modal = new bootstrap.Modal(document.getElementById('addBookToLibraryModal'));
-    modal.show();
-
-    // Load books for search if not already loaded
-    if (!libraryBooksLoadedOnce) {
-        await loadBooksForLibrarySearch();
-        libraryBooksLoadedOnce = true;
-        setupLibraryAutocomplete();
-    }
-}
-
-async function loadBooksForLibrarySearch() {
-    try {
-        // Get all books
-        const books = await GreatReads.apiCall('/books/?limit=10000');
-
-        // Get books already in library
-        const libraryBooks = await GreatReads.apiCall('/library/books?limit=1000');
-        const ownedBookIds = new Set(libraryBooks.map(lb => lb.id));
-
-        // Filter to only books NOT in library
-        allBooksForLibrary = books
-            .filter(book => !ownedBookIds.has(book.id))
-            .map(book => ({
-                id: book.id,
-                title: book.title,
-                author: `${book.author_name_first || ''} ${book.author_name_second || ''}`.trim() || 'Unknown Author'
-            }));
-
-        console.log(`Loaded ${allBooksForLibrary.length} books not in library`);
-    } catch (error) {
-        console.error('Error loading books:', error);
-        GreatReads.showToast('Error loading books: ' + error.message, 'error');
-    }
-}
-
-function setupLibraryAutocomplete() {
-    const bookSearch = document.getElementById('libraryBookSearch');
-    const resultsDiv = document.getElementById('libraryBookSearchResults');
-    const selectedBookId = document.getElementById('selectedLibraryBookId');
-
-    if (!bookSearch || !resultsDiv || !selectedBookId) {
-        console.error('Library autocomplete elements not found!');
-        return;
-    }
-
-    // Show results when typing
-    bookSearch.addEventListener('input', (e) => {
-        const searchTerm = e.target.value.toLowerCase().trim();
-
-        // Clear selection when user types
-        selectedBookId.value = '';
-
-        if (searchTerm.length < 2) {
-            resultsDiv.style.display = 'none';
-            return;
-        }
-
-        // Filter books
-        const matches = allBooksForLibrary.filter(book =>
-            book.title.toLowerCase().includes(searchTerm) ||
-            book.author.toLowerCase().includes(searchTerm)
-        ).slice(0, 50);
-
-        if (matches.length === 0) {
-            resultsDiv.innerHTML = '<div class="list-group-item text-muted">No books found</div>';
-            resultsDiv.style.display = 'block';
-            return;
-        }
-
-        // Display results
-        resultsDiv.innerHTML = matches.map(book => `
-            <a href="#" class="list-group-item list-group-item-action" data-book-id="${book.id}" data-book-title="${book.title}" data-book-author="${book.author}">
-                <div class="fw-bold">${book.title}</div>
-                <small class="text-muted">${book.author}</small>
-            </a>
-        `).join('');
-
-        resultsDiv.style.display = 'block';
-    });
-
-    // Handle result selection
-    resultsDiv.addEventListener('click', (e) => {
-        e.preventDefault();
-        const item = e.target.closest('.list-group-item');
-        if (!item) return;
-
-        const bookId = item.dataset.bookId;
-        const bookTitle = item.dataset.bookTitle;
-        const bookAuthor = item.dataset.bookAuthor;
-
-        bookSearch.value = `${bookTitle} by ${bookAuthor}`;
-        selectedBookId.value = bookId;
-        resultsDiv.style.display = 'none';
-    });
-
-    // Hide results when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!bookSearch.contains(e.target) && !resultsDiv.contains(e.target)) {
-            resultsDiv.style.display = 'none';
-        }
-    });
-}
-
-async function submitAddToLibrary() {
-    const bookId = document.getElementById('selectedLibraryBookId').value;
-
-    if (!bookId) {
-        GreatReads.showToast('Please select a book', 'error');
-        return;
-    }
-
-    const libraryData = {
-        book_id: parseInt(bookId),
-        owned_ebook: document.getElementById('addOwnedEbook').checked,
-        owned_audio: document.getElementById('addOwnedAudio').checked,
-        owned_physical: document.getElementById('addOwnedPhysical').checked,
-        date_purchased: document.getElementById('addDatePurchased').value || null,
-        location: document.getElementById('addLocation').value || null,
-        isbn_10: document.getElementById('addIsbn10').value || null,
-        isbn_13: document.getElementById('addIsbn13').value || null
-    };
-
-    try {
-        await GreatReads.apiCall('/library/books', {
-            method: 'POST',
-            data: libraryData
+            // Per-book time spent (#65) — fetched per book (only a handful of IP books).
+            loadTimeSpent(book.id);
         });
-
-        GreatReads.showToast('Book added to library successfully!', 'success');
-
-        // Close modal
-        const modal = bootstrap.Modal.getInstance(document.getElementById('addBookToLibraryModal'));
-        modal.hide();
-
-        // Refresh dashboard stats
-        loadDashboardStats();
-
-        // Reset the library books cache so it reloads next time
-        libraryBooksLoadedOnce = false;
     } catch (error) {
-        console.error('Error adding book to library:', error);
-        // Error already shown by apiCall
+        console.error('Error loading currently reading:', error);
+        container.innerHTML = '<p class="text-danger mb-0">Error loading current books.</p>';
+    }
+}
+
+async function loadTimeSpent(bookId) {
+    const slot = document.querySelector(`[data-time-for="${bookId}"]`);
+    if (!slot) return;
+    try {
+        const t = await GreatReads.apiCall(`/stats/book-time/${bookId}`);
+        const fmts = t.formats || {};
+        const parts = Object.keys(fmts).map(f => {
+            const s = getMediaStyle(f);
+            return `<span style="color:${s.color};"><i class="fas fa-${s.icon} me-1"></i>${fmtMinutes(fmts[f].minutes)}</span>`;
+        });
+        if (parts.length === 0) {
+            slot.innerHTML = '<span class="text-muted">No reading time logged yet</span>';
+        } else {
+            // Per-format times only (each carries its own format icon). Show a total
+            // only when more than one format has time, to avoid redundancy.
+            slot.innerHTML = parts.join(' &middot; ') +
+                (parts.length > 1 ? ` <span class="text-muted">(${fmtMinutes(t.total_minutes)})</span>` : '');
+        }
+    } catch (error) {
+        slot.innerHTML = '';
     }
 }
 </script>

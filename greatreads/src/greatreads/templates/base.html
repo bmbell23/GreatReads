@@ -50,7 +50,7 @@
     {% if current_user %}
     <nav class="bookish-header" id="grNav">
         <div class="container gr-nav-bar">
-            <a class="navbar-brand bookish-brand" href="{{ url_for('tbr_page') }}">
+            <a class="navbar-brand bookish-brand" href="{{ url_for('root') }}">
                 <i class="fas fa-book-open me-2"></i>
                 <span class="brand-text">GreatReads</span>
             </a>
@@ -65,8 +65,15 @@
             </button>
 
             <ul class="gr-nav-menu" id="grNavMenu">
-                <!-- Unified menu. TBR (reading now) is the home; Highlights deep-links
-                     into the Ereader overlay (Bookmarks live there as a sub-tab now). -->
+                <!-- Unified menu. Home (in-progress + stats) is the landing page;
+                     TBR is the not-started/paused backlog; Highlights deep-links into
+                     the Ereader overlay (Bookmarks live there as a sub-tab now). -->
+                <li>
+                    <a class="bookish-nav-link" href="{{ url_for('root') }}" onclick="closeNavMenu()">
+                        <i class="fas fa-house"></i>
+                        <span class="nav-text">Home</span>
+                    </a>
+                </li>
                 <li>
                     <a class="bookish-nav-link" href="{{ url_for('tbr_page') }}" onclick="closeNavMenu()">
                         <i class="fas fa-list"></i>
@@ -221,15 +228,6 @@
     </div>
     {% endif %}
 
-    <!-- Footer -->
-    <footer class="bg-light mt-5 py-4">
-        <div class="container text-center">
-            <p class="text-muted mb-0">
-                <i class="fas fa-book me-1"></i>
-                GreatReads - Your Interactive Reading Tracker
-            </p>
-        </div>
-    </footer>
 
     <!-- Animated hamburger / overlay menu -->
     <script>

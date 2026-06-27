@@ -39,9 +39,11 @@
 
 <!-- Stat / format filter chips (one tight row) -->
 <div class="d-flex flex-nowrap justify-content-center align-items-center stat-chips mb-3">
-    <div class="stat-filter stat-chip text-warning" title="In Progress"
+    <!-- Active in-progress books live on Home now (#65); among started books only
+         paused ones remain on TBR, so this chip filters Paused. -->
+    <div class="stat-filter stat-chip text-warning" title="Paused"
          data-filter-type="read-status" data-filter-value="in_progress" onclick="toggleFilter(this)">
-        <i class="fas fa-book-open"></i><strong id="inProgressBooks">-</strong>
+        <i class="fas fa-pause-circle"></i><strong id="inProgressBooks">-</strong>
     </div>
     <div class="stat-filter stat-chip text-secondary" title="Not Started"
          data-filter-type="read-status" data-filter-value="not_started" onclick="toggleFilter(this)">
@@ -1423,7 +1425,9 @@ function createProgressSection(reading, book) {
                 </div>
             </div>
 
-            <!-- Progress bar (always present for consistent placement) -->
+            <!-- Progress bar — only for started (paused) books on TBR. Not-started
+                 books render no bar at all (no pointless "Not started" sliver, #65). -->
+            ${reading.date_started ? `
             <div style="position: relative; height: 24px; background-color: #e9ecef; border-radius: 4px; overflow: hidden;">
                 <div style="position: absolute; left: 0; top: 0; height: 100%; background-color: ${mediaColor}; border-radius: 4px; width: ${targetProgress}%; transition: width 0.3s ease;"></div>
                 ${targetProgress > 0 ? `
@@ -1436,6 +1440,7 @@ function createProgressSection(reading, book) {
                     </div>
                 `}
             </div>
+            ` : ''}
         </div>
     `;
 }

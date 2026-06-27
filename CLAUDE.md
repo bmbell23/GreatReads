@@ -13,6 +13,9 @@
 - Keep issues current: when you finish something, comment/close; when scope
   changes, edit the issue. The issues — not memory, not docs — are what the next
   session should trust.
+- **Every issue description starts with `STORY:` or `BUG:` as the first word**
+  (`BUG:` for defects, `STORY:` for everything else — features, chores,
+  refactors, tech-debt). Apply it to new tickets and keep it on edits.
 
 ## Every piece of work has a ticket, and moves through the board in order
 - **No work without a GitHub issue.** Every change — feature, fix, chore,

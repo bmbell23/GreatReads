@@ -1,5 +1,6 @@
 """Reading statistics API routes."""
 
+from datetime import date
 from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, Query
@@ -792,7 +793,9 @@ async def get_book_reading_time(book_id: int, db: Session = Depends(get_db)) -> 
             "FROM reading_activity ra WHERE ra.book_key IN ("
             "  SELECT CASE WHEN ei.source='audiobookshelf' THEN 'abs:' || ei.external_id "
             "              ELSE ei.external_id END "
-            "  FROM external_imports ei WHERE ei.book_id = :bid) "
+            "  FROM external_imports ei WHERE ei.book_id = :bid "
+            "  UNION "
+            "  SELECT 'phys:' || r.id FROM read r WHERE r.book_id = :bid) "
             "GROUP BY ra.format"
         ), {"bid": book_id}).fetchall()
     except Exception:
@@ -809,3 +812,24 @@ async def get_book_reading_time(book_id: int, db: Session = Depends(get_db)) -> 
         total_words += words
     return {"total_minutes": round(total_minutes, 1), "total_words": total_words,
             "formats": formats}
+
+
+@router.get("/home-momentum")
+async def get_home_momentum(db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Lightweight 'this year' momentum for the Home page (#65): books finished
+    year-to-date + words read year-to-date (from the reading-activity rollup)."""
+    year = date.today().year
+    books_this_year = db.query(Reading).filter(
+        Reading.date_finished_actual.isnot(None),
+        extract('year', Reading.date_finished_actual) == year,
+    ).count()
+    try:
+        row = db.execute(text(
+            "SELECT COALESCE(SUM(words), 0) FROM reading_activity "
+            "WHERE substr(activity_date, 1, 4) = :yr"
+        ), {"yr": str(year)}).fetchone()
+        words_this_year = int(row[0] or 0)
+    except Exception:
+        words_this_year = 0
+    return {"year": year, "books_this_year": books_this_year,
+            "words_this_year": words_this_year}

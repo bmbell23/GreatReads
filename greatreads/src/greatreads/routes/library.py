@@ -197,6 +197,22 @@ async def get_library_stats(db: Session = Depends(get_db)):
         Reading.date_finished_actual.is_(None)
     ).count()
 
+    # Per-format Library TBR (#65 Home stats): owned in that format AND never
+    # finished. Library-derived (ownership), distinct from the reading-plan TBR.
+    ebook_tbr = db.query(Book.id).join(Inventory).filter(
+        and_(Inventory.owned_ebook == True, ~Book.id.in_(books_with_finished_reads))
+    ).distinct().count()
+    audio_tbr = db.query(Book.id).join(Inventory).filter(
+        and_(
+            Inventory.owned_audio == True,
+            (Inventory.graphic_audio == False) | (Inventory.owned_in_library == True),
+            ~Book.id.in_(books_with_finished_reads),
+        )
+    ).distinct().count()
+    physical_tbr = db.query(Book.id).join(Inventory).filter(
+        and_(Inventory.owned_physical == True, ~Book.id.in_(books_with_finished_reads))
+    ).distinct().count()
+
     # Books by media owned
     # Exclude Graphic Audio books flagged as not-in-library (title match + author mismatch).
     audio_count = db.query(Inventory.book_id).filter(
@@ -236,6 +252,9 @@ async def get_library_stats(db: Session = Depends(get_db)):
         "read_books": read_books,  # Books read that you own (for library page)
         "unread_books": unread_books,  # Owned books not read (Owned TBR)
         "general_tbr": general_tbr,  # All unfinished readings (General TBR)
+        "ebook_tbr": ebook_tbr,  # Owned-unread ebooks (Library, per format)
+        "audio_tbr": audio_tbr,  # Owned-unread audiobooks
+        "physical_tbr": physical_tbr,  # Owned-unread physical
         "media_owned": media_stats,
         "genres": {genre: count for genre, count in genre_stats},
         "total_authors": author_count,

@@ -68,17 +68,26 @@ async def get_readings(
         query = query.filter(Reading.media.ilike(f"%{media}%"))
 
     readings = query.offset(skip).limit(limit).all()
+    # In-progress readings power the Home page, which wants owned-format icons —
+    # enrich those with inventory/source fields (superset of to_dict; #65).
+    if status == "in_progress":
+        return [_reading_dict_with_enriched_book(r, db) for r in readings]
     return [reading.to_dict() for reading in readings]
 
 
 @router.get("/tbr")
 async def get_tbr_readings(db: Session = Depends(get_db)):
     """Get TBR (To Be Read) readings in chain order."""
-    # Get all unfinished readings with book data
+    # Get TBR readings: not-started OR paused (active in-progress books live on the
+    # Home page now, #65). Active in-progress = started AND not paused AND not finished.
     readings = db.query(Reading).options(
         joinedload(Reading.book)
     ).filter(
-        Reading.date_finished_actual.is_(None)
+        Reading.date_finished_actual.is_(None),
+        or_(
+            Reading.date_started.is_(None),      # not started
+            Reading.date_paused.isnot(None),     # or paused
+        )
     ).all()
 
     # Sort by chain order
