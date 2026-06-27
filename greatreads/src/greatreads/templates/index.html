@@ -84,6 +84,166 @@
         </div>
     </div>
 </div>
+<!-- Edit Reading modal — full parity on Home (#72). Replicates TBR's modal; shared
+     showEditModal/saveReadingChanges (app.js) drive it and call refreshReadings(). -->
+<div class="modal fade" id="editReadingModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-fullscreen-sm-down">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">
+                    <i class="fas fa-edit me-2"></i>Edit Reading
+                </h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <form id="editReadingForm">
+                    <input type="hidden" id="editReadingId" name="reading_id">
+                    <div class="row mb-3">
+                        <div class="col-12 col-md-8">
+                            <h6 class="text-muted">Book</h6>
+                            <h5 id="editBookTitle" class="mb-1">Book Title</h5>
+                            <p id="editAuthor" class="text-muted mb-0">Author Name</p>
+                        </div>
+                        <div class="col-12 col-md-4 mt-2 mt-md-0">
+                            <div class="book-cover mx-auto" id="editBookCover">
+                                <img id="editBookCoverImg" src="" alt="Book cover" class="book-cover-img" style="display: none;">
+                                <i class="fas fa-book fa-2x book-cover-fallback"></i>
+                            </div>
+                        </div>
+                    </div>
+                    <hr>
+                    <div class="row mb-3">
+                        <div class="col-12 col-md-4 mb-2 mb-md-0">
+                            <label for="editMedia" class="form-label">Media Type</label>
+                            <select class="form-select" id="editMedia" name="media">
+                                <option value="">Select media...</option>
+                                <option value="Ebook">Ebook</option>
+                                <option value="Physical">Physical</option>
+                                <option value="Audio">Audio</option>
+                            </select>
+                        </div>
+                        <div class="col-12 col-md-4 mb-2 mb-md-0">
+                            <label for="editDateStarted" class="form-label">Date Started</label>
+                            <input type="date" class="form-control" id="editDateStarted" name="date_started">
+                        </div>
+                        <div class="col-12 col-md-4">
+                            <label for="editDateFinished" class="form-label">Date Finished</label>
+                            <input type="date" class="form-control" id="editDateFinished" name="date_finished_actual">
+                        </div>
+                    </div>
+                    <div class="row mb-3" id="progressSection" style="display: none;">
+                        <div class="col-12">
+                            <div class="card bg-light">
+                                <div class="card-body">
+                                    <h6 class="card-title mb-3">
+                                        <i class="fas fa-chart-line me-2"></i>Current Progress
+                                    </h6>
+                                    <div class="row">
+                                        <div class="col-12 col-md-6 mb-2 mb-md-0">
+                                            <label for="editCurrentPercent" class="form-label">Percentage</label>
+                                            <div class="input-group">
+                                                <input type="number" class="form-control" id="editCurrentPercent"
+                                                       min="0" max="100" step="0.1" placeholder="e.g., 23">
+                                                <span class="input-group-text">%</span>
+                                            </div>
+                                        </div>
+                                        <div class="col-12 col-md-6">
+                                            <label for="editCurrentPage" class="form-label">Page</label>
+                                            <div class="input-group">
+                                                <input type="number" class="form-control" id="editCurrentPage"
+                                                       min="0" placeholder="e.g., 151">
+                                                <span class="input-group-text" id="totalPages">/ --</span>
+                                            </div>
+                                        </div>
+                                    </div>
+                                    <small class="text-muted mt-2 d-block">
+                                        Set either percentage or page to realign your progress. Auto-calculation continues from there.
+                                    </small>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                    <h6 class="text-muted mb-3">Ratings</h6>
+                    <div class="row mb-3">
+                        <div class="col-12 col-md-6 mb-3">
+                            <label class="form-label">Enjoyment</label>
+                            <div class="emoji-rating" data-rating-type="enjoyment" data-emoji="star">
+                                <input type="hidden" id="editRatingEnjoyment" name="rating_enjoyment" value="0">
+                                <div class="emoji-rating-display"></div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 mb-3">
+                            <label class="form-label">Writing Quality</label>
+                            <div class="emoji-rating" data-rating-type="writing" data-emoji="star">
+                                <input type="hidden" id="editRatingWriting" name="rating_writing" value="0">
+                                <div class="emoji-rating-display"></div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 mb-3">
+                            <label class="form-label">Characters</label>
+                            <div class="emoji-rating" data-rating-type="characters" data-emoji="star">
+                                <input type="hidden" id="editRatingCharacters" name="rating_characters" value="0">
+                                <div class="emoji-rating-display"></div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 mb-3">
+                            <label class="form-label">World Building</label>
+                            <div class="emoji-rating" data-rating-type="world_building" data-emoji="star">
+                                <input type="hidden" id="editRatingWorldBuilding" name="rating_world_building" value="0">
+                                <div class="emoji-rating-display"></div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 mb-3">
+                            <label class="form-label">Readability</label>
+                            <div class="emoji-rating" data-rating-type="readability" data-emoji="star">
+                                <input type="hidden" id="editRatingReadability" name="rating_readability" value="0">
+                                <div class="emoji-rating-display"></div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 mb-3">
+                            <label class="form-label">Horror Rating</label>
+                            <div class="emoji-rating" data-rating-type="horror" data-emoji="blood">
+                                <input type="hidden" id="editRatingHorror" name="rating_horror" value="0">
+                                <div class="emoji-rating-display"></div>
+                            </div>
+                        </div>
+                        <div class="col-12 col-md-6 mb-3">
+                            <label class="form-label">Spice Rating</label>
+                            <div class="emoji-rating" data-rating-type="spice" data-emoji="pepper">
+                                <input type="hidden" id="editRatingSpice" name="rating_spice" value="0">
+                                <div class="emoji-rating-display"></div>
+                            </div>
+                        </div>
+                    </div>
+                </form>
+            </div>
+            <div class="modal-footer flex-wrap">
+                <button type="button" class="btn btn-danger me-auto mb-2 mb-sm-0" onclick="deleteReadingFromModal()">
+                    <i class="fas fa-trash me-1"></i>Delete
+                </button>
+                <button type="button" class="btn btn-secondary mb-2 mb-sm-0" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-info mb-2 mb-sm-0" id="startReadingManualBtn" onclick="startReadingManualFromModal()" style="display: none;">
+                    <i class="fas fa-calendar-plus me-1"></i>Start with Date
+                </button>
+                <button type="button" class="btn btn-success mb-2 mb-sm-0" id="startReadingBtn" onclick="startReadingFromModal()" style="display: none;">
+                    <i class="fas fa-play me-1"></i>Start Reading
+                </button>
+                <button type="button" class="btn btn-warning mb-2 mb-sm-0" id="pauseReadingBtn" onclick="pauseReadingFromModal()" style="display: none;">
+                    <i class="fas fa-pause me-1"></i>Pause
+                </button>
+                <button type="button" class="btn btn-info mb-2 mb-sm-0" id="unpauseReadingBtn" onclick="unpauseReadingFromModal()" style="display: none;">
+                    <i class="fas fa-play me-1"></i>Unpause
+                </button>
+                <button type="button" class="btn btn-success mb-2 mb-sm-0" id="finishReadingBtn" onclick="finishReadingFromModal()">
+                    <i class="fas fa-check me-1"></i>Mark as Finished
+                </button>
+                <button type="button" class="btn btn-primary mb-2 mb-sm-0" onclick="GreatReads.saveReadingChanges()">
+                    <i class="fas fa-save me-1"></i>Save Changes
+                </button>
+            </div>
+        </div>
+    </div>
+</div>
 {% endblock %}
 
 {% block extra_scripts %}
@@ -172,6 +332,7 @@ async function loadCurrentlyReading() {
     const container = document.getElementById('currently-reading');
     try {
         const readings = await GreatReads.apiCall('/readings/?status=in_progress&limit=1000');
+        homeIPReadings = readings || [];
 
         if (!readings || readings.length === 0) {
             container.innerHTML = '<p class="text-muted mb-0">No books currently in progress.</p>';
@@ -240,6 +401,12 @@ async function loadCurrentlyReading() {
                     reading,
                     extraInfoHtml: (GreatReads.readingExtraInfoHtml
                         ? GreatReads.readingExtraInfoHtml(reading) : undefined),
+                    // Edit Reading opens the full modal (dates/media/pause/finish/delete);
+                    // Finish Book is a quick shortcut. "Edit Book" (metadata) is built in.
+                    actionsHtml: `<button type="button" class="btn btn-sm btn-outline-primary" onclick="homeEditReading(${reading.id})">
+                        <i class="fas fa-edit me-2 text-primary"></i>Edit Reading</button>
+                        <button type="button" class="btn btn-sm btn-outline-success" onclick="homeFinishReading(${reading.id})">
+                        <i class="fas fa-flag-checkered me-2 text-success"></i>Finish Book</button>`,
                 });
             });
             list.appendChild(el);
@@ -250,6 +417,117 @@ async function loadCurrentlyReading() {
     } catch (error) {
         console.error('Error loading currently reading:', error);
         container.innerHTML = '<p class="text-danger mb-0">Error loading current books.</p>';
+    }
+}
+
+// Finish an in-progress book straight from the Home popup (#65 follow-up). Uses the
+// shared GreatReads.finishReading; reloads Home after.
+async function homeFinishReading(readingId) {
+    if (!confirm("Mark this reading as finished with today's date?")) return;
+    try {
+        await GreatReads.finishReading(readingId);
+        GreatReads.showToast('Reading marked as finished!', 'success');
+        const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+        if (m) m.hide();
+        loadDashboardStats();
+        loadMomentum();
+        loadCurrentlyReading();
+    } catch (e) { /* errors surfaced by apiCall */ }
+}
+
+// ── Edit Reading modal (full parity on Home, #72) ─────────────────────────────
+// Home replicates TBR's modal + handlers (the established per-page pattern; Journal
+// keeps its own slim variant). showEditModal/saveReadingChanges are shared in app.js
+// and call refreshReadings(), defined here to reload Home.
+let homeIPReadings = [];
+
+function refreshReadings() {
+    loadDashboardStats();
+    loadMomentum();
+    loadCurrentlyReading();
+}
+
+function homeEditReading(readingId) {
+    // Close the book-detail popup first so the Edit-Reading modal opens on top
+    // (not stacked behind it), mirroring TBR's tbrEditFromPopup.
+    const popup = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+    if (popup) popup.hide();
+    const reading = homeIPReadings.find(r => r.id === readingId);
+    if (reading) GreatReads.showEditModal(reading);
+}
+
+function closeEditReadingModal() {
+    const m = bootstrap.Modal.getInstance(document.getElementById('editReadingModal'));
+    if (m) m.hide();
+}
+
+async function startReadingFromModal() {
+    const readingId = document.getElementById('editReadingId').value;
+    if (!confirm("Start this reading with today's date?")) return;
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        await GreatReads.apiCall(`/readings/${readingId}`, { method: 'PUT', data: { date_started: today, status: 'In Progress' } });
+        GreatReads.showToast('Reading started!', 'success');
+        closeEditReadingModal();
+        await refreshReadings();
+    } catch (e) { /* surfaced by apiCall */ }
+}
+
+async function startReadingManualFromModal() {
+    const readingId = document.getElementById('editReadingId').value;
+    const startDate = prompt('Enter start date (YYYY-MM-DD):', new Date().toISOString().split('T')[0]);
+    if (!startDate) return;
+    try {
+        await GreatReads.startReading(readingId, startDate);
+        GreatReads.showToast('Reading started with custom date!', 'success');
+        closeEditReadingModal();
+        await refreshReadings();
+    } catch (e) { /* surfaced by apiCall */ }
+}
+
+async function pauseReadingFromModal() {
+    const readingId = document.getElementById('editReadingId').value;
+    if (!confirm('Pause this reading? Progress will be frozen at the current point.')) return;
+    try {
+        await GreatReads.pauseReading(readingId);
+        GreatReads.showToast('Reading paused!', 'success');
+        closeEditReadingModal();
+        await refreshReadings();
+    } catch (e) { /* surfaced by apiCall */ }
+}
+
+async function unpauseReadingFromModal() {
+    const readingId = document.getElementById('editReadingId').value;
+    if (!confirm('Unpause this reading? Progress will resume from where it was paused.')) return;
+    try {
+        await GreatReads.unpauseReading(readingId);
+        GreatReads.showToast('Reading unpaused!', 'success');
+        closeEditReadingModal();
+        await refreshReadings();
+    } catch (e) { /* surfaced by apiCall */ }
+}
+
+async function finishReadingFromModal() {
+    const readingId = document.getElementById('editReadingId').value;
+    if (!confirm("Mark this reading as finished with today's date?")) return;
+    try {
+        await GreatReads.finishReading(readingId);
+        GreatReads.showToast('Reading marked as finished!', 'success');
+        closeEditReadingModal();
+        await refreshReadings();
+    } catch (e) { /* surfaced by apiCall */ }
+}
+
+async function deleteReadingFromModal() {
+    const readingId = document.getElementById('editReadingId').value;
+    if (!confirm('Are you sure you want to delete this reading? This cannot be undone.')) return;
+    try {
+        await GreatReads.apiCall(`/readings/${readingId}`, { method: 'DELETE' });
+        GreatReads.showToast('Reading deleted successfully!', 'success');
+        closeEditReadingModal();
+        await refreshReadings();
+    } catch (e) {
+        GreatReads.showToast('Error deleting reading: ' + e.message, 'error');
     }
 }
 
