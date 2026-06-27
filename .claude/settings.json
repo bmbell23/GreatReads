@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "ask": [
+      "Bash(gvc *)",
+      "Bash(git commit *)",
+      "Bash(git push *)",
+      "Bash(docker compose *)"
+    ]
+  }
+}

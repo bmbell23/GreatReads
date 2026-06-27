@@ -37,9 +37,31 @@
 - Don't skip columns (e.g. don't jump Scoping → In progress). Keep the ticket's
   Status current as the work moves.
 
-## Rebuild the container yourself when needed
-- When a change to the GreatReads side needs the container rebuilt, **do it** —
-  don't ask the user to. The command is:
+## Autonomy & permissions
+- **Work freely without asking for routine, reversible steps** — as long as the
+  ticket process above is followed (every change has an issue, work moves to **In
+  Review** as soon as code changes) and changes go through code review. Don't
+  stop to ask permission to:
+  - change directories / `cd` around the repo,
+  - read, edit, or create code and other files,
+  - run read-only / inspection commands (greps, `curl` health checks, `py_compile`,
+    `node --check`, read-only `sqlite3` queries, etc.).
+- **Always ask the user first before these three gated actions** (the
+  `.claude/settings.local.json` `ask` rules also force a prompt, but treat the
+  rule as the source of truth):
+  1. **Modifying the database** — any write to `greatreads/data/greatreads.db`
+     (or Calibre's `metadata.db`): `INSERT`/`UPDATE`/`DELETE`/`DROP`/schema
+     changes, migrations, or data fixes. Read-only queries are fine. Back up the
+     DB before any schema/data migration (Jan-2026 data-loss incident).
+  2. **Remaking the application** — rebuilding the container / `docker compose
+     ... up -d --build` (see "Rebuild the container" below).
+  3. **Committing code** — `git commit`, `gvc`, `git push`. Commits go through
+     `gvc` and only with explicit permission.
+
+## Rebuild the container — ask first, then do it
+- Rebuilding/remaking the application is a **gated action: ask the user before
+  rebuilding** (see "Autonomy & permissions" below). Once they say go, run it
+  yourself — don't make them type it. The command is:
   `docker compose -p greatreads_ereader -f greatreads/docker-compose.ereader.yml up -d --build`
 - This is **data-safe**: the SQLite DB + covers live in the bind-mounted
   `greatreads/data` (`./data:/app/data`), never baked into the image, and host
