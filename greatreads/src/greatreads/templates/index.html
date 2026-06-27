@@ -328,6 +328,27 @@ function ownedFormatIcons(mediaOwned) {
         }).join('') + '</span>';
 }
 
+// Per-format dominance + time breakdown (#67): "icon PCT% · time" for each format
+// with logged activity, primary marked with a star. % = share of cumulative words.
+function formatBreakdownHtml(formats, primary) {
+    const entries = Object.keys(formats || {})
+        .map(f => ({ f, words: formats[f].words || 0, minutes: formats[f].minutes || 0 }))
+        .filter(e => e.words > 0 || e.minutes > 0);
+    if (!entries.length) return '<div class="mb-2 small text-muted">No reading time logged yet</div>';
+    const total = entries.reduce((s, e) => s + e.words, 0) || 1;
+    entries.sort((a, b) => b.words - a.words);
+    return '<div class="mb-2 d-flex flex-wrap gap-3" style="font-size:0.78rem;">' +
+        entries.map(e => {
+            const s = getMediaStyle(e.f);
+            const pct = Math.round(e.words / total * 100);
+            const pri = e.f === primary;
+            return `<span style="color:${s.color}; font-weight:${pri ? 700 : 500};" title="${e.f}">`
+                + `<i class="fas fa-${s.icon} me-1"></i>${pct}% &middot; ${fmtMinutes(e.minutes)}`
+                + (pri ? ' <i class="fas fa-star" style="font-size:0.6rem;" title="primary format"></i>' : '')
+                + `</span>`;
+        }).join('') + '</div>';
+}
+
 async function loadCurrentlyReading() {
     const container = document.getElementById('currently-reading');
     try {
@@ -339,12 +360,21 @@ async function loadCurrentlyReading() {
             return;
         }
 
+        // One /stats/book-time call per book → primary_format + per-format split (#67),
+        // driving the card theme, the dominance breakdown, and time read.
+        const stats = await Promise.all(readings.map(r =>
+            GreatReads.apiCall(`/stats/book-time/${r.book.id}`).catch(() => null)));
+
         container.innerHTML = '<div class="d-flex flex-column gap-4" id="ip-list"></div>';
         const list = document.getElementById('ip-list');
 
-        readings.forEach(reading => {
+        readings.forEach((reading, i) => {
             const book = reading.book;
-            const mediaStyle = getMediaStyle(reading.media);
+            const stat = stats[i] || {};
+            const formats = stat.formats || {};
+            // Theme by the DERIVED primary format; fall back to declared media.
+            const primary = stat.primary_format || reading.media || 'Ebook';
+            const mediaStyle = getMediaStyle(primary);
             const coverUrl = `${window.APP_BASE_PATH}/static/covers/${book.id}.jpg`;
             const progress = reading.current_progress_percent || 0;
             const targetPage = reading.current_progress_page || 0;
@@ -373,14 +403,12 @@ async function loadCurrentlyReading() {
                     <p class="text-muted mb-1" style="font-size: 0.85rem;">${book.author || ''}</p>
                     ${seriesLine ? `<p class="text-muted mb-2" style="font-size: 0.78rem;">${seriesLine}</p>` : ''}
                     <div class="mb-2 d-flex align-items-center gap-2 flex-wrap">
-                        <span style="color: ${mediaStyle.color}; font-weight: 500; font-size: 0.85rem;">
-                            <i class="fas fa-${mediaStyle.icon} me-1"></i>${reading.media || ''}
+                        <span style="color: ${mediaStyle.color}; font-weight: 600; font-size: 0.85rem;">
+                            <i class="fas fa-${mediaStyle.icon} me-1"></i>${primary}
                         </span>
                         ${ownedFormatIcons(book.media_owned)}
                     </div>
-                    <div class="mb-2 small text-muted" data-time-for="${book.id}">
-                        <i class="fas fa-clock me-1"></i><span class="text-muted">…</span>
-                    </div>
+                    ${formatBreakdownHtml(formats, primary)}
                     <div style="position: relative; height: 26px; background-color: #e9ecef; border-radius: 6px; overflow: visible; max-width: 420px;">
                         <div style="position: absolute; left: 0; top: 0; height: 100%; background-color: ${mediaStyle.color}; border-radius: 6px; width: ${progress.toFixed(1)}%;"></div>
                         <div style="position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); font-size: 0.72rem; font-weight: 600; color: #495057; background-color: white; border: 1px solid #dee2e6; border-radius: 12px; padding: 2px 10px; z-index: 1; white-space: nowrap;">
@@ -410,9 +438,6 @@ async function loadCurrentlyReading() {
                 });
             });
             list.appendChild(el);
-
-            // Per-book time spent (#65) — fetched per book (only a handful of IP books).
-            loadTimeSpent(book.id);
         });
     } catch (error) {
         console.error('Error loading currently reading:', error);
@@ -531,27 +556,5 @@ async function deleteReadingFromModal() {
     }
 }
 
-async function loadTimeSpent(bookId) {
-    const slot = document.querySelector(`[data-time-for="${bookId}"]`);
-    if (!slot) return;
-    try {
-        const t = await GreatReads.apiCall(`/stats/book-time/${bookId}`);
-        const fmts = t.formats || {};
-        const parts = Object.keys(fmts).map(f => {
-            const s = getMediaStyle(f);
-            return `<span style="color:${s.color};"><i class="fas fa-${s.icon} me-1"></i>${fmtMinutes(fmts[f].minutes)}</span>`;
-        });
-        if (parts.length === 0) {
-            slot.innerHTML = '<span class="text-muted">No reading time logged yet</span>';
-        } else {
-            // Per-format times only (each carries its own format icon). Show a total
-            // only when more than one format has time, to avoid redundancy.
-            slot.innerHTML = parts.join(' &middot; ') +
-                (parts.length > 1 ? ` <span class="text-muted">(${fmtMinutes(t.total_minutes)})</span>` : '');
-        }
-    } catch (error) {
-        slot.innerHTML = '';
-    }
-}
 </script>
 {% endblock %}

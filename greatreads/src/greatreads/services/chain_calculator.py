@@ -4,10 +4,11 @@ import math
 from datetime import date, datetime, timedelta
 from typing import List, Optional, Dict
 from sqlalchemy.orm import Session
-from sqlalchemy import and_
+from sqlalchemy import and_, or_
 
 from ..models.reading import Reading
 from .settings_service import get_reading_speeds
+from .format_dominance import get_primary_format
 
 
 class ChainCalculator:
@@ -18,21 +19,39 @@ class ChainCalculator:
     
     def recalculate_all_chains(self):
         """Recalculate all reading chains - equivalent to update-readings --all."""
-        # Get all unfinished readings
         unfinished_readings = self.db.query(Reading).filter(
             Reading.date_finished_actual.is_(None)
         ).all()
-        
-        # Build chain map
-        chain_map = self._build_chain_map(unfinished_readings)
-        
-        # Find chain heads (readings with no previous reading or previous is finished)
-        chain_heads = self._find_chain_heads(unfinished_readings)
-        
-        # Process each chain
+
+        reading_speeds = get_reading_speeds(self.db)
+
+        # Active in-progress books live on Home (#65), NOT in the TBR chains. They get
+        # standalone dates (start = their real start) and ANCHOR the per-format chains.
+        # They must never sit inside a not-started chain — a stale/branched link there
+        # (e.g. from an old reorder) would fork the walk and corrupt the order. The TBR
+        # chains are formed only by not-started + paused books.
+        active_ip = [r for r in unfinished_readings
+                     if r.date_started is not None and r.date_paused is None]
+        chain_readings = [r for r in unfinished_readings
+                          if not (r.date_started is not None and r.date_paused is None)]
+
+        # Per-format anchors (#67 phase 3): each format's chain starts the day after the
+        # active in-progress book that is PRIMARY in that format finishes (computed from
+        # cumulative word-equivalents), so a book read mostly in another format dictates
+        # *that* format's chain; a format with no such book rolls to tomorrow.
+        primary_anchors = self._compute_primary_anchors(active_ip, reading_speeds)
+
+        # 1) Active IP books: standalone dates; detach from any chain (repairs old links).
+        for r in active_ip:
+            self._apply_started_dates(r, reading_speeds)
+            r.id_previous = None
+
+        # 2) Not-started + paused books form the per-format TBR chains.
+        chain_map = self._build_chain_map(chain_readings)
+        chain_heads = self._find_chain_heads(chain_readings)
         for head in chain_heads:
-            self._recalculate_chain_from_head(head, chain_map)
-        
+            self._recalculate_chain_from_head(head, chain_map, primary_anchors)
+
         self.db.commit()
     
     def _build_chain_map(self, readings: List[Reading]) -> Dict[int, Reading]:
@@ -53,17 +72,16 @@ class ChainCalculator:
         
         return chain_heads
     
-    def _recalculate_chain_from_head(self, head: Reading, chain_map: Dict[int, Reading]):
+    def _recalculate_chain_from_head(self, head: Reading, chain_map: Dict[int, Reading],
+                                     primary_anchors: Optional[Dict[str, date]] = None):
         """Recalculate dates for a chain starting from the head."""
         current = head
         current_date = self._get_chain_start_date(current)
+        primary_anchors = primary_anchors or {}
 
         # Get reading speeds from settings
         reading_speeds = get_reading_speeds(self.db)
 
-        # Track the latest end date among IP books for this media type
-        # This is needed because multiple IP books run in parallel
-        latest_ip_end_date = None
         seen_ns_book = False
 
         while current:
@@ -99,19 +117,20 @@ class ChainCalculator:
                 days_to_add = round(current.days_estimate) - 1
                 current.date_est_end = base_date + timedelta(days=days_to_add)
 
-                # Track the latest IP end date
                 if is_ip:
-                    if latest_ip_end_date is None or current.date_est_end > latest_ip_end_date:
-                        latest_ip_end_date = current.date_est_end
-                    # For IP books, next book starts the day after this one ends
+                    # For IP books, next book starts the day after this one ends.
                     current_date = current.date_est_end + timedelta(days=1)
                 else:
-                    # This is an NS book
-                    if not seen_ns_book and latest_ip_end_date is not None:
-                        # First NS book should start after the latest IP book ends
-                        current_date = max(current_date, latest_ip_end_date + timedelta(days=1))
+                    # NS book (#67 phase 3): the first not-started book of this format
+                    # starts after the derived-PRIMARY in-progress book of this format
+                    # finishes (wherever that book lives in the chains), or — if no book
+                    # is primary in this format — on a rolling tomorrow. Later NS books in
+                    # the chain follow sequentially.
+                    if not seen_ns_book:
+                        tomorrow = date.today() + timedelta(days=1)
+                        anchor = primary_anchors.get(self._effective_format_lower(current))
+                        current_date = max(anchor + timedelta(days=1), tomorrow) if anchor else tomorrow
                         current.date_est_start = current_date
-                        # Recalculate end date with the new start date
                         current.date_est_end = current_date + timedelta(days=days_to_add)
                         seen_ns_book = True
                     # Next reading starts the day after this one ends
@@ -134,7 +153,73 @@ class ChainCalculator:
         # For unstarted readings, always use today
         # This ensures that when we recalculate, unstarted books get updated to today
         return today
-    
+
+    def _started_est_end(self, reading: Reading, reading_speeds: Dict[str, int]) -> Optional[date]:
+        """Estimated finish date for a STARTED book, priced at its primary format
+        (#67). Mirrors the in-walk IP est_end computation (days_estimate selection +
+        base = date_started), so anchors stay consistent with displayed dates."""
+        if reading.date_started is None or not reading.book or not reading.book.word_count:
+            return None
+        if not reading.days_estimate_override:
+            days = self._calculate_days_estimate(reading, reading_speeds)
+        elif (reading.current_percent_manual_override and reading.current_percent is not None
+              and reading.date_progress_set is not None):
+            days = self._calculate_ip_days_estimate_from_progress(reading, reading_speeds)
+        else:
+            days = reading.days_estimate
+        if not days:
+            return None
+        return reading.date_started + timedelta(days=round(days) - 1)
+
+    def _apply_started_dates(self, reading: Reading, reading_speeds: Dict[str, int]):
+        """Set est_start/est_end/days_estimate for an active in-progress book that lives
+        on Home and is NOT part of a TBR chain (#65/#67). Start = its real start date;
+        days_estimate priced at its primary format (same selection as the walk)."""
+        if not reading.days_estimate_override:
+            reading.days_estimate = self._calculate_days_estimate(reading, reading_speeds)
+        elif (reading.current_percent_manual_override and reading.current_percent is not None
+              and reading.date_progress_set is not None
+              and reading.book and reading.book.word_count):
+            reading.days_estimate = self._calculate_ip_days_estimate_from_progress(
+                reading, reading_speeds)
+        reading.date_est_start = reading.date_started
+        if reading.days_estimate:
+            reading.date_est_end = reading.date_started + timedelta(days=round(reading.days_estimate) - 1)
+        else:
+            reading.date_est_end = None
+
+    def _compute_primary_anchors(
+        self, readings: List[Reading], reading_speeds: Dict[str, int]
+    ) -> Dict[str, date]:
+        """For each format, the latest estimated-finish among STARTED books whose
+        derived primary format is that format (#67 phase 3). Keyed by lowercased
+        format; used to start each format's not-started chain."""
+        anchors: Dict[str, date] = {}
+        for r in readings:
+            if r.date_started is None:
+                continue
+            est_end = self._started_est_end(r, reading_speeds)
+            if est_end is None:
+                continue
+            fmt = self._effective_format_lower(r)  # derived primary for started books
+            if not fmt:
+                continue
+            if fmt not in anchors or est_end > anchors[fmt]:
+                anchors[fmt] = est_end
+        return anchors
+
+    def _effective_format_lower(self, reading: Reading) -> str:
+        """Format to price an estimate at (#67). For a STARTED book, use its derived
+        primary format (most cumulative word-equivalents) — a book declared as ebook
+        but read mostly on audio should estimate at the audio WPD. For a not-started
+        book there's no activity, so fall back to the declared media. Returns a
+        lowercased key matching the reading_speeds dict."""
+        if reading.date_started:
+            primary = get_primary_format(self.db, reading.book_id, reading.media)
+        else:
+            primary = reading.media
+        return (primary or reading.media or "").lower()
+
     def _calculate_ip_days_estimate_from_progress(
         self, reading: Reading, reading_speeds: Dict[str, int]
     ) -> Optional[int]:
@@ -156,7 +241,7 @@ class ChainCalculator:
         today = date.today()
         days_elapsed = (today - reading.date_started).days + 1
 
-        media_lower = (reading.media or "").lower()
+        media_lower = self._effective_format_lower(reading)
         wpd = reading_speeds.get(media_lower, 12000)
 
         total_words = reading.book.word_count
@@ -179,7 +264,7 @@ class ChainCalculator:
         if not reading.book or not reading.book.word_count or not reading.media:
             return None
 
-        media_lower = reading.media.lower()
+        media_lower = self._effective_format_lower(reading)
         words_per_day = reading_speeds.get(media_lower, 12000)
         return math.ceil(reading.book.word_count / words_per_day)
 
@@ -215,9 +300,16 @@ class ChainCalculator:
         if not reading:
             return
 
-        # Get ALL unfinished readings sorted by status then date (same as /tbr endpoint)
+        # Match the TBR-displayed set exactly (not-started + paused), since new_position
+        # comes from that list. Active in-progress books now live on Home (#65) and must
+        # NOT be in this index space, or the inserted book lands among them and the
+        # media relink scrambles the order.
         all_readings = self.db.query(Reading).filter(
-            Reading.date_finished_actual.is_(None)
+            Reading.date_finished_actual.is_(None),
+            or_(
+                Reading.date_started.is_(None),       # not started
+                Reading.date_paused.isnot(None),      # or paused
+            )
         ).all()
 
         # IP books should always come before NS books

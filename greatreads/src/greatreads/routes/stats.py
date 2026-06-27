@@ -11,6 +11,7 @@ from ..database import get_db
 from ..models.reading import Reading
 from ..models.book import Book
 from ..models.inventory import Inventory
+from ..services.format_dominance import get_primary_format
 
 router = APIRouter()
 
@@ -811,7 +812,9 @@ async def get_book_reading_time(book_id: int, db: Session = Depends(get_db)) -> 
         total_minutes += minutes
         total_words += words
     return {"total_minutes": round(total_minutes, 1), "total_words": total_words,
-            "formats": formats}
+            "formats": formats,
+            # Derived dominant format from cumulative word-equivalents (#67 phase 1).
+            "primary_format": get_primary_format(db, book_id)}
 
 
 @router.get("/home-momentum")
