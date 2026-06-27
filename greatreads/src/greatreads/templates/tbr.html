@@ -1380,8 +1380,13 @@ function createProgressSection(reading, book) {
     // Prefer the live reading position from the Ereader feed (what the reader screen
     // shows). Fall back to the model's current_progress_percent (the actual tracked
     // value; only an estimate for untracked books). 0 when not started.
+    // Only surface a live reader position once the book is actually started
+    // (#64). A book can carry a stray Ereader position from an earlier open —
+    // e.g. a merged/linked epub — and a not-started (TBR) book must read 0%, not
+    // that leftover. The fallback branch already gates on date_started; the live
+    // branch now does too.
     const live = liveProgressFor(reading, book);
-    const hasLive = live && typeof live.progress === 'number';
+    const hasLive = reading.date_started && live && typeof live.progress === 'number';
     const targetProgress = hasLive
         ? live.progress * 100
         : (reading.date_started ? (reading.current_progress_percent || 0) : 0);
@@ -1515,7 +1520,7 @@ function openReadingActions(readingId) {
     // Use the real reading position (Ereader feed) for the popup's progress too, so
     // it matches the card and the reader.
     const live = liveProgressFor(reading, reading.book);
-    const r2 = (live && typeof live.progress === 'number')
+    const r2 = (reading.date_started && live && typeof live.progress === 'number')
         ? { ...reading,
             current_progress_percent: live.progress * 100,
             current_progress_page: (live.page != null ? live.page : reading.current_progress_page) }

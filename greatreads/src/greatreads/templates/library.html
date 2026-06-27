@@ -202,53 +202,74 @@
         <div class="modal-content">
             <div class="modal-header">
                 <h5 class="modal-title">
-                    <i class="fas fa-edit me-2"></i>Edit Library Item
+                    <i class="fas fa-edit me-2"></i>Edit Book
                 </h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <!-- Book Information (Read-Only) -->
+                <!-- Book Information (Editable, #63) -->
                 <div class="card mb-4" style="background-color: #f8f9fa;">
                     <div class="card-body">
                         <h6 class="card-title mb-3">
                             <i class="fas fa-book me-2"></i>Book Information
-                            <small class="text-muted">(Read-only - Edit on Books page)</small>
                         </h6>
                         <div class="row">
                             <div class="col-md-3">
-                                <div id="editBookCover" class="book-cover-container mb-3" style="width: 100%; max-width: 150px; height: 225px; position: relative; border: 2px solid #dee2e6; border-radius: 8px; overflow: hidden; background: #fff;">
+                                <div id="editBookCover" class="book-cover-container mb-2" style="width: 100%; max-width: 150px; height: 225px; position: relative; border: 2px solid #dee2e6; border-radius: 8px; overflow: hidden; background: #fff;">
                                     <img id="editBookCoverImg" src="" alt="Book Cover" style="width: 100%; height: 100%; object-fit: cover; display: none;">
                                     <div class="book-cover-fallback text-center" style="display: flex; align-items: center; justify-content: center; height: 100%; color: #adb5bd;">
                                         <i class="fas fa-book fa-3x"></i>
                                     </div>
                                 </div>
+                                <label for="editBookCoverInput" class="btn btn-outline-secondary btn-sm w-100" style="max-width: 150px;">
+                                    <i class="fas fa-image me-1"></i>Change cover
+                                </label>
+                                <input type="file" id="editBookCoverInput" accept="image/*" class="d-none" onchange="handleEditCoverUpload(event)">
                             </div>
                             <div class="col-md-9">
-                                <div class="mb-2">
-                                    <strong>Title:</strong> <span id="displayBookTitle"></span>
-                                </div>
-                                <div class="mb-2">
-                                    <strong>Author:</strong> <span id="displayBookAuthor"></span>
-                                </div>
-                                <div class="mb-2">
-                                    <strong>Universe:</strong> <span id="displayBookUniverse"></span>
-                                </div>
-                                <div class="mb-2">
-                                    <strong>Series:</strong> <span id="displayBookSeries"></span>
-                                </div>
-                                <div class="mb-2">
-                                    <strong>Genre:</strong> <span id="displayBookGenre"></span>
-                                </div>
-                                <div class="mb-2 d-flex align-items-center flex-wrap gap-1">
-                                    <strong>Pages:</strong>
-                                    <input type="number" id="editBookPages" min="0" step="1"
-                                           class="form-control form-control-sm" style="width: 90px;"
-                                           title="Pages in the physical edition you care about — drives the TBR page readout">
-                                    <small class="text-muted me-2">physical edition</small>
-                                    <strong>Words:</strong> <span id="displayBookWords" class="ms-1"></span>
-                                </div>
-                                <div class="mb-2">
-                                    <strong>Published:</strong> <span id="displayBookPublished"></span>
+                                <div class="row g-2">
+                                    <div class="col-12">
+                                        <label class="form-label small mb-1 fw-semibold">Title</label>
+                                        <input type="text" id="editBookTitle" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label small mb-1 fw-semibold">Author (first)</label>
+                                        <input type="text" id="editBookAuthorFirst" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label small mb-1 fw-semibold">Author (last)</label>
+                                        <input type="text" id="editBookAuthorSecond" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label small mb-1 fw-semibold">Universe</label>
+                                        <input type="text" id="editBookUniverse" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-6">
+                                        <label class="form-label small mb-1 fw-semibold">Genre</label>
+                                        <input type="text" id="editBookGenre" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-8">
+                                        <label class="form-label small mb-1 fw-semibold">Series</label>
+                                        <input type="text" id="editBookSeries" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small mb-1 fw-semibold">Series #</label>
+                                        <input type="number" id="editBookSeriesNumber" step="0.1" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small mb-1 fw-semibold">Words</label>
+                                        <input type="number" id="editBookWords" min="0" step="1" class="form-control form-control-sm">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small mb-1 fw-semibold">Pages <small class="text-muted fw-normal">(physical)</small></label>
+                                        <input type="number" id="editBookPages" min="0" step="1"
+                                               class="form-control form-control-sm"
+                                               title="Pages in the physical edition you care about — drives the TBR page readout">
+                                    </div>
+                                    <div class="col-md-4">
+                                        <label class="form-label small mb-1 fw-semibold">Published</label>
+                                        <input type="date" id="editBookPublished" class="form-control form-control-sm">
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -1309,30 +1330,29 @@ async function showEditBookModal(book) {
     // Reading-session stats (#57) — async; hidden until it resolves.
     loadBookSessionStats(book.id);
 
-    // Populate read-only book information display
-    document.getElementById('displayBookTitle').textContent = book.title || 'N/A';
-
-    const authorName = [book.author_name_first, book.author_name_second]
-        .filter(n => n)
-        .join(' ') || 'N/A';
-    document.getElementById('displayBookAuthor').textContent = authorName;
-
-    document.getElementById('displayBookUniverse').textContent = book.universe || 'N/A';
-
-    let seriesText = book.series || 'N/A';
-    if (book.series && book.series_number != null) {
-        seriesText = `${book.series} #${book.series_number}`;
-    }
-    document.getElementById('displayBookSeries').textContent = seriesText;
-
-    document.getElementById('displayBookGenre').textContent = book.genre || 'N/A';
-    // Editable physical-edition page count (#11); stash the original so we only
-    // PUT on an actual change.
-    const editBookPages = document.getElementById('editBookPages');
-    editBookPages.value = (book.page_count != null ? book.page_count : '');
-    editBookPages.dataset.original = (book.page_count != null ? String(book.page_count) : '');
-    document.getElementById('displayBookWords').textContent = book.word_count ? book.word_count.toLocaleString() : 'N/A';
-    document.getElementById('displayBookPublished').textContent = book.date_published || 'N/A';
+    // Populate editable book information (#63). Each field stashes its original
+    // value in dataset.original so submit only PUTs the fields that changed.
+    const setBookField = (id, value) => {
+        const el = document.getElementById(id);
+        const v = (value == null ? '' : String(value));
+        el.value = v;
+        el.dataset.original = v;
+    };
+    setBookField('editBookTitle', book.title);
+    setBookField('editBookAuthorFirst', book.author_name_first);
+    setBookField('editBookAuthorSecond', book.author_name_second);
+    setBookField('editBookUniverse', book.universe);
+    setBookField('editBookGenre', book.genre);
+    setBookField('editBookSeries', book.series);
+    setBookField('editBookSeriesNumber', book.series_number);
+    setBookField('editBookWords', book.word_count);
+    // Editable physical-edition page count (#11).
+    setBookField('editBookPages', book.page_count);
+    // <input type=date> needs YYYY-MM-DD; pass through whatever the API gave.
+    setBookField('editBookPublished', book.date_published);
+    // Reset any pending cover file from a previous open.
+    editBookCoverFile = null;
+    document.getElementById('editBookCoverInput').value = '';
 
     // Set book cover image
     const coverImg = document.getElementById('editBookCoverImg');
@@ -1434,24 +1454,46 @@ async function submitEditInventory() {
             });
         }
 
-        // Persist the physical-edition page count if the user changed it (#11).
-        // Durable: nothing in the Calibre/ABS sync writes page_count, so a manual
-        // value sticks across syncs.
-        const pagesEl = document.getElementById('editBookPages');
-        if (pagesEl) {
-            const raw = (pagesEl.value || '').trim();
-            const newPages = raw === '' ? null : parseInt(raw, 10);
-            const origRaw = pagesEl.dataset.original || '';
-            const origPages = origRaw === '' ? null : parseInt(origRaw, 10);
-            if ((raw === '' || !isNaN(newPages)) && newPages !== origPages) {
-                await GreatReads.apiCall(`/books/${bookId}`, {
-                    method: 'PUT',
-                    data: { page_count: newPages }
-                });
-            }
+        // Persist changed book metadata (#63). Each field stashed its loaded
+        // value in dataset.original; only send what actually changed so we don't
+        // clobber Calibre/ABS-synced fields the user didn't touch. page_count is
+        // durable here — nothing in the sync writes it, so a manual value sticks.
+        const bookUpdate = {};
+        const strField = (id, key) => {
+            const el = document.getElementById(id);
+            const val = (el.value || '').trim();
+            if (val !== (el.dataset.original || '')) bookUpdate[key] = val === '' ? null : val;
+        };
+        const numField = (id, key, parser) => {
+            const el = document.getElementById(id);
+            const raw = (el.value || '').trim();
+            if (raw === (el.dataset.original || '')) return;
+            const v = raw === '' ? null : parser(raw);
+            if (raw === '' || !isNaN(v)) bookUpdate[key] = v;
+        };
+        strField('editBookTitle', 'title');
+        strField('editBookAuthorFirst', 'author_name_first');
+        strField('editBookAuthorSecond', 'author_name_second');
+        strField('editBookUniverse', 'universe');
+        strField('editBookGenre', 'genre');
+        strField('editBookSeries', 'series');
+        strField('editBookPublished', 'date_published');
+        numField('editBookSeriesNumber', 'series_number', (r) => parseFloat(r));
+        numField('editBookWords', 'word_count', (r) => parseInt(r, 10));
+        numField('editBookPages', 'page_count', (r) => parseInt(r, 10));
+        // Title is required by the API; never send a blank one.
+        if (bookUpdate.title === null) delete bookUpdate.title;
+        if (Object.keys(bookUpdate).length > 0) {
+            await GreatReads.apiCall(`/books/${bookId}`, { method: 'PUT', data: bookUpdate });
         }
 
-        GreatReads.showToast('Library item updated successfully!', 'success');
+        // Upload a newly chosen cover (#63).
+        if (editBookCoverFile) {
+            await uploadCoverImage(bookId, editBookCoverFile);
+            editBookCoverFile = null;
+        }
+
+        GreatReads.showToast('Book updated successfully!', 'success');
 
         // Close modal
         const modal = bootstrap.Modal.getInstance(document.getElementById('editBookModal'));
