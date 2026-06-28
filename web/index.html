@@ -528,6 +528,25 @@
             padding: 40px;
             color: #888;
         }
+        /* Full-screen app loading overlay (#28). Visible from first paint so the
+           cold start shows a quote screen instead of a black void; lifted by JS
+           once the home grid + its in-progress covers are painted. */
+        .app-loading {
+            position: fixed; inset: 0; z-index: 9999;
+            background: #121212; color: #fff;
+            display: flex; align-items: center; justify-content: center;
+            text-align: center; padding: 24px;
+            transition: opacity .25s ease;
+        }
+        .app-loading-brand {
+            font-weight: 700; font-size: 22px; margin-bottom: 14px;
+            background: linear-gradient(90deg, #0066CC, #FF6600);
+            -webkit-background-clip: text; background-clip: text; color: transparent;
+        }
+        .app-loading-quote {
+            color: #bbb; font-style: italic; max-width: 520px;
+            line-height: 1.5; font-size: 15px;
+        }
         .error {
             background: #ff5252;
             color: #fff;
@@ -610,6 +629,20 @@
     </style>
 </head>
 <body>
+    <div id="app-loading" class="app-loading">
+        <div>
+            <div class="app-loading-brand">GreatReads</div>
+            <div class="app-loading-quote">Loading…</div>
+        </div>
+    </div>
+    <script>
+      // Absolute safety net, independent of the main app script: never trap the
+      // user on the loading screen even if that script throws before lifting it.
+      setTimeout(function () {
+          var o = document.getElementById('app-loading');
+          if (o) o.style.display = 'none';
+      }, 8000);
+    </script>
     <div class="status-bar">
         <div class="status-bar-row1">
             <span id="status-clock"></span>
@@ -2524,13 +2557,77 @@
         };
 
         initDB();
-        // Show saved-highlight quotes while the first page of books loads (#55).
-        if (window.GreatReadsQuotes) GreatReadsQuotes.start(document.querySelector('#content .loading'), API_URL);
-        loadBooks();
-        // Pull /api/progress in parallel with the first page of books so that
-        // any in-progress book that wouldn't be in the first page yet gets
-        // prepended to the grid (and progress bars update) right away.
-        ensureProgressBooksLoaded();
+
+        // ---- App loading overlay (#28) ----
+        // Hold the quote screen over the cold-load + first render so there's no
+        // black void and no covers popping in. It ALWAYS lifts: when the home
+        // grid and its in-progress covers are painted, or after a hard cap.
+        const _appLoadingEl = document.getElementById('app-loading');
+        let _appLoadingDone = false;
+        function hideAppLoading() {
+            if (_appLoadingDone) return;
+            _appLoadingDone = true;
+            if (window.GreatReadsQuotes) { try { GreatReadsQuotes.stop(); } catch (_) {} }
+            if (_appLoadingEl) {
+                _appLoadingEl.style.opacity = '0';
+                setTimeout(() => { _appLoadingEl.style.display = 'none'; }, 250);
+            }
+        }
+        // Load + await a single cover (cache hit is instant; first-ever load
+        // waits on the network) so we only lift once it's actually painted.
+        async function _ensureCoverPainted(img) {
+            const url = img && img.dataset && img.dataset.src;
+            if (!url) return;
+            try {
+                let blob = null;
+                if (db) {
+                    blob = await new Promise((resolve) => {
+                        try {
+                            const r = db.transaction(['covers'], 'readonly').objectStore('covers').get(url);
+                            r.onsuccess = () => resolve(r.result && r.result.blob ? r.result.blob : null);
+                            r.onerror = () => resolve(null);
+                        } catch (_) { resolve(null); }
+                    });
+                }
+                if (!blob) {
+                    const resp = await fetch(url);
+                    if (resp.ok) {
+                        blob = await resp.blob();
+                        if (db) { try { db.transaction(['covers'], 'readwrite').objectStore('covers').put({ id: url, blob }); } catch (_) {} }
+                    }
+                }
+                if (blob) {
+                    img.dataset.loading = 'true';   // keep the lazy observer from re-loading it
+                    img.src = URL.createObjectURL(blob);
+                    if (img.decode) { try { await img.decode(); } catch (_) {} }
+                }
+            } catch (_) {}
+        }
+        // The in-progress books render at the top, so the first cards' covers are
+        // the ones we care about. Cap at 12 so a big library can't stall the lift.
+        async function _waitHomeCovers() {
+            try {
+                const imgs = Array.prototype.slice.call(
+                    document.querySelectorAll('#content .book-cover[data-src]'), 0, 12);
+                await Promise.all(imgs.map(_ensureCoverPainted));
+            } catch (_) {}
+        }
+
+        if (window.GreatReadsQuotes && _appLoadingEl) {
+            GreatReadsQuotes.start(_appLoadingEl.querySelector('.app-loading-quote'), API_URL);
+        }
+        // Load the first page of books + /api/progress in parallel (the latter
+        // prepends any in-progress book not on the first page), then ensure their
+        // covers are painted, then lift the overlay.
+        (async () => {
+            try {
+                await Promise.all([loadBooks(), ensureProgressBooksLoaded()]);
+                await _waitHomeCovers();
+            } catch (_) {}
+            hideAppLoading();
+        })();
+        // Hard cap — lift no matter what (slow/hung network, etc.).
+        setTimeout(hideAppLoading, 4500);
 
         // Deep-link entry for the unified menu: open the Highlights/Bookmarks
         // overlay directly when arriving from a GreatReads navbar link

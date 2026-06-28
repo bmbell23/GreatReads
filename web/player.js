@@ -272,7 +272,9 @@ async function loadPart(i, seekTo, autoplay) {
 
     renderChapters();
     setupMediaSession();
-    setMsg('');
+    // DON'T reveal the player here — the resume seek hasn't landed, so the bar
+    // would show 0% and then jump (#28). Keep the quote loading overlay up; it's
+    // hidden in applyPendingSeek once the saved position is actually applied.
     if (autoplay) { const p = audio.play(); if (p && p.catch) p.catch(() => {}); }
 }
 
@@ -315,6 +317,9 @@ function applyPendingSeek() {
     // Paint the trail immediately so the scrubber shows the correct filled
     // region before the first timeupdate fires.
     updateUI();
+    // Now (and only now) reveal the player — the bar shows the real resumed
+    // position, never 0. Until here the quote loading overlay stayed up (#28).
+    if (resumeApplied) setMsg('');
 }
 audio.addEventListener('loadedmetadata', applyPendingSeek);
 audio.addEventListener('canplay', applyPendingSeek);
@@ -428,6 +433,11 @@ function chapterSeekFromTitle(title, fraction) {
 }
 
 function updateUI() {
+    // During the load window the resume seek hasn't landed yet, so currentTime
+    // sits at 0. A durationchange/timeupdate here would repaint the bar to 0%
+    // over the optimistic resume render, then jump when the seek applies — the
+    // "shows 0, then jumps" symptom (#28). Hold the UI until the seek lands.
+    if (!resumeApplied && pendingSeek > 0) return;
     const t = audio.currentTime || 0;       // part-relative (chapter math)
     const gt = globalTime();                 // book-global (book bar)
     const total = bookTotal();

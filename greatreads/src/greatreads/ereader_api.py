@@ -2453,6 +2453,101 @@ def proxy_hls(subpath, request: Request):
     return StreamingResponse(_gen(), media_type=ct or 'video/mp2t',
                              headers={'Cache-Control': 'no-cache'})
 
+# ---------- Audiobook local-cache: track manifest + Range download (#54 D) ----------
+# These let the client download an audiobook's raw audio file(s) to IndexedDB and
+# play from a blob — no ABS /play session, no transcode warm-up — which is the
+# whole audiobook-open latency (#28) and the offline/dead-zone story for #23/#54.
+# Unlike /play, the manifest starts NO session: it reads the item's audioFiles
+# directly, so it's cheap and side-effect-free. Downloads are keyed by `ino`
+# (the manifest hands them out) so this route never has to re-resolve the item.
+
+@router.get('/api/audiobooks/{abs_id}/tracks')
+def audiobook_tracks(abs_id):
+    """Manifest of an audiobook's raw audio files for local download/caching.
+    Ordered tracks with `ino` (the download key), duration, mime, size and a
+    ready-to-fetch download URL. No transcode session is started (unlike /play),
+    so this is cheap and resume-irrelevant — the client uses it to pre-cache."""
+    if not ABS_ENABLED:
+        return JSONResponse({'error': 'Audiobooks not available'}, status_code=503)
+    item = _abs_get(f'/api/items/{abs_id}', params={'expanded': 1})
+    if not item:
+        return JSONResponse({'error': 'Item not found'}, status_code=502)
+    media = item.get('media') or {}
+    files = media.get('audioFiles') or []
+    tracks = []
+    for f in files:
+        if f.get('exclude') or f.get('invalid') or f.get('error'):
+            continue
+        ino = f.get('ino')
+        if not ino:
+            continue
+        md = f.get('metadata') or {}
+        tracks.append({
+            'index': f.get('index') or (len(tracks) + 1),
+            'ino': str(ino),
+            'duration': float(f.get('duration') or 0),
+            'mime': f.get('mimeType') or 'audio/mpeg',
+            'ext': (md.get('ext') or '').lstrip('.').lower(),
+            'size': int(md.get('size') or 0),
+            'filename': md.get('filename') or '',
+            'url': f'http://{PUBLIC_HOST}/api/audiobooks/{abs_id}/track/{ino}/download',
+        })
+    tracks.sort(key=lambda t: t['index'])
+    # Item-absolute chapters so the player can do chapter math from cache /
+    # direct file-parts without a /play session. The client rebases these onto
+    # each file-part (subtract the part's cumulative start) and offsets by the
+    # item's position when stitching a multi-item edition.
+    chapters = [{
+        'start': float(c.get('start') or 0),
+        'end': float(c.get('end') or 0),
+        'title': c.get('title') or '',
+    } for c in (media.get('chapters') or [])]
+    return {
+        'absId': abs_id,
+        'tracks': tracks,
+        'trackCount': len(tracks),
+        'totalDuration': sum(t['duration'] for t in tracks),
+        'chapters': chapters,
+    }
+
+@router.get('/api/audiobooks/{abs_id}/track/{ino}/download')
+def download_audiobook_track(abs_id, ino, request: Request):
+    """Range-capable proxy of a single ABS audio file (keyed by `ino` from the
+    /tracks manifest). Forwards the client's Range header and relays the upstream
+    status (200/206) + range headers, so a plain <audio src=blob> or a chunked
+    fetch-to-IndexedDB both work. The ABS token stays server-side."""
+    if not ABS_ENABLED:
+        return Response(status_code=503)
+    headers = dict(_abs_headers())
+    rng = request.headers.get('range')
+    if rng:
+        headers['Range'] = rng
+    try:
+        r = requests.get(f'{ABS_URL}/api/items/{abs_id}/file/{ino}',
+                         headers=headers, params={'token': ABS_TOKEN},
+                         stream=True, timeout=60)
+    except Exception as e:
+        print(f"⚠️  ABS track download {abs_id}/{ino} failed: {e}")
+        return Response(status_code=502)
+    if r.status_code >= 400:
+        r.close()
+        return Response(status_code=r.status_code)
+    # Relay range/length headers so the browser can seek; never the ABS token.
+    passthrough = {'Accept-Ranges': 'bytes', 'Cache-Control': 'public, max-age=2592000'}
+    for h in ('Content-Length', 'Content-Range', 'Last-Modified', 'ETag'):
+        if h in r.headers:
+            passthrough[h] = r.headers[h]
+    def _gen():
+        try:
+            for chunk in r.iter_content(chunk_size=65536):
+                if chunk:
+                    yield chunk
+        finally:
+            r.close()
+    return StreamingResponse(_gen(), status_code=r.status_code,
+                             media_type=r.headers.get('Content-Type', 'audio/mpeg'),
+                             headers=passthrough)
+
 # ---------- Highlights & Bookmarks ----------
 # Single endpoint family handles both. An item is:
 #   { id, type: 'highlight'|'bookmark', bookId, bookTitle, bookAuthor,
