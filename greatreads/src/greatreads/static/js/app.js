@@ -769,7 +769,18 @@ function grOpenBookActions(book, opts = {}) {
                     <i class="fas fa-pen-to-square me-2 text-primary"></i>Edit Book
                 </a>` : '';
 
-    const secondaryInner = `${hlLink}${opts.actionsHtml || ''}${editBookLink}`;
+    // "See Reading Sessions" — read-only session history (#77). Hidden until the
+    // async summary below confirms there are qualified sessions; shown on every
+    // caller (Home in-progress, Journal finished) via book.id. Opt out with
+    // opts.sessions === false.
+    const showSessions = opts.sessions !== false && book.id != null;
+    const sessionsBtn = showSessions ? `
+                <button type="button" id="seeSessionsBtn" class="btn btn-sm btn-outline-secondary"
+                        onclick="GreatReads.showReadingSessions(${book.id}, '${titleEnc}')">
+                    <i class="fas fa-clock-rotate-left me-2 text-info"></i>See Reading Sessions
+                </button>` : '';
+
+    const secondaryInner = `${hlLink}${opts.actionsHtml || ''}${sessionsBtn}${editBookLink}`;
     const secondary = secondaryInner.trim() ? `
         <div class="col-12">
             <div class="open-secondary">${secondaryInner}</div>
@@ -813,13 +824,93 @@ function grOpenBookActions(book, opts = {}) {
         }).catch(() => {});
     }
 
+    // Reading-session stats (#77): count + average sitting length, and reveal the
+    // "See Reading Sessions" button. One summary call serves both; only shows once
+    // there are qualified sessions (books read before session logging show nothing).
+    if (showSessions) {
+        // Always show the two rows (even at 0 / —) so they're visible before any
+        // session is logged; the button is always present too.
+        const renderSessionStats = (sessions, minutes) => {
+            const det = document.querySelector('#openBookOptions .open-details');
+            if (!det) return;
+            const avg = sessions > 0 ? formatDuration(minutes / sessions) : '—';
+            det.insertAdjacentHTML('beforeend',
+                `<div class="d-flex justify-content-between gap-3">
+                    <span class="text-muted">Reading Sessions</span>
+                    <span class="fw-medium text-end">${sessions}</span>
+                </div>
+                <div class="d-flex justify-content-between gap-3">
+                    <span class="text-muted">Average Session Time</span>
+                    <span class="fw-medium text-end">${avg}</span>
+                </div>`);
+        };
+        fetch(`${GR_EREADER_API}/sessions-summary-gr/${book.id}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => renderSessionStats((d && d.sessions) || 0, (d && d.minutes) || 0))
+            .catch(() => renderSessionStats(0, 0));
+    }
+
     if (typeof opts.onShow === 'function') opts.onShow(book);
+}
+
+// "See Reading Sessions" (#77): read-only list of every qualified sitting for a
+// book. Stacks above the cover popup. Columns: Date & Time (YYMMDD - HH:MM-HH:MM),
+// Duration, Words, WPM — newest first.
+function grShowReadingSessions(bookId, titleEnc) {
+    const modalEl = document.getElementById('readingSessionsModal');
+    if (!modalEl) return;
+    const title = decodeURIComponent(titleEnc || '');
+    document.getElementById('rsModalTitle').textContent =
+        title ? `Reading Sessions — ${title}` : 'Reading Sessions';
+    const body = document.getElementById('rsModalBody');
+    body.innerHTML = '<div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin"></i></div>';
+    bootstrap.Modal.getOrCreateInstance(modalEl).show();
+
+    // YYMMDD - HH:MM-HH:MM from epoch-ms start/end (local time, matching activity_date).
+    const fmtDT = (start, end) => {
+        const s = new Date(start), e = new Date(end), p = n => String(n).padStart(2, '0');
+        const ymd = p(s.getFullYear() % 100) + p(s.getMonth() + 1) + p(s.getDate());
+        const hm = d => p(d.getHours()) + ':' + p(d.getMinutes());
+        return `${ymd} - ${hm(s)}-${hm(e)}`;
+    };
+
+    fetch(`${GR_EREADER_API}/sessions-list-gr/${bookId}`)
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+            const sessions = (d && d.sessions) || [];
+            if (!sessions.length) {
+                body.innerHTML = '<p class="text-muted mb-0 text-center py-3">No reading sessions recorded.</p>';
+                return;
+            }
+            const rowsHtml = sessions.map(ss => `
+                <tr>
+                    <td class="text-nowrap">${fmtDT(ss.startedAt, ss.endedAt)}</td>
+                    <td class="text-end">${formatDuration(ss.minutes)}</td>
+                    <td class="text-end">${Number(ss.words || 0).toLocaleString()}</td>
+                    <td class="text-end">${ss.wpm != null ? ss.wpm : '—'}</td>
+                </tr>`).join('');
+            body.innerHTML = `
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0 align-middle">
+                        <thead><tr>
+                            <th>Date &amp; Time</th>
+                            <th class="text-end">Duration</th>
+                            <th class="text-end">Words</th>
+                            <th class="text-end">WPM</th>
+                        </tr></thead>
+                        <tbody>${rowsHtml}</tbody>
+                    </table>
+                </div>`;
+        })
+        .catch(() => {
+            body.innerHTML = '<p class="text-danger mb-0 text-center py-3">Error loading sessions.</p>';
+        });
 }
 
 // Tap the Physical card (in-progress physical book) → lightweight progress popup.
 // Reuses PUT /readings/{id}/progress, which sets the manual override + recalcs
 // days_estimate/chains; physical progress then keeps advancing via WPD (#33).
-function grUpdatePhysicalProgress(addMinutes) {
+function grUpdatePhysicalProgress(addMinutes, session) {
     const reading = grActivePhysicalReading;
     if (!reading) return;
 
@@ -892,6 +983,16 @@ function grUpdatePhysicalProgress(addMinutes) {
         await minutesLoad;
         const params = { current_percent: pct };
         if (_minutesLoaded || _minutesTouched) params.minutes_read = Math.max(0, parseInt(minEl.value) || 0);
+        // From a timed reading session → also record a per-sitting Physical session
+        // row (#78): minutes from the timer, words from this session's % delta.
+        if (session && session.startMs) {
+            params.session_id = (window.crypto && window.crypto.randomUUID)
+                ? window.crypto.randomUUID()
+                : ('phys-' + Date.now() + '-' + Math.floor(Math.random() * 1e9));
+            params.session_start_ms = session.startMs;
+            params.session_seconds = Math.round(session.seconds || 0);
+            params.start_percent = session.startPct || 0;
+        }
         try {
             await apiCall(`/readings/${reading.id}/progress`, {
                 method: 'PUT',
@@ -967,7 +1068,8 @@ function grStartReadingSession() {
     const pm = bootstrap.Modal.getInstance(document.getElementById('physProgressModal'));
     if (pm) pm.hide();
 
-    _sess = { readingId: reading.id, accSec: 0, startMs: Date.now(), running: true, tid: null };
+    _sess = { readingId: reading.id, accSec: 0, startMs: Date.now(), running: true, tid: null,
+              startPct: (reading.current_progress_percent || 0) };  // session start position (#78)
     _grForceWake = true;   // never let the screen time out during a reading session
     document.getElementById('sessBookTitle').textContent = (reading.book && reading.book.title) || '';
     document.getElementById('sessState').textContent = 'Reading…';
@@ -1018,6 +1120,9 @@ function _sessVis() { if (document.hidden && _sess && _sess.running) grSessionPa
 function grSessionDone() {
     if (!_sess) return;
     const mins = Math.round(_sessElapsedSec() / 60);
+    // Capture the sitting's timing + start position before tearing _sess down, so
+    // the save can record a Physical reading_sessions row (#78).
+    const session = { startMs: _sess.startMs, seconds: _sessElapsedSec(), startPct: _sess.startPct || 0 };
     if (_sess.tid) clearInterval(_sess.tid);
     document.removeEventListener('visibilitychange', _sessVis);
     _grForceWake = false;             // session over → revert to the global setting
@@ -1027,7 +1132,7 @@ function grSessionDone() {
     grSessBrightnessStop();           // restore system brightness on leaving
     const sm = bootstrap.Modal.getInstance(document.getElementById('readingSessionModal'));
     if (sm) sm.hide();
-    grUpdatePhysicalProgress(mins);   // reopen popup, add session minutes to today's total
+    grUpdatePhysicalProgress(mins, session);   // reopen popup; also logs a Physical session row (#78)
 }
 
 // ---- Ambient music for the physical reading session (#32) ------------------
@@ -1177,6 +1282,7 @@ window.GreatReads = {
     recalculateChains,
     showEditModal,
     openBookActions: grOpenBookActions,
+    showReadingSessions: grShowReadingSessions,
     updatePhysicalProgress: grUpdatePhysicalProgress,
     startReadingSession: grStartReadingSession,
     formatDateSmart,

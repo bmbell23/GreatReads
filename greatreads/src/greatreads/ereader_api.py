@@ -2801,6 +2801,11 @@ def _session_keys_for_gr_book(gr_book_id):
             rows = conn.execute(
                 'SELECT source, external_id FROM external_imports WHERE book_id=?',
                 (gr_book_id,)).fetchall()
+            # Physical sittings have no external_import — they're keyed
+            # phys:<reading_id> (matching stats.py / format_dominance). Include every
+            # reading of this book so physical sessions surface in the view. (#78)
+            phys_rows = conn.execute(
+                'SELECT id FROM read WHERE book_id=?', (gr_book_id,)).fetchall()
         finally:
             conn.close()
         for r in rows:
@@ -2812,6 +2817,8 @@ def _session_keys_for_gr_book(gr_book_id):
                 keys.append(str(ext))
             elif 'audiobookshelf' in src or src == 'abs':
                 keys.append('abs:' + str(ext))
+        for pr in phys_rows:
+            keys.append('phys:' + str(pr['id']))
     except Exception:
         pass
     return keys
@@ -2894,6 +2901,52 @@ def gr_book_sessions_summary(gr_book_id):
         out = _sessions_summary_for_keys(_session_keys_for_gr_book(gr_book_id), wc)
         out['bookId'] = str(gr_book_id)
         return out
+    except Exception as e:
+        return JSONResponse({'error': str(e)}, status_code=500)
+
+@router.get('/api/sessions-list-gr/{gr_book_id}')
+def gr_book_sessions_list(gr_book_id):
+    """Full per-session list for a GreatReads book id (read-only), backing the
+    "See Reading Sessions" view (#77). Resolves reader keys via external_imports
+    and returns each qualified sitting newest-first: time span, duration (minutes),
+    words, and WPM (measured ms/word for ebook, else words/minute)."""
+    try:
+        keys = [str(k) for k in (_session_keys_for_gr_book(gr_book_id) or []) if k]
+        sessions = []
+        if keys:
+            ph = ','.join(['?'] * len(keys))
+            conn = _gr_db()
+            try:
+                _ensure_reading_sessions_table(conn)
+                _prune_reading_sessions(conn)
+                rows = conn.execute(
+                    'SELECT format, started_at, ended_at, minutes, words, '
+                    ' wpm_mpw_sum, wpm_n '
+                    'FROM reading_sessions WHERE book_key IN (' + ph + ') AND ' +
+                    _SESSION_QUALIFIED_SQL + ' ORDER BY started_at DESC', keys).fetchall()
+            finally:
+                conn.close()
+            for r in rows:
+                minutes = round(float(r['minutes'] or 0), 1)
+                words = int(r['words'] or 0)
+                mpw_sum = r['wpm_mpw_sum'] or 0
+                mpw_n = r['wpm_n'] or 0
+                wpm = None
+                if mpw_n and mpw_sum and mpw_sum > 0:
+                    mpw = mpw_sum / mpw_n
+                    if mpw > 0:
+                        wpm = round(60000.0 / mpw)  # measured ms/word → WPM
+                if wpm is None and minutes > 0 and words > 0:
+                    wpm = round(words / minutes)
+                sessions.append({
+                    'format': r['format'],
+                    'startedAt': r['started_at'],
+                    'endedAt': r['ended_at'],
+                    'minutes': minutes,
+                    'words': words,
+                    'wpm': wpm,
+                })
+        return {'bookId': str(gr_book_id), 'sessions': sessions}
     except Exception as e:
         return JSONResponse({'error': str(e)}, status_code=500)
 

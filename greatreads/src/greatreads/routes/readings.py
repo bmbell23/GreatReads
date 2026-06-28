@@ -262,6 +262,10 @@ async def update_reading_progress(
     reading_id: int,
     current_percent: float,
     minutes_read: Optional[float] = None,
+    session_id: Optional[str] = None,
+    session_start_ms: Optional[int] = None,
+    session_seconds: Optional[float] = None,
+    start_percent: Optional[float] = None,
     db: Session = Depends(get_db)
 ):
     """Realign the current progress percentage for an in-progress reading.
@@ -359,6 +363,35 @@ async def update_reading_progress(
                 "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET "
                 "words=excluded.words, minutes=excluded.minutes"),
                 {"d": today_str, "bk": book_key, "w": today_words, "mins": max(0.0, float(minutes_read))})
+
+        # Record this sitting as a reading_sessions row too (#78), so physical
+        # sittings appear in the per-session view like ebook/audio. PURELY ADDITIVE:
+        # the daily reading_activity above stays the stats source — only ebook rows
+        # are ever rederived from sessions, so physical sessions are never rolled up
+        # and cannot double-count. minutes come from the session timer; words are
+        # THIS session's position delta (end% − start%), not the daily cumulative.
+        if session_id and session_start_ms:
+            now_ms = int(datetime.now().timestamp() * 1000)
+            sess_minutes = round(max(0.0, float(session_seconds or 0)) / 60.0, 2)
+            start_pct_val = max(0.0, min(100.0,
+                float(start_percent if start_percent is not None else current_percent)))
+            sess_words = max(0, round((current_percent - start_pct_val) / 100.0 * word_count))
+            db.execute(_sql(
+                "CREATE TABLE IF NOT EXISTS reading_sessions ("
+                " id TEXT PRIMARY KEY, book_key TEXT NOT NULL, format TEXT NOT NULL,"
+                " started_at INTEGER NOT NULL, ended_at INTEGER, activity_date TEXT,"
+                " minutes REAL NOT NULL DEFAULT 0, words INTEGER NOT NULL DEFAULT 0,"
+                " start_pct REAL, end_pct REAL, wpm_mpw_sum REAL NOT NULL DEFAULT 0,"
+                " wpm_n INTEGER NOT NULL DEFAULT 0, device TEXT, updated INTEGER)"))
+            db.execute(_sql(
+                "INSERT INTO reading_sessions(id,book_key,format,started_at,ended_at,"
+                " activity_date,minutes,words,start_pct,end_pct,wpm_mpw_sum,wpm_n,device,updated) "
+                "VALUES(:id,:bk,'Physical',:st,:en,:d,:mins,:w,:sp,:ep,0,0,'physical',:u) "
+                "ON CONFLICT(id) DO UPDATE SET ended_at=excluded.ended_at, minutes=excluded.minutes,"
+                " words=excluded.words, end_pct=excluded.end_pct, updated=excluded.updated"),
+                {"id": str(session_id), "bk": book_key, "st": int(session_start_ms),
+                 "en": now_ms, "d": today_str, "mins": sess_minutes, "w": sess_words,
+                 "sp": start_pct_val / 100.0, "ep": current_percent / 100.0, "u": now_ms})
 
     db.commit()
 

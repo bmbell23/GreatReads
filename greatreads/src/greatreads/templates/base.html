@@ -183,6 +183,20 @@
         </div>
     </div>
 
+    <!-- Read-only reading-session history (#77). Opened from the cover popup's
+         "See Reading Sessions" button; stacks above #openBookModal. -->
+    <div class="modal fade" id="readingSessionsModal" tabindex="-1">
+        <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h5 class="modal-title text-truncate" id="rsModalTitle">Reading Sessions</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                </div>
+                <div class="modal-body" id="rsModalBody"></div>
+            </div>
+        </div>
+    </div>
+
     <!-- Lightweight physical-progress update popup (#33). Distinct id from the
          richer per-page updateProgressModal (e.g. tbr.html) to avoid collision. -->
     <div class="modal fade" id="physProgressModal" tabindex="-1">
