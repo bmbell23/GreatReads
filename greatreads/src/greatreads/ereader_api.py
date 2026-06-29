@@ -2729,6 +2729,27 @@ def get_progress(book_id):
         return JSONResponse({'error': 'not found'}, status_code=404)
     return item
 
+@router.post('/api/progress/{book_id}/reset-credit-mark')
+def reset_progress_credit_mark(book_id):
+    """Reset the word-credit high-water-mark (#79/#86) down to the current position,
+    so forward reading credits words again after a poisoned maxProgress/maxPosition
+    (e.g. a broken EPUB reported a spurious-high spot). Best-effort."""
+    with _progress_lock:
+        data = _load_progress()
+        item = data.get(str(book_id))
+        if not item:
+            return JSONResponse({'error': 'not found'}, status_code=404)
+        if item.get('progress') is not None:
+            try: item['maxProgress'] = float(item['progress'])
+            except (TypeError, ValueError): pass
+        if item.get('position') is not None:
+            try: item['maxPosition'] = float(item['position'])
+            except (TypeError, ValueError): pass
+        data[str(book_id)] = item
+        _save_progress(data)
+    return {'progress': item.get('progress'), 'maxProgress': item.get('maxProgress'),
+            'position': item.get('position'), 'maxPosition': item.get('maxPosition')}
+
 @router.put('/api/progress/{book_id}')
 async def put_progress(book_id, request: Request):
     """Upsert progress for one book. Body is the partial record; we fill in

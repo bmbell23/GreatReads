@@ -780,7 +780,18 @@ function grOpenBookActions(book, opts = {}) {
                     <i class="fas fa-clock-rotate-left me-2 text-info"></i>See Reading Sessions
                 </button>` : '';
 
-    const secondaryInner = `${hlLink}${opts.actionsHtml || ''}${sessionsBtn}${editBookLink}`;
+    // "Reset word-credit mark" (#86): unsticks the #79 high-water-mark when it got
+    // poisoned (e.g. a broken EPUB reported a spurious-high spot) so forward reading
+    // credits words again. Hidden until the async progress fetch below confirms the
+    // mark is actually ahead of the current position.
+    const progKey = book.calibre_id ? String(book.calibre_id) : (book.abs_id ? 'abs:' + book.abs_id : '');
+    const resetCreditBtn = progKey ? `
+                <button type="button" id="resetCreditBtn" class="btn btn-sm btn-outline-secondary d-none"
+                        onclick="GreatReads.resetCreditMark('${progKey.replace(/'/g, '%27')}')">
+                    <i class="fas fa-rotate-left me-2 text-warning"></i>Reset word-credit mark
+                </button>` : '';
+
+    const secondaryInner = `${hlLink}${opts.actionsHtml || ''}${sessionsBtn}${resetCreditBtn}${editBookLink}`;
     const secondary = secondaryInner.trim() ? `
         <div class="col-12">
             <div class="open-secondary">${secondaryInner}</div>
@@ -850,6 +861,32 @@ function grOpenBookActions(book, opts = {}) {
             .catch(() => renderSessionStats(0, 0));
     }
 
+    // Reading position + word-credit mark (#86): show the current position, and if
+    // the #79 high-water-mark is ahead of it (so words aren't crediting), surface it
+    // and reveal the reset button.
+    if (progKey) {
+        fetch(`${GR_EREADER_API}/progress/${encodeURIComponent(progKey)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(p => {
+                if (!p || typeof p.progress !== 'number') return;
+                const det = document.querySelector('#openBookOptions .open-details');
+                const pct = Math.round(p.progress * 100);
+                const hwm = (typeof p.maxProgress === 'number') ? p.maxProgress : null;
+                const stuck = hwm != null && hwm > p.progress + 0.005;
+                if (det) {
+                    let rows = `<div class="d-flex justify-content-between gap-3">
+                        <span class="text-muted">Reading position</span>
+                        <span class="fw-medium text-end">${pct}%${p.page ? ` · p. ${p.page}` : ''}</span></div>`;
+                    if (stuck) rows += `<div class="d-flex justify-content-between gap-3">
+                        <span class="text-muted">Word credit resumes past</span>
+                        <span class="fw-medium text-end" style="color:#dc3545;">${Math.round(hwm * 100)}%</span></div>`;
+                    det.insertAdjacentHTML('beforeend', rows);
+                }
+                if (stuck) { const b = document.getElementById('resetCreditBtn'); if (b) b.classList.remove('d-none'); }
+            })
+            .catch(() => {});
+    }
+
     if (typeof opts.onShow === 'function') opts.onShow(book);
 }
 
@@ -905,6 +942,21 @@ function grShowReadingSessions(bookId, titleEnc) {
         .catch(() => {
             body.innerHTML = '<p class="text-danger mb-0 text-center py-3">Error loading sessions.</p>';
         });
+}
+
+// Reset the #79 word-credit high-water-mark to the current position (#86), so
+// forward reading credits words again after it got poisoned (e.g. a broken EPUB).
+function grResetCreditMark(key) {
+    if (!key) return;
+    fetch(`${GR_EREADER_API}/progress/${encodeURIComponent(key)}/reset-credit-mark`, { method: 'POST' })
+        .then(r => r.ok ? r.json() : null)
+        .then(d => {
+            showToast(d ? 'Word-credit mark reset — forward reading will count again'
+                        : 'Could not reset (no saved progress yet)', d ? 'success' : 'warning');
+            const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+            if (m) m.hide();
+        })
+        .catch(() => showToast('Reset failed', 'warning'));
 }
 
 // Tap the Physical card (in-progress physical book) → lightweight progress popup.
@@ -1283,6 +1335,7 @@ window.GreatReads = {
     showEditModal,
     openBookActions: grOpenBookActions,
     showReadingSessions: grShowReadingSessions,
+    resetCreditMark: grResetCreditMark,
     updatePhysicalProgress: grUpdatePhysicalProgress,
     startReadingSession: grStartReadingSession,
     formatDateSmart,

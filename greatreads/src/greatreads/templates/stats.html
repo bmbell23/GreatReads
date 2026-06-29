@@ -125,10 +125,12 @@
                             <button type="button" class="btn btn-outline-secondary" id="goalMetricTime" onclick="setGoalMetric('time')">Time</button>
                         </div>
                         <div class="btn-group btn-group-sm" role="group">
-                            <button type="button" class="btn btn-outline-secondary active" id="goalGranDay" onclick="setGoalGranularity('day')">Day</button>
-                            <button type="button" class="btn btn-outline-secondary" id="goalGranWeek" onclick="setGoalGranularity('week')">Week</button>
-                            <button type="button" class="btn btn-outline-secondary" id="goalGranMonth" onclick="setGoalGranularity('month')">Month</button>
-                            <button type="button" class="btn btn-outline-secondary" id="goalGranYear" onclick="setGoalGranularity('year')">Year</button>
+                            <button type="button" class="btn btn-outline-secondary active" id="goalGranToday" onclick="setGoalGranularity('today')">Today</button>
+                            <button type="button" class="btn btn-outline-secondary" id="goalGranWeek7" onclick="setGoalGranularity('week7')">This Week</button>
+                            <button type="button" class="btn btn-outline-secondary" id="goalGranDay" onclick="setGoalGranularity('day')">This Month</button>
+                            <button type="button" class="btn btn-outline-secondary" id="goalGranWeek" onclick="setGoalGranularity('week')">Weeks</button>
+                            <button type="button" class="btn btn-outline-secondary" id="goalGranMonth" onclick="setGoalGranularity('month')">Months</button>
+                            <button type="button" class="btn btn-outline-secondary" id="goalGranYear" onclick="setGoalGranularity('year')">Years</button>
                         </div>
                     </div>
                 </div>
@@ -1964,7 +1966,8 @@ const GOAL_FMTS = [['Ebook','ebook_wpd'],['Audio','audio_wpd'],['Physical','phys
 let goalChart = null;
 let goalGoals = {};          // {ebook_wpd, audio_wpd, physical_wpd}
 let goalMonth = null;        // Date pinned to the 1st of the displayed month
-let goalGran = 'day';
+let sessionsByDate = {};     // {YYYY-MM-DD: [sessions]} cache for the intraday 'Today' view (#83)
+let goalGran = 'today';
 let goalMetric = 'words';    // 'words' | 'time' — what the trend chart plots
 let goalSelected = null;     // 'YYYY-MM-DD'
 
@@ -1975,10 +1978,17 @@ function _minutesOn(fmt, ds) { const dm = (activityData && activityData.daily_mi
 function _dailyGoalTotal() { return GOAL_FMTS.reduce((s, [, k]) => s + (Number(goalGoals[k]) || 0), 0); }
 function _daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 function _daysInYear(y) { return ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365; }
+// Fetch & cache a day's reading sessions for the intraday 'Today' chart (#83).
+async function ensureDaySessions(ds) {
+    if (sessionsByDate[ds] !== undefined) return;
+    try { const r = await GreatReads.apiCall('/stats/sessions-today?date=' + ds); sessionsByDate[ds] = (r && r.sessions) || []; }
+    catch (_) { sessionsByDate[ds] = []; }
+}
 
 async function loadGoals() {
     try { goalGoals = await GreatReads.apiCall('/settings/reading-speeds') || {}; } catch (_) { goalGoals = {}; }
     if (!activityData) { try { activityData = await GreatReads.apiCall('/stats/activity'); } catch (_) { activityData = {}; } }
+    await ensureDaySessions(_todayStr());
     if (!goalMonth) { const t = new Date(); goalMonth = new Date(t.getFullYear(), t.getMonth(), 1); }
     document.getElementById('goalPrevMonth').onclick = () => { goalMonth = new Date(goalMonth.getFullYear(), goalMonth.getMonth() - 1, 1); renderGoalCalendar(); if (goalGran === 'day') renderGoalChart(); };
     document.getElementById('goalNextMonth').onclick = () => { goalMonth = new Date(goalMonth.getFullYear(), goalMonth.getMonth() + 1, 1); renderGoalCalendar(); if (goalGran === 'day') renderGoalChart(); };
@@ -2025,6 +2035,8 @@ function selectGoalDay(ds) {
     goalSelected = (goalSelected === ds) ? null : ds;
     renderGoalCalendar();
     renderGoalDayDetail();
+    // Clicking a calendar day swaps the chart to that day's intraday sessions (#83).
+    setGoalGranularity('today');
 }
 
 function renderGoalDayDetail() {
@@ -2095,7 +2107,7 @@ function renderGoalRecords() {
 
 function setGoalGranularity(g) {
     goalGran = g;
-    ['Day', 'Week', 'Month', 'Year'].forEach(x => document.getElementById('goalGran' + x).classList.toggle('active', x.toLowerCase() === g));
+    ['Today', 'Week7', 'Day', 'Week', 'Month', 'Year'].forEach(x => document.getElementById('goalGran' + x).classList.toggle('active', x.toLowerCase() === g));
     renderGoalChart();
 }
 
@@ -2127,7 +2139,48 @@ function renderGoalChart() {
 
     const metricName = isTime ? 'Time' : 'Words';
     let title;
-    if (goalGran === 'day') {
+    if (goalGran === 'today') {
+        // Intraday (#83): 96 fifteen-minute slots midnight→midnight for the selected
+        // day (default today); each session's minutes + words split across the slots
+        // it overlaps, stacked by format. Lazy-loads the day's sessions then re-renders.
+        const chartDate = goalSelected || _todayStr();
+        if (sessionsByDate[chartDate] === undefined) {
+            ensureDaySessions(chartDate).then(() => { if (goalGran === 'today') renderGoalChart(); });
+        }
+        const sess = sessionsByDate[chartDate] || [];
+        const SLOTS = 96, SLOT_MS = 15 * 60000;
+        GOAL_FMTS.forEach(([f]) => { words[f] = new Array(SLOTS).fill(0); mins[f] = new Array(SLOTS).fill(0); });
+        for (let s = 0; s < SLOTS; s++) {
+            labels.push((s % 4 === 0) ? String(Math.floor(s / 4)).padStart(2, '0') + ':00' : '');
+            goalLine.push(0);
+        }
+        const [yy, mm, dd] = chartDate.split('-').map(Number);
+        const dayStartMs = new Date(yy, mm - 1, dd, 0, 0, 0, 0).getTime();
+        sess.forEach(ss => {
+            const f = ss.format;
+            if (!words[f]) return;                       // unknown/legacy format
+            const st = ss.startedAt, en = ss.endedAt, durMs = en - st;
+            if (!(durMs > 0)) return;
+            const durMin = durMs / 60000, wTot = ss.words || 0;
+            for (let s = 0; s < SLOTS; s++) {
+                const slotStart = dayStartMs + s * SLOT_MS, slotEnd = slotStart + SLOT_MS;
+                const ov = Math.min(en, slotEnd) - Math.max(st, slotStart);
+                if (ov > 0) { const fr = ov / durMs; mins[f][s] += durMin * fr; words[f][s] += wTot * fr; }
+            }
+        });
+        title = (chartDate === _todayStr() ? 'Today'
+                 : new Date(chartDate + 'T00:00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric' }))
+                + ' — reading sessions';
+    } else if (goalGran === 'week7') {
+        // Last 7 days (today + previous 6), one daily bar each.
+        const t = new Date();
+        for (let i = 6; i >= 0; i--) {
+            const dd = new Date(t.getFullYear(), t.getMonth(), t.getDate() - i);
+            addBucket(dd.toLocaleDateString('en-US', { month: 'short', day: 'numeric' }),
+                      [_ymd(dd.getFullYear(), dd.getMonth(), dd.getDate())], 1);
+        }
+        title = `${metricName} per day — last 7 days`;
+    } else if (goalGran === 'day') {
         const y = goalMonth.getFullYear(), m = goalMonth.getMonth(), n = _daysInMonth(y, m);
         for (let d = 1; d <= n; d++) addBucket(String(d), [_ymd(y, m, d)], 1);
         title = `${metricName} per day — ` + goalMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
@@ -2171,7 +2224,7 @@ function renderGoalChart() {
         backgroundColor: COLORS[f], borderColor: COLORS[f], borderWidth: 1, borderRadius: 3, stack: 'main'
     }));
     // Goal line only applies to the words metric (there's no per-format time goal).
-    if (!isTime && _dailyGoalTotal() > 0) datasets.push({
+    if (goalGran !== 'today' && !isTime && _dailyGoalTotal() > 0) datasets.push({
         // Show points when there are few buckets (week/month/year often collapse
         // to 1–2 points — a 0-radius line would be invisible); clean dashed line
         // for the many-point day view. (#39)

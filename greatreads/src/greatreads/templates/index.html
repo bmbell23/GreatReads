@@ -4,6 +4,9 @@
 
 {% block content %}
 <style>
+    /* Center the Home content as one column on wide screens, so the stats / daily
+       bars / in-progress books all share the same centered width (#84). */
+    .home-col { max-width: 720px; margin-left: auto; margin-right: auto; }
     /* Daily per-format goal bars (#76). golden-shimmer is defined globally in
        static/css/style.css (reused from the gold completion glow). */
     .dg-track { position: relative; flex: 1; height: 15px; background: #e9ecef; border-radius: 8px; }
@@ -61,7 +64,7 @@
 </style>
 <!-- High-level stats first (the 5 counts + this-year momentum), tight padding (#65) -->
 <div class="row">
-    <div class="col-12 mb-2">
+    <div class="col-12 mb-2 home-col">
         <div class="card">
             <div class="card-body py-2">
                 <div class="row text-center g-0">
@@ -123,7 +126,7 @@
 <!-- Daily per-format goal progress (#76): today's words vs goal per format.
      Hidden until populated (and stays hidden if no goals are configured). -->
 <div class="row">
-    <div class="col-12 mb-2">
+    <div class="col-12 mb-2 home-col">
         <div class="card d-none" id="daily-goals-card">
             <div class="card-body py-2" id="daily-goals"></div>
         </div>
@@ -133,7 +136,7 @@
 <!-- Currently Reading (in-progress books live here now, #65; header dropped #76
      to make room for the daily-goal bars above). -->
 <div class="row">
-    <div class="col-12 mb-2">
+    <div class="col-12 mb-2 home-col">
         <div class="card">
             <div class="card-body">
                 <div id="currently-reading">
@@ -314,11 +317,19 @@
 // or modals — navigate elsewhere via the navbar. Format-dominance theming/breakdown
 // is a follow-up once #67 lands; for now cards theme by the reading's designated media.
 
+// Hold the quote loading overlay (#28) until Home's data is actually in, so it
+// doesn't lift to a blank screen mid-fetch. Set SYNCHRONOUSLY (at parse time) so
+// base.html's lift always sees it; resolved once the loads finish. (#85)
+let _homeReadyResolve;
+window.__pageReady = new Promise((r) => { _homeReadyResolve = r; });
+
 document.addEventListener('DOMContentLoaded', function() {
-    loadDashboardStats();
-    loadMomentum();
-    loadDailyGoals();
-    loadCurrentlyReading();
+    Promise.all([
+        loadDashboardStats(),
+        loadMomentum(),
+        loadDailyGoals(),
+        loadCurrentlyReading(),
+    ]).catch(() => {}).finally(() => { if (_homeReadyResolve) _homeReadyResolve(); });
 });
 
 async function loadDashboardStats() {
@@ -452,16 +463,14 @@ function formatBreakdownHtml(formats, primary) {
         .filter(e => e.words > 0 || e.minutes > 0);
     if (!entries.length) return '<div class="mb-2 small text-muted">No reading time logged yet</div>';
     const total = entries.reduce((s, e) => s + e.words, 0) || 1;
-    // Dominant/primary first (so the star is leftmost), then the rest by words desc.
-    entries.sort((a, b) => (a.f === primary ? -1 : b.f === primary ? 1 : b.words - a.words));
-    const star = '<i class="fas fa-star" style="color:#f5c518; font-size:0.62rem;" title="primary format"></i>';
-    return '<div class="mb-2 d-flex align-items-center flex-nowrap gap-3" style="font-size:0.78rem; white-space:nowrap;">' +
-        star +
-        entries.map(e => {
+    // Most-dominant (highest share) first, descending → least on the right. No star
+    // (it conveyed nothing); order + color carry it. Tight gap so all 3 formats fit.
+    entries.sort((a, b) => b.words - a.words);
+    return '<div class="mb-2 d-flex align-items-center flex-nowrap gap-2" style="font-size:0.78rem; white-space:nowrap;">' +
+        entries.map((e, i) => {
             const s = getMediaStyle(e.f);
             const pct = Math.round(e.words / total * 100);
-            const pri = e.f === primary;
-            return `<span style="color:${s.color}; font-weight:${pri ? 700 : 500};" title="${e.f}">`
+            return `<span style="color:${s.color}; font-weight:${i === 0 ? 700 : 500};" title="${e.f}">`
                 + `${pct}% &middot; ${fmtMinutes(e.minutes)}</span>`;
         }).join('') + '</div>';
 }

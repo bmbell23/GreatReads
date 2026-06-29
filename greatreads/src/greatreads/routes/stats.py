@@ -781,6 +781,33 @@ async def get_reading_activity(db: Session = Depends(get_db)) -> Dict[str, Any]:
             "daily_wpm": daily_wpm, "totals": totals}
 
 
+@router.get("/sessions-today")
+async def get_sessions_today(date: str, db: Session = Depends(get_db)) -> Dict[str, Any]:
+    """Today's qualifying reading sessions across all books, for the intraday
+    Daily-Goals 'Today' view (#83). `date` = the client's local YYYY-MM-DD (matched
+    against reading_sessions.activity_date, which is already stored client-local).
+    started_at/ended_at are epoch ms. Read-only; same qualifying filter as the
+    per-book session endpoints (>=1 min OR >=250 words)."""
+    sessions = []
+    try:
+        rows = db.execute(text(
+            "SELECT format, started_at, ended_at, minutes, words "
+            "FROM reading_sessions WHERE activity_date = :d "
+            "AND (minutes >= 1.0 OR words >= 250) ORDER BY started_at"
+        ), {"d": date}).fetchall()
+        for fmt, st, en, mins, words in rows:
+            sessions.append({
+                "format": fmt,
+                "startedAt": st,
+                "endedAt": en,
+                "minutes": round(float(mins or 0), 2),
+                "words": int(words or 0),
+            })
+    except Exception:
+        sessions = []   # reading_sessions not created yet → nothing logged
+    return {"date": date, "sessions": sessions}
+
+
 @router.get("/book-time/{book_id}")
 async def get_book_reading_time(book_id: int, db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Per-book real reading/listening time (#30), for the card popups. Resolves the
