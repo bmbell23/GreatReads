@@ -47,6 +47,12 @@ async def get_unread_count(db: Session = Depends(get_db)):
     return {"count": news_service.unread_count(db)}
 
 
+@router.get("/author-reads")
+async def get_author_reads(author: str, db: Session = Depends(get_db)):
+    """Books the user has finished by this author (for the card detail popup)."""
+    return {"author": author, "books": news_service.author_finished_books(db, author)}
+
+
 @router.post("/seen")
 async def post_seen(body: SeenBody, db: Session = Depends(get_db)):
     """Mark one item seen (with id) or all unseen items seen (no id) — clears the badge."""

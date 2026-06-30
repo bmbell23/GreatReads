@@ -33,7 +33,7 @@ from ..models.inventory import Inventory
 from ..models.news_item import NewsItem
 from ..models.reading import Reading
 from ..models.user_settings import UserSettings
-from ..services.import_service import _best_match, _build_existing, _word_tokens
+from ..services.import_service import _best_match, _build_existing, _split_author, _word_tokens
 
 logger = logging.getLogger(__name__)
 
@@ -693,6 +693,28 @@ def mark_seen(db: Session, item_id: Optional[int] = None) -> None:
     for i in q.all():
         i.seen = True
     db.commit()
+
+
+def author_finished_books(db: Session, author_name: str) -> list[dict]:
+    """Books the user has finished by this author — for the News card's detail popup."""
+    first, second = _split_author(author_name or "")
+    q = (db.query(Book).join(Reading, Reading.book_id == Book.id)
+         .filter(Reading.date_finished_actual.isnot(None)))
+    if second:
+        q = q.filter(Book.author_name_second.ilike(second))
+    target = _word_tokens(author_name)
+    by_id: dict = {}
+    for b in q.all():
+        full = " ".join(p for p in (b.author_name_first, b.author_name_second) if p)
+        if target and _word_tokens(full) != target:      # exact author match (house-style tolerant)
+            continue
+        by_id[b.id] = {
+            "id": b.id, "title": b.title, "series": b.series,
+            "series_number": b.series_number, "has_cover": bool(b.cover),
+        }
+    books = list(by_id.values())
+    books.sort(key=lambda x: (x["series"] or "~", x["series_number"] or 0, x["title"] or ""))
+    return books
 
 
 def dismiss(db: Session, item_id: int) -> bool:
