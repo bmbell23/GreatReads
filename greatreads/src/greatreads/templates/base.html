@@ -153,6 +153,10 @@
                         <span class="nav-text">Settings</span>
                     </a>
                 </li>
+                <!-- Auto build-time (#101): "last built" stamp, never a hand-bumped version. -->
+                <li class="gr-nav-build">
+                    <span id="grBuildStamp" style="display:block;padding:.5rem 1rem;font-size:.68rem;opacity:.55;letter-spacing:.02em;white-space:nowrap;" title="When this app was last built"></span>
+                </li>
             </ul>
         </div>
     </nav>
@@ -484,6 +488,22 @@
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadNewsBadge);
     else loadNewsBadge();
+    </script>
+
+    <!-- Build-time stamp (#101): show when the container was last built, never a
+         hand-bumped version. Read live from /api/build-time (stamped at image build). -->
+    <script>
+    async function loadBuildStamp() {
+        const el = document.getElementById('grBuildStamp');
+        if (!el) return;
+        try {
+            const r = await fetch(`${window.APP_BASE_PATH}/api/build-time`, { cache: 'no-store' });
+            const d = await r.json();
+            if (d && d.built) el.textContent = 'Built ' + d.built;
+        } catch (e) { /* leave blank if unreachable */ }
+    }
+    if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadBuildStamp);
+    else loadBuildStamp();
     </script>
 
     {% block extra_scripts %}{% endblock %}

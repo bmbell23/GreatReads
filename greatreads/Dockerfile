@@ -37,6 +37,13 @@ RUN pip install --no-cache-dir --upgrade bcrypt==4.0.1
 COPY ereader-assets/summaries /app/ereader/summaries
 COPY ereader-assets/version.txt /app/ereader/version.txt
 
+# Stamp the image's build time so the web UI can show "last built" automatically
+# (#101) — no hand-bumped version, no re-staging of any copied file. This RUN
+# sits after every COPY, so Docker's linear layer cache re-runs it on any rebuild
+# that ships new code/assets (a true no-op rebuild keeps the prior stamp, which
+# is correct — the image didn't actually change). Read live via /api/build-time.
+RUN date '+%Y-%m-%d %H:%M %Z' > /app/build-stamp.txt
+
 # Create necessary directories
 RUN mkdir -p /app/data /app/data/covers
 

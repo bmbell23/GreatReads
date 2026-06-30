@@ -140,11 +140,23 @@
     <button class="btn btn-sm btn-outline-secondary" onclick="clearSelection()">Clear</button>
     <button class="btn btn-sm btn-primary ms-auto" id="bulkEditBtn" onclick="bulkOpen()" disabled>
         <i class="fas fa-pen-to-square me-1"></i>Edit selected</button>
+    <button class="btn btn-sm btn-outline-danger" id="bulkDeleteBtn" onclick="bulkDelete()" disabled>
+        <i class="fas fa-trash me-1"></i>Delete selected</button>
 </div>
 
 <div class="text-muted small mb-2" id="shelfCount"></div>
 <div class="row" id="booksGrid"><div class="col-12 text-muted text-center py-5">Loading…</div></div>
 <div id="scrollSentinel" style="height:1px;"></div>
+
+<!-- Shared typeahead datalists (#92): kept at page level (not inside a modal) so
+     both the single-edit and bulk-edit forms get suggestions — a datalist nested
+     in a closed (display:none) modal won't surface options in mobile WebView. -->
+<datalist id="bkeAuthorFirstList"></datalist>
+<datalist id="bkeAuthorLastList"></datalist>
+<datalist id="bkeSeriesList"></datalist>
+<datalist id="bkeGenreList"></datalist>
+<datalist id="bkeUniverseList"></datalist>
+<datalist id="bkeTitleList"></datalist>
 
 <!-- Bulk-edit modal (#93) -->
 <div class="modal fade" id="bulkEditModal" tabindex="-1">
@@ -261,12 +273,6 @@
                         </div>
                     </div>
                 </div>
-                <datalist id="bkeAuthorFirstList"></datalist>
-                <datalist id="bkeAuthorLastList"></datalist>
-                <datalist id="bkeSeriesList"></datalist>
-                <datalist id="bkeGenreList"></datalist>
-                <datalist id="bkeUniverseList"></datalist>
-                <datalist id="bkeTitleList"></datalist>
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-outline-danger me-auto" onclick="bkeDelete()">
@@ -558,6 +564,7 @@ function updateBulkBar() {
     const n = selected.size;
     document.getElementById('bulkCount').textContent = n;
     document.getElementById('bulkEditBtn').disabled = n === 0;
+    document.getElementById('bulkDeleteBtn').disabled = n === 0;
 }
 
 function bulkOpen() {
@@ -597,6 +604,23 @@ async function bulkApply() {
         selected.clear();
         renderKeepScroll();
     } catch (e) { showToast('Bulk update failed', 'danger'); }
+}
+
+async function bulkDelete() {
+    const ids = [...selected].map(k => cardReg[k]).filter(c => c && c.kind === 'local').map(c => c.book_id);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} book${ids.length === 1 ? '' : 's'}? This can't be undone.`)) return;
+    try {
+        const r = await GreatReads.apiCall('/books/bulk-delete', { method: 'POST', data: { ids } });
+        showToast(`Deleted ${r.deleted} book${r.deleted === 1 ? '' : 's'}`, 'success');
+        // drop the deleted cards in place; keep scroll + filter (#99)
+        const gone = new Set(ids);
+        cards = cards.filter(c => !(c.kind === 'local' && gone.has(c.book_id)));
+        ids.forEach(id => delete cardReg['L' + id]);
+        shelfTotal = Math.max(0, shelfTotal - r.deleted);
+        selected.clear();
+        renderKeepScroll();
+    } catch (e) { showToast('Bulk delete failed', 'danger'); }
 }
 
 function setupInfiniteScroll() {

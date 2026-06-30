@@ -231,6 +231,38 @@ async def bulk_update_books(
     return {"updated": len(books), "fields": list(fields.keys())}
 
 
+class BulkDeleteRequest(BaseModel):
+    """Bulk-delete payload (#102): delete every listed book."""
+    ids: List[int]
+
+
+@router.post("/bulk-delete")
+async def bulk_delete_books(
+    request: Request,
+    payload: BulkDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete many books at once (#102). Cascades readings + inventory and clears
+    cover files, same as the single-book DELETE."""
+    if not payload.ids:
+        return {"deleted": 0}
+    books = db.query(Book).filter(Book.id.in_(payload.ids)).all()
+    deleted_ids = [b.id for b in books]
+    for b in books:
+        db.delete(b)
+    db.commit()
+    # tidy up cover files so we don't leave orphans behind (#95)
+    for book_id in deleted_ids:
+        for p in (settings.covers_dir / f"{book_id}.jpg",
+                  Path("/app/data/covers_thumb") / f"{book_id}.jpg"):
+            try:
+                p.unlink(missing_ok=True)
+            except Exception:
+                pass
+    return {"deleted": len(deleted_ids)}
+
+
 @router.post("/{book_id}/cover")
 async def upload_book_cover(
     request: Request,
