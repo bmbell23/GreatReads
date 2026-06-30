@@ -752,6 +752,7 @@ def _local_card(b: Book, status: str, read_count: int) -> dict:
     return {
         "kind": "local", "status": status, "news_id": None, "book_id": b.id,
         "title": b.title, "author": b.author, "series": b.series, "series_number": b.series_number,
+        "universe": b.universe,
         "cover_url": None, "has_cover": bool(b.cover), "cover_version": cover_version,
         "is_comic": False, "is_reprint": False,
         "tracked": status == "unowned", "word_count": b.word_count, "page_count": b.page_count,
@@ -784,8 +785,11 @@ def list_shelf(db: Session, status: str = "owned", search: str = None,
             items = [i for i in items if not i.thumbnail_url]
         keyf = {
             "title": lambda i: (i.title or "").lower(),
-            "author": lambda i: (i.author_name or "").lower(),
-            "series": lambda i: ((i.matched_series or "").lower(), i.series_number or 0),
+            # within an author, group by series then number (no-series last via "~~~")
+            "author": lambda i: ((i.author_name or "").lower(), (i.matched_series or "~~~").lower(),
+                                 i.series_number or 0, (i.title or "").lower()),
+            "series": lambda i: ((i.matched_series or "~~~").lower(), i.series_number or 0,
+                                 (i.title or "").lower()),
             "date": lambda i: i.published_date or date.min,
             "words": lambda i: i.word_count or 0,
         }.get(sort_by, lambda i: i.published_date or date.min)
@@ -807,12 +811,22 @@ def list_shelf(db: Session, status: str = "owned", search: str = None,
     elif cover == "no":
         q = q.filter(Book.cover.is_(False))
     total = q.count()
-    sort_cols = {
-        "title": [Book.title], "author": [Book.author_name_second, Book.author_name_first],
-        "series": [Book.series, Book.series_number], "date": [Book.date_published],
-        "words": [Book.word_count],
-    }.get(sort_by, [Book.author_name_second, Book.author_name_first])
-    order = [(c.desc() if desc else c.asc()) for c in sort_cols] + [Book.title]
+    # `Book.series.is_(None)` sorts False(0) before True(1) → series books first,
+    # no-series last, and stays ascending regardless of direction so groups hold.
+    if sort_by == "author":
+        # group series within an author: author → (universe → series → number) → title
+        name = [Book.author_name_second, Book.author_name_first]
+        order = ([(c.desc() if desc else c.asc()) for c in name]
+                 + [Book.series.is_(None), Book.universe, Book.series, Book.series_number, Book.title])
+    elif sort_by == "series":
+        grp = [Book.universe, Book.series, Book.series_number]
+        order = ([Book.series.is_(None)]
+                 + [(c.desc() if desc else c.asc()) for c in grp] + [Book.title])
+    else:
+        sort_cols = {
+            "title": [Book.title], "date": [Book.date_published], "words": [Book.word_count],
+        }.get(sort_by, [Book.author_name_second, Book.author_name_first])
+        order = [(c.desc() if desc else c.asc()) for c in sort_cols] + [Book.title]
     books = q.order_by(*order).offset(skip).limit(limit).all()
     # read-counts for this page in one query
     ids = [b.id for b in books]
@@ -824,6 +838,30 @@ def list_shelf(db: Session, status: str = "owned", search: str = None,
             counts[bid] = c
     cards = [_local_card(b, status, counts.get(b.id, 0)) for b in books]
     return {"status": status, "total": total, "cards": cards}
+
+
+def series_books(db: Session, series: str, universe: str = None) -> dict:
+    """All DB books in a series (any ownership), ordered by series number — for the
+    Series view (#96). Each book becomes a normalized card tagged owned/unowned so the
+    Books-page details modal can open any of them."""
+    series = (series or "").strip()
+    if not series:
+        return {"series": series, "universe": universe, "cards": []}
+    q = db.query(Book).filter(Book.series == series)
+    if universe:
+        q = q.filter(Book.universe == universe)
+    books = q.order_by(Book.series.is_(None), Book.series_number, Book.title).all()
+    owned = {bid for (bid,) in _owned_book_id_subq(db).all()}
+    ids = [b.id for b in books]
+    counts = {}
+    if ids:
+        for bid, c in (db.query(Reading.book_id, func.count(Reading.id))
+                       .filter(Reading.book_id.in_(ids), Reading.date_finished_actual.isnot(None))
+                       .group_by(Reading.book_id).all()):
+            counts[bid] = c
+    cards = [_local_card(b, "owned" if b.id in owned else "unowned", counts.get(b.id, 0))
+             for b in books]
+    return {"series": series, "universe": universe, "cards": cards}
 
 
 def author_finished_books(db: Session, author_name: str) -> list[dict]:

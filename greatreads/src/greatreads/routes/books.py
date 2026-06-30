@@ -179,14 +179,56 @@ async def delete_book(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Delete a book."""
+    """Delete a book (cascades readings + inventory; also clears cover files)."""
     db_book = db.query(Book).filter(Book.id == book_id).first()
     if not db_book:
         raise HTTPException(status_code=404, detail="Book not found")
 
     db.delete(db_book)
     db.commit()
+    # tidy up cover files so we don't leave orphans behind (#95)
+    for p in (settings.covers_dir / f"{book_id}.jpg",
+              Path("/app/data/covers_thumb") / f"{book_id}.jpg"):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
     return {"message": "Book deleted successfully"}
+
+
+class BulkUpdateRequest(BaseModel):
+    """Bulk-edit payload (#93): apply the given fields to every listed book.
+    Only the fields present here are written; omit a field to leave it untouched."""
+    ids: List[int]
+    title: Optional[str] = None
+    author_name_first: Optional[str] = None
+    author_name_second: Optional[str] = None
+    series: Optional[str] = None
+    series_number: Optional[float] = None
+    universe: Optional[str] = None
+    genre: Optional[str] = None
+
+
+@router.post("/bulk-update")
+async def bulk_update_books(
+    request: Request,
+    payload: BulkUpdateRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Set shared field(s) across many books at once (#93). A field is applied only if
+    it was sent (exclude_unset); send an empty string to deliberately clear a field."""
+    fields = payload.model_dump(exclude_unset=True, exclude={'ids'})
+    # treat "" as an explicit clear → None; absent fields were already dropped above
+    fields = {k: (None if v == "" else v) for k, v in fields.items()}
+    if not payload.ids or not fields:
+        return {"updated": 0}
+    books = db.query(Book).filter(Book.id.in_(payload.ids)).all()
+    for b in books:
+        for k, v in fields.items():
+            setattr(b, k, v)
+    db.commit()
+    return {"updated": len(books), "fields": list(fields.keys())}
 
 
 @router.post("/{book_id}/cover")
@@ -324,6 +366,34 @@ async def get_authors(
             full_name = " ".join(filter(None, name_parts))
             author_list.append(full_name)
     return sorted(set(author_list))
+
+
+@router.get("/search/author-first-names")
+async def get_author_first_names(db: Session = Depends(get_db)):
+    """Distinct author first names (for typeahead, #92)."""
+    rows = db.query(Book.author_name_first).filter(Book.author_name_first.isnot(None)).distinct().all()
+    return sorted({r[0] for r in rows if r[0] and r[0].strip()})
+
+
+@router.get("/search/author-last-names")
+async def get_author_last_names(db: Session = Depends(get_db)):
+    """Distinct author last names (for typeahead, #92)."""
+    rows = db.query(Book.author_name_second).filter(Book.author_name_second.isnot(None)).distinct().all()
+    return sorted({r[0] for r in rows if r[0] and r[0].strip()})
+
+
+@router.get("/search/universes")
+async def get_universes(db: Session = Depends(get_db)):
+    """Distinct universes (for typeahead, #92)."""
+    rows = db.query(Book.universe).filter(Book.universe.isnot(None)).distinct().all()
+    return sorted({r[0] for r in rows if r[0] and r[0].strip()})
+
+
+@router.get("/search/titles")
+async def get_titles(db: Session = Depends(get_db)):
+    """Distinct titles (for dup-awareness typeahead, #92)."""
+    rows = db.query(Book.title).filter(Book.title.isnot(None)).distinct().all()
+    return sorted({r[0] for r in rows if r[0] and r[0].strip()})
 
 
 @router.get("/search/series")

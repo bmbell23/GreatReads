@@ -63,6 +63,13 @@ async def get_shelf(status: str = "owned", search: Optional[str] = None,
                                    sort_by=sort_by, sort_order=sort_order, cover=cover)
 
 
+@router.get("/series")
+async def get_series_books(name: str, universe: Optional[str] = None,
+                          db: Session = Depends(get_db)):
+    """All books in a series (ordered by number) for the Series view (#96)."""
+    return news_service.series_books(db, series=name, universe=universe)
+
+
 @router.post("/seen")
 async def post_seen(body: SeenBody, db: Session = Depends(get_db)):
     """Mark one item seen (with id) or all unseen items seen (no id) — clears the badge."""

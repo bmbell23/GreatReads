@@ -34,6 +34,12 @@
     .bd-cover { aspect-ratio: 2/3; background: #e9ecef; border-radius: 6px; overflow: hidden;
         display: flex; align-items: center; justify-content: center; }
     .bd-cover img { width: 100%; height: 100%; object-fit: cover; }
+    /* Bulk-select (#93) */
+    .sel-check { width: 22px; height: 22px; border-radius: 50%; background: #fff;
+        border: 2px solid #0d6efd; display: flex; align-items: center; justify-content: center;
+        color: transparent; font-size: .7rem; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+    .sel-check.on { background: #0d6efd; color: #fff; }
+    .books-card.sel-on { box-shadow: 0 0 0 3px rgba(13,110,253,.45); }
 </style>
 
 <!-- Header -->
@@ -43,6 +49,9 @@
         <div class="page-header-content"><h1 class="page-header-title mb-0">Books</h1></div>
     </div>
     <div class="d-flex gap-2">
+        <button class="btn btn-outline-secondary" id="selectBtn" type="button" onclick="toggleSelectMode()">
+            <i class="fas fa-check-double me-1"></i>Select
+        </button>
         <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#settingsPanel">
             <i class="fas fa-gear me-1"></i>Settings
         </button>
@@ -120,9 +129,52 @@
     </div></div>
 </div>
 
+<!-- Bulk-select action bar (#93) -->
+<div id="bulkBar" class="d-none align-items-center flex-wrap gap-2 mb-2 p-2 border rounded bg-light">
+    <span class="fw-medium small"><span id="bulkCount">0</span> selected</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="selectAllLoaded()">Select all loaded</button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="clearSelection()">Clear</button>
+    <button class="btn btn-sm btn-primary ms-auto" id="bulkEditBtn" onclick="bulkOpen()" disabled>
+        <i class="fas fa-pen-to-square me-1"></i>Edit selected</button>
+</div>
+
 <div class="text-muted small mb-2" id="shelfCount"></div>
 <div class="row" id="booksGrid"><div class="col-12 text-muted text-center py-5">Loading…</div></div>
 <div id="scrollSentinel" style="height:1px;"></div>
+
+<!-- Bulk-edit modal (#93) -->
+<div class="modal fade" id="bulkEditModal" tabindex="-1">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Bulk edit <span id="bulkModalCount" class="text-muted small fw-normal"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <p class="text-muted small">Only the fields you fill in are applied to every selected book.
+                    Leave a field blank to keep each book's existing value.</p>
+                <div class="row g-2">
+                    <div class="col-6"><label class="form-label small mb-0">Author first name</label>
+                        <input class="form-control form-control-sm" id="blkAuthorFirst" list="bkeAuthorFirstList" autocomplete="off"></div>
+                    <div class="col-6"><label class="form-label small mb-0">Author last name</label>
+                        <input class="form-control form-control-sm" id="blkAuthorLast" list="bkeAuthorLastList" autocomplete="off"></div>
+                    <div class="col-8"><label class="form-label small mb-0">Series</label>
+                        <input class="form-control form-control-sm" id="blkSeries" list="bkeSeriesList" autocomplete="off"></div>
+                    <div class="col-4"><label class="form-label small mb-0">Series #</label>
+                        <input class="form-control form-control-sm" id="blkSeriesNum" type="number" step="0.1"></div>
+                    <div class="col-6"><label class="form-label small mb-0">Universe</label>
+                        <input class="form-control form-control-sm" id="blkUniverse" list="bkeUniverseList" autocomplete="off"></div>
+                    <div class="col-6"><label class="form-label small mb-0">Genre</label>
+                        <input class="form-control form-control-sm" id="blkGenre" list="bkeGenreList" autocomplete="off"></div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="bulkApply()">Apply to selected</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <!-- Dedicated Book-details modal (modal-lg) — used by every status -->
 <div class="modal fade" id="bookDetailsModal" tabindex="-1">
@@ -140,6 +192,7 @@
                         <div id="bdActions" class="d-flex flex-wrap gap-2 mt-3"></div>
                     </div>
                 </div>
+                <div id="bdSeries" class="mt-3"></div>
                 <hr>
                 <div id="bdAuthorReads" class="text-muted small">Loading your reads…</div>
             </div>
@@ -176,15 +229,17 @@
                     <div class="col-12 col-sm-8">
                         <div class="row g-2">
                             <div class="col-12"><label class="form-label small mb-0">Title</label>
-                                <input class="form-control form-control-sm" id="bkeTitle"></div>
-                            <div class="col-12"><label class="form-label small mb-0">Author</label>
-                                <input class="form-control form-control-sm" id="bkeAuthor" list="bkeAuthorList" autocomplete="off"></div>
+                                <input class="form-control form-control-sm" id="bkeTitle" list="bkeTitleList" autocomplete="off"></div>
+                            <div class="col-6"><label class="form-label small mb-0">Author first name</label>
+                                <input class="form-control form-control-sm" id="bkeAuthorFirst" list="bkeAuthorFirstList" autocomplete="off"></div>
+                            <div class="col-6"><label class="form-label small mb-0">Author last name</label>
+                                <input class="form-control form-control-sm" id="bkeAuthorLast" list="bkeAuthorLastList" autocomplete="off"></div>
                             <div class="col-8"><label class="form-label small mb-0">Series</label>
                                 <input class="form-control form-control-sm" id="bkeSeries" list="bkeSeriesList" autocomplete="off"></div>
                             <div class="col-4"><label class="form-label small mb-0">Series #</label>
                                 <input class="form-control form-control-sm" id="bkeSeriesNum" type="number" step="0.1"></div>
                             <div class="col-6"><label class="form-label small mb-0">Universe</label>
-                                <input class="form-control form-control-sm" id="bkeUniverse"></div>
+                                <input class="form-control form-control-sm" id="bkeUniverse" list="bkeUniverseList" autocomplete="off"></div>
                             <div class="col-6"><label class="form-label small mb-0">Genre</label>
                                 <input class="form-control form-control-sm" id="bkeGenre" list="bkeGenreList" autocomplete="off"></div>
                             <div class="col-6"><label class="form-label small mb-0">Release date</label>
@@ -198,13 +253,33 @@
                         </div>
                     </div>
                 </div>
-                <datalist id="bkeAuthorList"></datalist>
+                <datalist id="bkeAuthorFirstList"></datalist>
+                <datalist id="bkeAuthorLastList"></datalist>
                 <datalist id="bkeSeriesList"></datalist>
                 <datalist id="bkeGenreList"></datalist>
+                <datalist id="bkeUniverseList"></datalist>
+                <datalist id="bkeTitleList"></datalist>
             </div>
             <div class="modal-footer">
+                <button type="button" class="btn btn-outline-danger me-auto" onclick="bkeDelete()">
+                    <i class="fas fa-trash me-1"></i>Delete book</button>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-primary" onclick="bkeSave()">Save changes</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Series view (#96) — every book in a series, click any to open its details -->
+<div class="modal fade" id="seriesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="srTitle"></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3" id="srGrid"></div>
             </div>
         </div>
     </div>
@@ -213,6 +288,7 @@
 <script>
 let shelfStatus = 'owned';
 let showComics = false, showReprints = false;
+let cardReg = {};   // cardKey → card, persists across shelves so siblings stay openable
 let cards = [], shelfTotal = 0, shelfSkip = 0, shelfLoading = false, _searchTimer = null, shelfGen = 0;
 let sortBy = 'author', sortDir = 'asc', coverFilter = 'all';
 const SORT_LABELS = { author: 'Author', title: 'Title', series: 'Series', date: 'Release date', words: 'Word count' };
@@ -261,6 +337,7 @@ document.addEventListener('DOMContentLoaded', async () => {
 function setStatus(s) {
     if (s === shelfStatus) return;
     shelfStatus = s;
+    selected.clear();   // selection is per-shelf; don't carry across statuses
     ['Owned', 'Unowned', 'Upcoming', 'New'].forEach(x =>
         document.getElementById('st' + x).classList.toggle('active', x.toLowerCase() === s));
     document.getElementById('subToggles').style.display = isRemote() ? 'flex' : 'none';
@@ -301,10 +378,12 @@ async function loadShelf(reset) {
     catch (e) {}
     if (myGen !== shelfGen) return;   // a newer reset replaced us — discard these results
     shelfLoading = false;
-    if (r) { shelfTotal = r.total; cards = reset ? r.cards : cards.concat(r.cards); shelfSkip += r.cards.length; }
+    if (r) { shelfTotal = r.total; cards = reset ? r.cards : cards.concat(r.cards); shelfSkip += r.cards.length; registerCards(r.cards); }
     else if (reset) { cards = []; }
     renderAll();
 }
+
+function registerCards(list) { (list || []).forEach(c => { cardReg[cardKey(c)] = c; }); }
 
 function visibleCards() {
     let list = cards;
@@ -316,6 +395,7 @@ function visibleCards() {
 }
 
 function renderAll() {
+    updateBulkBar();
     const list = visibleCards();
     const grid = document.getElementById('booksGrid');
     const label = { owned: 'owned', unowned: 'unowned', upcoming: 'upcoming', new: 'new' }[shelfStatus];
@@ -335,18 +415,90 @@ function cardHtml(c) {
     const cover = src
         ? `<img src="${src}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${phCover(c.title, c.author, 'none')}`
         : phCover(c.title, c.author, 'flex');
-    const rc = (c.read_count && c.read_count >= 1)
+    const key = cardKey(c);
+    const selectable = selectMode && c.kind === 'local';   // bulk edit is DB-books only
+    const isSel = selectable && selected.has(key);
+    const rc = (!selectMode && c.read_count && c.read_count >= 1)
         ? `<span class="books-readcount" title="Read ${c.read_count}×">${c.read_count >= 2 ? '×' + c.read_count : '✓'}</span>` : '';
     const badges = (c.is_comic ? '<span class="badge books-badge" style="background:#fd7e14;" title="Comic"><i class="fas fa-book-open"></i></span>' : '')
                  + (c.is_reprint ? '<span class="badge books-badge bg-secondary" title="Reprint"><i class="fas fa-clock-rotate-left"></i></span>' : '');
+    const tl = selectable
+        ? `<div class="books-badge-tl"><span class="sel-check${isSel ? ' on' : ''}"><i class="fas fa-check"></i></span></div>`
+        : (rc ? `<div class="books-badge-tl">${rc}</div>` : '');
+    const click = selectable ? `toggleSelect('${key}')` : `openBookDetails('${key}')`;
     return `<div class="col-4 col-sm-3 col-lg-2 mb-3">
-        <div class="card books-card status-${c.status}" style="cursor:pointer;" onclick="openBookDetails('${cardKey(c)}')" title="${(c.title || '').replace(/"/g, '&quot;')}">
+        <div class="card books-card status-${c.status}${isSel ? ' sel-on' : ''}" style="cursor:pointer;" onclick="${click}" title="${(c.title || '').replace(/"/g, '&quot;')}">
             <div class="books-cover">${cover}
-                ${rc ? `<div class="books-badge-tl">${rc}</div>` : ''}
+                ${tl}
                 ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
             </div>
         </div>
     </div>`;
+}
+
+// ── Bulk select / edit (#93) ─────────────────────────────────────────────
+let selectMode = false;
+const selected = new Set();   // selected cardKeys (local cards only)
+
+function toggleSelectMode() {
+    selectMode = !selectMode;
+    if (!selectMode) selected.clear();
+    const btn = document.getElementById('selectBtn');
+    btn.classList.toggle('btn-primary', selectMode);
+    btn.classList.toggle('btn-outline-secondary', !selectMode);
+    document.getElementById('bulkBar').classList.toggle('d-none', !selectMode);
+    document.getElementById('bulkBar').classList.toggle('d-flex', selectMode);
+    if (selectMode && isRemote())
+        showToast('Bulk edit applies to your Owned/Unowned books.', 'info');
+    renderAll();
+}
+
+function toggleSelect(key) {
+    if (selected.has(key)) selected.delete(key); else selected.add(key);
+    renderAll();
+}
+
+function selectAllLoaded() {
+    visibleCards().filter(c => c.kind === 'local').forEach(c => selected.add(cardKey(c)));
+    renderAll();
+}
+
+function clearSelection() { selected.clear(); renderAll(); }
+
+function updateBulkBar() {
+    const n = selected.size;
+    document.getElementById('bulkCount').textContent = n;
+    document.getElementById('bulkEditBtn').disabled = n === 0;
+}
+
+function bulkOpen() {
+    if (!selected.size) return;
+    bkeLoadLists();   // shared typeahead datalists
+    ['blkAuthorFirst', 'blkAuthorLast', 'blkSeries', 'blkSeriesNum', 'blkUniverse', 'blkGenre']
+        .forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('bulkModalCount').textContent = `(${selected.size} book${selected.size > 1 ? 's' : ''})`;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('bulkEditModal')).show();
+}
+
+async function bulkApply() {
+    const ids = [...selected].map(k => cardReg[k]).filter(c => c && c.kind === 'local').map(c => c.book_id);
+    if (!ids.length) return;
+    const val = id => document.getElementById(id).value.trim();
+    const payload = { ids };
+    const f = val('blkAuthorFirst'); if (f) payload.author_name_first = f;
+    const l = val('blkAuthorLast'); if (l) payload.author_name_second = l;
+    const s = val('blkSeries'); if (s) payload.series = s;
+    const sn = document.getElementById('blkSeriesNum').value; if (sn !== '') payload.series_number = parseFloat(sn);
+    const u = val('blkUniverse'); if (u) payload.universe = u;
+    const g = val('blkGenre'); if (g) payload.genre = g;
+    if (Object.keys(payload).length === 1) { showToast('Fill in at least one field to apply.', 'info'); return; }
+    try {
+        const r = await GreatReads.apiCall('/books/bulk-update', { method: 'POST', data: payload });
+        showToast(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`, 'success');
+        bootstrap.Modal.getInstance(document.getElementById('bulkEditModal'))?.hide();
+        selected.clear();
+        loadShelf(true);   // refresh; stays on current status + filters
+    } catch (e) { showToast('Bulk update failed', 'danger'); }
 }
 
 function setupInfiniteScroll() {
@@ -368,9 +520,12 @@ function fmtDate(iso, precision) {
     return `${MON[m-1]} ${d}, ${y}`;
 }
 
+let bdCurrent = null;
 function openBookDetails(key) {
-    const c = cards.find(x => cardKey(x) === key);
+    const c = cardReg[key] || cards.find(x => cardKey(x) === key);
     if (!c) return;
+    bdCurrent = c;
+    bootstrap.Modal.getInstance(document.getElementById('seriesModal'))?.hide();
     const base = window.APP_BASE_PATH || '';
     document.getElementById('bdTitle').textContent = c.title || '';
 
@@ -380,7 +535,9 @@ function openBookDetails(key) {
         : phCover(c.title, c.author, 'flex');
 
     const statusLabel = { owned: 'Owned', unowned: 'Unowned (no copy yet)', upcoming: 'Upcoming', new: 'New' }[c.status];
-    const seriesTxt = c.series ? c.series + (c.series_number != null ? ` #${c.series_number}` : '') : '';
+    const seriesTxt = c.series
+        ? `<a href="#" onclick="openSeries();return false;">${esc(c.series)}${c.series_number != null ? ` #${c.series_number}` : ''}</a>`
+        : '';
     const rows = [];
     rows.push(['Status', statusLabel]);
     if (c.author) rows.push(['Author', c.author]);
@@ -408,10 +565,65 @@ function openBookDetails(key) {
     }
     document.getElementById('bdActions').innerHTML = actions;
 
+    document.getElementById('bdSeries').innerHTML = '';
+    if (c.series) injectSeriesStrip(c);
+
     document.getElementById('bdAuthorReads').innerHTML = '<span class="text-muted small">Loading your reads…</span>';
     injectAuthorReads(c.author);
 
     bootstrap.Modal.getOrCreateInstance(document.getElementById('bookDetailsModal')).show();
+}
+
+// ── Series view (#96) ────────────────────────────────────────────────────
+async function fetchSeries(series, universe) {
+    const q = `name=${encodeURIComponent(series)}` + (universe ? `&universe=${encodeURIComponent(universe)}` : '');
+    const d = await GreatReads.apiCall('/news/series?' + q);
+    registerCards(d.cards || []);
+    return d.cards || [];
+}
+
+function seriesMiniHtml(c, currentId, withCaption) {
+    const src = coverSrc(c);
+    const cover = src
+        ? `<img src="${src}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${phCover(c.title, c.author, 'none')}`
+        : phCover(c.title, c.author, 'flex');
+    const cur = c.book_id === currentId ? ' style="outline:2px solid var(--bs-primary);outline-offset:1px;border-radius:4px;"' : '';
+    const num = c.series_number != null ? `#${c.series_number}` : '';
+    const caption = withCaption
+        ? `<div class="small text-truncate mt-1" title="${esc(c.title)}">${num ? num + ' · ' : ''}${esc(c.title)}</div>`
+        : (num ? `<div class="text-muted text-center" style="font-size:.65rem;line-height:1.4;">${num}</div>` : '');
+    return `<div class="col-4 col-sm-3 col-lg-2 mb-2">
+        <div class="card books-card status-${c.status}" style="cursor:pointer;"${cur} onclick="openBookDetails('${cardKey(c)}')" title="${esc(c.title)}">
+            <div class="books-cover">${cover}</div>
+        </div>${caption}</div>`;
+}
+
+async function injectSeriesStrip(c) {
+    const wrap = document.getElementById('bdSeries');
+    wrap.innerHTML = '<div class="text-muted small">Loading series…</div>';
+    let list;
+    try { list = await fetchSeries(c.series, c.universe); } catch (e) { wrap.innerHTML = ''; return; }
+    if (!list || list.length <= 1) { wrap.innerHTML = ''; return; }   // nothing to show for a singleton
+    const head = `<div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted small">In this series (${list.length})</span>
+        <a href="#" class="small" onclick="openSeries();return false;">View series <i class="fas fa-arrow-right ms-1"></i></a></div>`;
+    wrap.innerHTML = head + `<div class="row g-2">${list.map(x => seriesMiniHtml(x, c.book_id, false)).join('')}</div>`;
+}
+
+async function openSeries(series, universe) {
+    series = series || (bdCurrent && bdCurrent.series);
+    universe = universe !== undefined ? universe : (bdCurrent && bdCurrent.universe) || '';
+    if (!series) return;
+    bootstrap.Modal.getInstance(document.getElementById('bookDetailsModal'))?.hide();
+    document.getElementById('srTitle').textContent = series;
+    document.getElementById('srGrid').innerHTML = '<div class="col-12 text-muted text-center py-4">Loading…</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('seriesModal')).show();
+    const curId = bdCurrent && bdCurrent.book_id;
+    let list;
+    try { list = await fetchSeries(series, universe); } catch (e) { list = []; }
+    document.getElementById('srGrid').innerHTML = list.length
+        ? list.map(x => seriesMiniHtml(x, curId, true)).join('')
+        : '<div class="col-12 text-muted text-center py-4">No books found in this series.</div>';
 }
 
 async function injectAuthorReads(author) {
@@ -470,11 +682,21 @@ let bkeBook = null, bkeListsLoaded = false;
 async function bkeLoadLists() {
     if (bkeListsLoaded) return;
     bkeListsLoaded = true;
-    const fill = (id, arr) => { document.getElementById(id).innerHTML =
+    const fill = (id, arr) => { const el = document.getElementById(id); if (el) el.innerHTML =
         (arr || []).map(v => `<option value="${esc(String(v))}">`).join(''); };
-    try { const a = await GreatReads.apiCall('/books/search/authors'); fill('bkeAuthorList', a.authors || a); } catch (e) {}
-    try { const s = await GreatReads.apiCall('/books/search/series'); fill('bkeSeriesList', s.series || s); } catch (e) {}
-    try { const g = await GreatReads.apiCall('/books/search/genres'); fill('bkeGenreList', g.genres || g); } catch (e) {}
+    const load = async (path, id) => {
+        try { const r = await GreatReads.apiCall(path); fill(id, Array.isArray(r) ? r : (r.items || r)); }
+        catch (e) {}
+    };
+    // typeahead sources (#92) — these power the edit + bulk-edit forms
+    await Promise.all([
+        load('/books/search/author-first-names', 'bkeAuthorFirstList'),
+        load('/books/search/author-last-names', 'bkeAuthorLastList'),
+        load('/books/search/series', 'bkeSeriesList'),
+        load('/books/search/genres', 'bkeGenreList'),
+        load('/books/search/universes', 'bkeUniverseList'),
+        load('/books/search/titles', 'bkeTitleList'),
+    ]);
 }
 
 async function bkeOpen(bookId) {
@@ -485,7 +707,8 @@ async function bkeOpen(bookId) {
     catch (e) { showToast('Could not load book', 'danger'); return; }
     bkeBook = b;
     const set = (id, v) => { document.getElementById(id).value = (v != null ? v : ''); };
-    set('bkeId', b.id); set('bkeTitle', b.title); set('bkeAuthor', b.author);
+    set('bkeId', b.id); set('bkeTitle', b.title);
+    set('bkeAuthorFirst', b.author_name_first); set('bkeAuthorLast', b.author_name_second);
     set('bkeSeries', b.series); set('bkeSeriesNum', b.series_number);
     set('bkeUniverse', b.universe); set('bkeGenre', b.genre); set('bkeDate', b.date_published);
     set('bkePages', b.page_count); set('bkeWords', b.word_count); set('bkeIsbn', b.isbn_id);
@@ -503,14 +726,11 @@ function bkeRenderCover() {
 
 async function bkeSave() {
     const id = document.getElementById('bkeId').value;
-    const author = document.getElementById('bkeAuthor').value.trim();
-    const parts = author ? author.split(/\s+/) : [];
     const v = id2 => { const x = document.getElementById(id2).value.trim(); return x === '' ? null : x; };
     const num = (id2, fn) => { const x = document.getElementById(id2).value; return x === '' ? null : fn(x); };
     const data = {
         title: document.getElementById('bkeTitle').value.trim(),
-        author_name_first: parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null),
-        author_name_second: parts.length > 1 ? parts[parts.length - 1] : null,
+        author_name_first: v('bkeAuthorFirst'), author_name_second: v('bkeAuthorLast'),
         series: v('bkeSeries'), universe: v('bkeUniverse'), genre: v('bkeGenre'),
         series_number: num('bkeSeriesNum', parseFloat),
         date_published: document.getElementById('bkeDate').value || null,
@@ -523,6 +743,18 @@ async function bkeSave() {
         bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
         loadShelf(true);   // refresh grid; stays on the current status + filters
     } catch (e) { showToast('Save failed', 'danger'); }
+}
+
+async function bkeDelete() {
+    const id = document.getElementById('bkeId').value;
+    const title = document.getElementById('bkeTitle').value || 'this book';
+    if (!confirm(`Delete “${title}”?\n\nThis permanently removes the book and its reading/inventory records. This can't be undone.`)) return;
+    try {
+        await GreatReads.apiCall('/books/' + id, { method: 'DELETE' });
+        showToast('Book deleted', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
+        loadShelf(true);
+    } catch (e) { showToast('Delete failed', 'danger'); }
 }
 
 async function bkeUploadFile() {
