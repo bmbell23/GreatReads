@@ -181,8 +181,12 @@
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title text-truncate" id="bdTitle"></h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+                <h5 class="modal-title text-truncate me-2" id="bdTitle"></h5>
+                <div class="ms-auto d-flex align-items-center gap-1">
+                    <button type="button" class="btn btn-sm btn-outline-secondary border-0 px-2" id="bdPrev" onclick="bdNavTo(-1)" title="Previous (←)" aria-label="Previous"><i class="fas fa-chevron-left"></i></button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary border-0 px-2" id="bdNext" onclick="bdNavTo(1)" title="Next (→)" aria-label="Next"><i class="fas fa-chevron-right"></i></button>
+                    <button type="button" class="btn-close ms-1" data-bs-dismiss="modal"></button>
+                </div>
             </div>
             <div class="modal-body">
                 <div class="row g-3">
@@ -332,6 +336,7 @@ function phCover(title, author, disp) {
 document.addEventListener('DOMContentLoaded', async () => {
     await loadShelf(true);
     setupInfiniteScroll();
+    setupDetailSwipe();
 });
 
 function setStatus(s) {
@@ -384,6 +389,53 @@ async function loadShelf(reset) {
 }
 
 function registerCards(list) { (list || []).forEach(c => { cardReg[cardKey(c)] = c; }); }
+
+// Re-render the grid without losing the user's scroll position (used after an
+// edit/delete/bulk so we don't snap back to the top + drop loaded cards). (#99)
+function renderKeepScroll() {
+    const y = window.scrollY;
+    renderAll();
+    window.scrollTo(0, y);
+}
+
+// Patch a local card's data in place (same object lives in both cards[] and
+// cardReg) so the grid + details popup reflect an edit without a full reload.
+function patchLocalCard(bookId, patch) {
+    const apply = c => { if (c && c.kind === 'local' && c.book_id === bookId) Object.assign(c, patch); };
+    cards.forEach(apply);
+    Object.values(cardReg).forEach(apply);
+}
+
+// Swipe / arrow-key navigation between books in the details modal (#100).
+function bdNavTo(delta) {
+    if (!bdNav.length) return;
+    const i = bdIndex + delta;
+    if (i < 0 || i >= bdNav.length) return;          // clamp at the ends
+    openBookDetails(cardKey(bdNav[i]), bdNav);
+}
+function updateBdNavButtons() {
+    const pv = document.getElementById('bdPrev'), nx = document.getElementById('bdNext');
+    if (pv) pv.disabled = bdIndex <= 0;
+    if (nx) nx.disabled = bdIndex < 0 || bdIndex >= bdNav.length - 1;
+}
+function setupDetailSwipe() {
+    const dm = document.getElementById('bookDetailsModal');
+    if (!dm) return;
+    let sx = 0, sy = 0, tracking = false;
+    dm.addEventListener('touchstart', e => {
+        const t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY; tracking = true;
+    }, { passive: true });
+    dm.addEventListener('touchend', e => {
+        if (!tracking) return; tracking = false;
+        const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) bdNavTo(dx < 0 ? 1 : -1);
+    }, { passive: true });
+    document.addEventListener('keydown', e => {
+        if (!dm.classList.contains('show')) return;
+        if (e.key === 'ArrowRight') bdNavTo(1);
+        else if (e.key === 'ArrowLeft') bdNavTo(-1);
+    });
+}
 
 function visibleCards() {
     let list = cards;
@@ -496,8 +548,17 @@ async function bulkApply() {
         const r = await GreatReads.apiCall('/books/bulk-update', { method: 'POST', data: payload });
         showToast(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`, 'success');
         bootstrap.Modal.getInstance(document.getElementById('bulkEditModal'))?.hide();
+        // patch the edited cards in place; keep scroll + filter (#99)
+        const cp = {};
+        if (payload.series !== undefined) cp.series = payload.series;
+        if (payload.series_number !== undefined) cp.series_number = payload.series_number;
+        if (payload.universe !== undefined) cp.universe = payload.universe;
+        if (payload.genre !== undefined) cp.genre = payload.genre;
+        if (payload.author_name_first && payload.author_name_second)
+            cp.author = payload.author_name_first + ' ' + payload.author_name_second;
+        selected.forEach(k => { const c = cardReg[k]; if (c) Object.assign(c, cp); });
         selected.clear();
-        loadShelf(true);   // refresh; stays on current status + filters
+        renderKeepScroll();
     } catch (e) { showToast('Bulk update failed', 'danger'); }
 }
 
@@ -520,11 +581,16 @@ function fmtDate(iso, precision) {
     return `${MON[m-1]} ${d}, ${y}`;
 }
 
-let bdCurrent = null;
-function openBookDetails(key) {
+let bdCurrent = null, bdNav = [], bdIndex = -1;
+function openBookDetails(key, navList) {
     const c = cardReg[key] || cards.find(x => cardKey(x) === key);
     if (!c) return;
     bdCurrent = c;
+    // navigation context for swipe / arrows (#100): the list we're browsing
+    bdNav = navList || visibleCards();
+    bdIndex = bdNav.findIndex(x => cardKey(x) === key);
+    if (bdIndex < 0) { bdNav = [c]; bdIndex = 0; }
+    updateBdNavButtons();
     bootstrap.Modal.getInstance(document.getElementById('seriesModal'))?.hide();
     const base = window.APP_BASE_PATH || '';
     document.getElementById('bdTitle').textContent = c.title || '';
@@ -741,7 +807,18 @@ async function bkeSave() {
         await GreatReads.apiCall('/books/' + id, { method: 'PUT', data });
         showToast('Book updated', 'success');
         bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
-        loadShelf(true);   // refresh grid; stays on the current status + filters
+        // patch the card in place so we keep scroll + filter, no reload (#99)
+        patchLocalCard(parseInt(id, 10), {
+            title: data.title,
+            author: [data.author_name_first, data.author_name_second].filter(Boolean).join(' '),
+            series: data.series, series_number: data.series_number,
+            universe: data.universe, genre: data.genre,
+            word_count: data.word_count, page_count: data.page_count,
+            date: data.date_published,
+            has_cover: !!(bkeBook && bkeBook.cover),
+            cover_version: Math.floor(Date.now() / 1000),
+        });
+        renderKeepScroll();
     } catch (e) { showToast('Save failed', 'danger'); }
 }
 
@@ -753,7 +830,12 @@ async function bkeDelete() {
         await GreatReads.apiCall('/books/' + id, { method: 'DELETE' });
         showToast('Book deleted', 'success');
         bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
-        loadShelf(true);
+        // drop the card in place; keep scroll + filter (#99)
+        const dbid = parseInt(id, 10);
+        cards = cards.filter(c => !(c.kind === 'local' && c.book_id === dbid));
+        delete cardReg['L' + dbid];
+        shelfTotal = Math.max(0, shelfTotal - 1);
+        renderKeepScroll();
     } catch (e) { showToast('Delete failed', 'danger'); }
 }
 
