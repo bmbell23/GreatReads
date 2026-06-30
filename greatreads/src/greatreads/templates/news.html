@@ -3,18 +3,40 @@
 
 {% block content %}
 <style>
-    /* Border color = release timing (Upcoming vs New); Comics/Reprints are subsets that
-       still carry an Upcoming/New border, distinguished by their badge. */
-    .border-upcoming { border-left: 4px solid #0d6efd !important; }
-    .border-new      { border-left: 4px solid #198754 !important; }
-    .news-meta { font-size: 0.8rem; }
-    .tbr-icon-stack { display: flex; flex-direction: column; gap: 4px; align-items: flex-end; }
+    /* Unified cover grid for every status; status = card border color (#88). */
+    .books-card { border-width: 3px; border-style: solid; border-radius: 12px; overflow: hidden;
+        transition: transform .1s, box-shadow .1s; }
+    .books-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+    .status-owned    { border-color: #198754; }
+    .status-unowned  { border-color: #0d6efd; }
+    .status-upcoming { border-color: #e0a800; }
+    .status-new      { border-color: #6f42c1; }
+    .books-cover { position: relative; aspect-ratio: 2/3; background: #e9ecef;
+        display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .books-cover img { width: 100%; height: 100%; object-fit: cover; }
+    .books-cover .book-cover-fallback { font-size: 1.8rem; color: #adb5bd; }
+    /* Boilerplate cover for books with no image: title top, author bottom (#88). */
+    .books-ph { width: 100%; height: 100%; display: flex; flex-direction: column;
+        justify-content: space-between; padding: 10px 6px; text-align: center;
+        background: linear-gradient(160deg, #efe9dd, #ddd3c0); color: #5b5347; }
+    .books-ph-title { font-size: .74rem; font-weight: 700; line-height: 1.12; overflow: hidden;
+        display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
+    .books-ph-author { font-size: .64rem; font-style: italic; overflow: hidden;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+    .books-badge-tl { position: absolute; top: 4px; left: 4px; display: flex; gap: 3px; }
+    .books-badge-tr { position: absolute; top: 4px; right: 4px; display: flex; gap: 3px; }
+    .books-readcount { background: #198754; color: #fff; border-radius: 999px; font-size: .7rem;
+        font-weight: 700; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+    .books-badge { font-size: .68rem; padding: 2px 5px; }
     #manageAuthors { max-height: 320px; overflow-y: auto; }
     .manage-author-row { display: flex; align-items: center; justify-content: space-between;
         gap: 8px; padding: 2px 0; font-size: 0.85rem; }
+    .bd-cover { aspect-ratio: 2/3; background: #e9ecef; border-radius: 6px; overflow: hidden;
+        display: flex; align-items: center; justify-content: center; }
+    .bd-cover img { width: 100%; height: 100%; object-fit: cover; }
 </style>
 
-<!-- Header (matches TBR/Journal) -->
+<!-- Header -->
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
     <div class="page-header-bookish mb-0">
         <div class="page-header-icon"><i class="fas fa-book-bookmark"></i></div>
@@ -30,44 +52,64 @@
     </div>
 </div>
 
-<!-- Search (matches TBR/Journal/Library) -->
+<!-- Search + Sort (matches Library/TBR) -->
 <div class="d-flex gap-2 align-items-center mb-2">
     <div class="position-relative flex-grow-1">
         <input type="text" class="form-control" id="searchInput" autocomplete="off"
-               placeholder="Search by title, author, or series…" oninput="renderFeed()">
+               placeholder="Search by title, author, or series…" oninput="onSearch()">
         <button type="button" class="lib-search-clear" id="searchClear" onclick="clearSearch()"
                 title="Clear" aria-label="Clear" style="display:none;"><i class="fas fa-times"></i></button>
     </div>
+    <div class="dropdown flex-shrink-0">
+        <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Sort">
+            <i class="fas fa-sort-amount-down-alt me-1" id="sortDirIcon"></i><span id="sortLabel">Author</span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="#" onclick="setSort('author');return false;">Author</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('title');return false;">Title</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('series');return false;">Series</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('date');return false;">Release date</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('words');return false;">Word count</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="#" onclick="toggleSortDir();return false;"><i class="fas fa-exchange-alt me-2"></i>Reverse order</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">Cover</h6></li>
+            <li><a class="dropdown-item" href="#" id="covAll" onclick="setCoverFilter('all');return false;"><i class="fas fa-check me-2"></i>All</a></li>
+            <li><a class="dropdown-item" href="#" id="covYes" onclick="setCoverFilter('yes');return false;"><i class="fas fa-check me-2 invisible"></i>Has cover</a></li>
+            <li><a class="dropdown-item" href="#" id="covNo" onclick="setCoverFilter('no');return false;"><i class="fas fa-check me-2 invisible"></i>Missing cover</a></li>
+        </ul>
+    </div>
 </div>
 
-<!-- Filters (shared stat-chip pills): timing (left, exclusive) + subsets (right, AND toggles) -->
+<!-- Status (exclusive) + Comics/Reprints (AND toggles, releases only) -->
 <div class="d-flex justify-content-center align-items-center flex-wrap gap-4 mb-3">
     <div class="stat-chips d-flex">
-        <div class="stat-chip active" id="chipUpcoming" style="color:#0d6efd;" onclick="setTiming('upcoming')">
-            <i class="fas fa-calendar-day"></i><span>Upcoming</span></div>
-        <div class="stat-chip" id="chipNew" style="color:#198754;" onclick="setTiming('new')">
-            <i class="fas fa-star"></i><span>New</span></div>
+        <div class="stat-chip active" id="stOwned"    style="color:#198754;" onclick="setStatus('owned')"><i class="fas fa-circle-check"></i><span>Owned</span></div>
+        <div class="stat-chip"        id="stUnowned"  style="color:#0d6efd;" onclick="setStatus('unowned')"><i class="fas fa-bookmark"></i><span>Unowned</span></div>
+        <div class="stat-chip"        id="stUpcoming" style="color:#e0a800;" onclick="setStatus('upcoming')"><i class="fas fa-calendar-day"></i><span>Upcoming</span></div>
+        <div class="stat-chip"        id="stNew"      style="color:#6f42c1;" onclick="setStatus('new')"><i class="fas fa-star"></i><span>New</span></div>
     </div>
-    <div class="stat-chips d-flex">
-        <div class="stat-chip" id="chipComics" style="color:#6f42c1;" onclick="toggleCat('comics')">
-            <i class="fas fa-book-open"></i><span>Comics</span></div>
-        <div class="stat-chip" id="chipReprints" style="color:#6c757d;" onclick="toggleCat('reprints')">
-            <i class="fas fa-clock-rotate-left"></i><span>Reprints</span></div>
+    <div class="stat-chips d-flex" id="subToggles" style="display:none !important;">
+        <div class="stat-chip" id="chipComics"   style="color:#fd7e14;" onclick="toggleCat('comics')"><i class="fas fa-book-open"></i><span>Comics</span></div>
+        <div class="stat-chip" id="chipReprints" style="color:#6c757d;" onclick="toggleCat('reprints')"><i class="fas fa-clock-rotate-left"></i><span>Reprints</span></div>
     </div>
 </div>
 
-<!-- Settings (authors + about) -->
+<!-- Settings (followed authors + about) -->
 <div class="collapse mb-3" id="settingsPanel">
     <div class="card"><div class="card-body">
         <h6 class="mb-1"><i class="fas fa-circle-info me-1 text-primary"></i>About</h6>
         <p class="text-muted small mb-3">
-            Upcoming &amp; new releases from authors you've read (Google Books + OpenLibrary).
-            Word counts are estimates — Calibre provides real counts once a book is in your library.
+            Your whole book lifecycle on one page: <span style="color:#198754;">Owned</span> /
+            <span style="color:#0d6efd;">Unowned</span> books in your library, plus
+            <span style="color:#e0a800;">Upcoming</span> / <span style="color:#6f42c1;">New</span>
+            releases from authors you follow (Google Books + OpenLibrary). Word counts are estimates —
+            Calibre provides real counts once a book is owned.
         </p>
         <h6 class="mb-1"><i class="fas fa-user-pen me-1 text-primary"></i>Followed authors
             <span id="watchCount" class="text-muted small fw-normal"></span></h6>
         <div class="mb-2">
-            <label class="form-label small mb-1">Watch an author you haven't read</label>
+            <label class="form-label small mb-1">Follow an author you haven't read</label>
             <div class="input-group input-group-sm">
                 <input type="text" class="form-control" id="extraAuthorInput" placeholder="e.g. Rebecca Yarros">
                 <button class="btn btn-outline-primary" onclick="addExtra()">Add</button>
@@ -78,50 +120,245 @@
     </div></div>
 </div>
 
-<!-- Feed -->
-<div id="newsFeed"><div class="text-muted text-center py-5">Loading…</div></div>
+<div class="text-muted small mb-2" id="shelfCount"></div>
+<div class="row" id="booksGrid"><div class="col-12 text-muted text-center py-5">Loading…</div></div>
+<div id="scrollSentinel" style="height:1px;"></div>
+
+<!-- Dedicated Book-details modal (modal-lg) — used by every status -->
+<div class="modal fade" id="bookDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-truncate" id="bdTitle"></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-4 col-sm-3"><div class="bd-cover" id="bdCover"></div></div>
+                    <div class="col-8 col-sm-9">
+                        <div id="bdFields"></div>
+                        <div id="bdActions" class="d-flex flex-wrap gap-2 mt-3"></div>
+                    </div>
+                </div>
+                <hr>
+                <div id="bdAuthorReads" class="text-muted small">Loading your reads…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- In-page Edit Book modal (#88) — editing stays on the Books page -->
+<div class="modal fade" id="bkEditModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title">Edit book</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="bkeId">
+                <div class="row g-3">
+                    <div class="col-12 col-sm-4">
+                        <div class="bd-cover mb-2" id="bkeCover" style="max-width:170px;"></div>
+                        <div class="d-grid gap-1" style="max-width:170px;">
+                            <label class="btn btn-sm btn-outline-secondary mb-0">
+                                <i class="fas fa-upload me-1"></i>Upload
+                                <input type="file" id="bkeCoverFile" accept="image/*" hidden onchange="bkeUploadFile()">
+                            </label>
+                            <div class="input-group input-group-sm">
+                                <input type="text" class="form-control" id="bkeCoverUrl" placeholder="Image URL">
+                                <button class="btn btn-outline-secondary" type="button" onclick="bkeCoverFromUrl()">Fetch</button>
+                            </div>
+                            <button class="btn btn-sm btn-outline-danger" type="button" onclick="bkeRemoveCover()">
+                                <i class="fas fa-trash me-1"></i>Remove cover</button>
+                        </div>
+                    </div>
+                    <div class="col-12 col-sm-8">
+                        <div class="row g-2">
+                            <div class="col-12"><label class="form-label small mb-0">Title</label>
+                                <input class="form-control form-control-sm" id="bkeTitle"></div>
+                            <div class="col-12"><label class="form-label small mb-0">Author</label>
+                                <input class="form-control form-control-sm" id="bkeAuthor" list="bkeAuthorList" autocomplete="off"></div>
+                            <div class="col-8"><label class="form-label small mb-0">Series</label>
+                                <input class="form-control form-control-sm" id="bkeSeries" list="bkeSeriesList" autocomplete="off"></div>
+                            <div class="col-4"><label class="form-label small mb-0">Series #</label>
+                                <input class="form-control form-control-sm" id="bkeSeriesNum" type="number" step="0.1"></div>
+                            <div class="col-6"><label class="form-label small mb-0">Universe</label>
+                                <input class="form-control form-control-sm" id="bkeUniverse"></div>
+                            <div class="col-6"><label class="form-label small mb-0">Genre</label>
+                                <input class="form-control form-control-sm" id="bkeGenre" list="bkeGenreList" autocomplete="off"></div>
+                            <div class="col-6"><label class="form-label small mb-0">Release date</label>
+                                <input class="form-control form-control-sm" id="bkeDate" type="date"></div>
+                            <div class="col-3"><label class="form-label small mb-0">Pages</label>
+                                <input class="form-control form-control-sm" id="bkePages" type="number" min="0"></div>
+                            <div class="col-3"><label class="form-label small mb-0">Words</label>
+                                <input class="form-control form-control-sm" id="bkeWords" type="number" min="0"></div>
+                            <div class="col-12"><label class="form-label small mb-0">ISBN</label>
+                                <input class="form-control form-control-sm" id="bkeIsbn"></div>
+                        </div>
+                    </div>
+                </div>
+                <datalist id="bkeAuthorList"></datalist>
+                <datalist id="bkeSeriesList"></datalist>
+                <datalist id="bkeGenreList"></datalist>
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="bkeSave()">Save changes</button>
+            </div>
+        </div>
+    </div>
+</div>
 
 <script>
-let timing = 'upcoming';          // mutually exclusive: 'upcoming' | 'new'
-let showComics = false, showReprints = false;   // independent subset toggles
-let newsItems = [];
+let shelfStatus = 'owned';
+let showComics = false, showReprints = false;
+let cards = [], shelfTotal = 0, shelfSkip = 0, shelfLoading = false, _searchTimer = null, shelfGen = 0;
+let sortBy = 'author', sortDir = 'asc', coverFilter = 'all';
+const SORT_LABELS = { author: 'Author', title: 'Title', series: 'Series', date: 'Release date', words: 'Word count' };
+const PAGE = 60;
+
+function setCoverFilter(v) {
+    coverFilter = v;
+    ['All', 'Yes', 'No'].forEach(x => document.getElementById('cov' + x)
+        .querySelector('i').classList.toggle('invisible', x.toLowerCase() !== ({ all: 'all', yes: 'yes', no: 'no' }[v])));
+    loadShelf(true);
+}
+
+function setSort(by) {
+    if (sortBy === by) sortDir = (sortDir === 'asc' ? 'desc' : 'asc');
+    else { sortBy = by; sortDir = 'asc'; }
+    updateSortUI(); loadShelf(true);
+}
+function toggleSortDir() { sortDir = (sortDir === 'asc' ? 'desc' : 'asc'); updateSortUI(); loadShelf(true); }
+function updateSortUI() {
+    document.getElementById('sortLabel').textContent = SORT_LABELS[sortBy] || 'Author';
+    document.getElementById('sortDirIcon').className =
+        (sortDir === 'asc' ? 'fas fa-sort-amount-down-alt' : 'fas fa-sort-amount-up') + ' me-1';
+}
+
+const isRemote = () => shelfStatus === 'upcoming' || shelfStatus === 'new';
+const cardKey = c => (c.kind === 'local' ? 'L' + c.book_id : 'R' + c.news_id);
+
+function esc(s) { return (s || '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+// Cover URL for a card: local file (cache-busted by mtime) or the remote thumbnail.
+function coverSrc(c) {
+    const base = window.APP_BASE_PATH || '';
+    if (c.kind === 'local') return c.has_cover ? `${base}/static/covers/${c.book_id}.jpg?v=${c.cover_version || 0}` : '';
+    return c.cover_url || '';
+}
+function phCover(title, author, disp) {
+    return `<div class="books-ph" style="display:${disp};">
+        <div class="books-ph-title">${esc(title)}</div>
+        <div class="books-ph-author">${esc(author)}</div></div>`;
+}
 
 document.addEventListener('DOMContentLoaded', async () => {
-    await loadFeed();
-    try { await GreatReads.apiCall('/news/seen', { method: 'POST', data: {} }); } catch (e) {}
-    if (typeof loadNewsBadge === 'function') loadNewsBadge();
+    await loadShelf(true);
+    setupInfiniteScroll();
 });
 
-function setTiming(t) {
-    timing = t;
-    document.getElementById('chipUpcoming').classList.toggle('active', t === 'upcoming');
-    document.getElementById('chipNew').classList.toggle('active', t === 'new');
-    renderFeed();
+function setStatus(s) {
+    if (s === shelfStatus) return;
+    shelfStatus = s;
+    ['Owned', 'Unowned', 'Upcoming', 'New'].forEach(x =>
+        document.getElementById('st' + x).classList.toggle('active', x.toLowerCase() === s));
+    document.getElementById('subToggles').style.display = isRemote() ? 'flex' : 'none';
+    // Mark seen + refresh nav badge when viewing releases.
+    if (isRemote()) { GreatReads.apiCall('/news/seen', { method: 'POST', data: {} }).then(() => {
+        if (typeof loadNewsBadge === 'function') loadNewsBadge(); }).catch(() => {}); }
+    loadShelf(true);
 }
 
 function toggleCat(c) {
     if (c === 'comics') { showComics = !showComics; document.getElementById('chipComics').classList.toggle('active', showComics); }
     else { showReprints = !showReprints; document.getElementById('chipReprints').classList.toggle('active', showReprints); }
-    renderFeed();
+    renderAll();
 }
 
-// AND filtering (like Library formats): each active subset toggle is required, so Comics +
-// Reprints together shows only items that are BOTH. No toggle → everything for the timing.
-function passesTab(i) {
-    if (i.kind !== timing) return false;
-    if (showComics && !i.is_comic) return false;
-    if (showReprints && !i.is_reprint) return false;
-    return true;
+function onSearch() {
+    document.getElementById('searchClear').style.display =
+        document.getElementById('searchInput').value ? 'flex' : 'none';
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(() => loadShelf(true), 250);
+}
+function clearSearch() { document.getElementById('searchInput').value = ''; onSearch(); }
+
+async function loadShelf(reset) {
+    // Appends wait for an in-flight load; resets always supersede (bump generation).
+    if (!reset && shelfLoading) return;
+    if (reset) {
+        shelfGen++; cards = []; shelfSkip = 0;
+        document.getElementById('booksGrid').innerHTML =
+            '<div class="col-12 text-muted text-center py-5">Loading…</div>';
+    }
+    const myGen = shelfGen, myStatus = shelfStatus;
+    shelfLoading = true;
+    const limit = (myStatus === 'upcoming' || myStatus === 'new') ? 1000 : PAGE;
+    const q = encodeURIComponent(document.getElementById('searchInput').value.trim());
+    let r = null;
+    try { r = await GreatReads.apiCall(`/news/shelf?status=${myStatus}&skip=${shelfSkip}&limit=${limit}&search=${q}&sort_by=${sortBy}&sort_order=${sortDir}&cover=${coverFilter}`); }
+    catch (e) {}
+    if (myGen !== shelfGen) return;   // a newer reset replaced us — discard these results
+    shelfLoading = false;
+    if (r) { shelfTotal = r.total; cards = reset ? r.cards : cards.concat(r.cards); shelfSkip += r.cards.length; }
+    else if (reset) { cards = []; }
+    renderAll();
 }
 
-async function loadFeed() {
-    try { const r = await GreatReads.apiCall('/news/'); newsItems = (r && r.items) || []; }
-    catch (e) { newsItems = []; }
-    renderFeed();
+function visibleCards() {
+    let list = cards;
+    if (isRemote()) {
+        if (showComics) list = list.filter(c => c.is_comic);
+        if (showReprints) list = list.filter(c => c.is_reprint);
+    }
+    return list;
 }
 
-function clearSearch() { document.getElementById('searchInput').value = ''; renderFeed(); }
+function renderAll() {
+    const list = visibleCards();
+    const grid = document.getElementById('booksGrid');
+    const label = { owned: 'owned', unowned: 'unowned', upcoming: 'upcoming', new: 'new' }[shelfStatus];
+    document.getElementById('shelfCount').textContent =
+        list.length ? `${list.length}${list.length < shelfTotal ? ' of ' + shelfTotal : ''} ${label}` : '';
+    if (!list.length) {
+        grid.innerHTML = `<div class="col-12 text-muted text-center py-5">No ${label} books${
+            document.getElementById('searchInput').value ? ' match your search' : ''}.</div>`;
+        return;
+    }
+    grid.innerHTML = list.map(cardHtml).join('');
+}
 
+function cardHtml(c) {
+    const base = window.APP_BASE_PATH || '';
+    const src = coverSrc(c);
+    const cover = src
+        ? `<img src="${src}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${phCover(c.title, c.author, 'none')}`
+        : phCover(c.title, c.author, 'flex');
+    const rc = (c.read_count && c.read_count >= 1)
+        ? `<span class="books-readcount" title="Read ${c.read_count}×">${c.read_count >= 2 ? '×' + c.read_count : '✓'}</span>` : '';
+    const badges = (c.is_comic ? '<span class="badge books-badge" style="background:#fd7e14;" title="Comic"><i class="fas fa-book-open"></i></span>' : '')
+                 + (c.is_reprint ? '<span class="badge books-badge bg-secondary" title="Reprint"><i class="fas fa-clock-rotate-left"></i></span>' : '');
+    return `<div class="col-4 col-sm-3 col-lg-2 mb-3">
+        <div class="card books-card status-${c.status}" style="cursor:pointer;" onclick="openBookDetails('${cardKey(c)}')" title="${(c.title || '').replace(/"/g, '&quot;')}">
+            <div class="books-cover">${cover}
+                ${rc ? `<div class="books-badge-tl">${rc}</div>` : ''}
+                ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
+            </div>
+        </div>
+    </div>`;
+}
+
+function setupInfiniteScroll() {
+    const obs = new IntersectionObserver(entries => {
+        if (entries[0].isIntersecting && !isRemote() && !shelfLoading && cards.length < shelfTotal) {
+            loadShelf(false);
+        }
+    }, { rootMargin: '600px' });
+    obs.observe(document.getElementById('scrollSentinel'));
+}
+
+// ── Book details modal ───────────────────────────────────────────────────
 function fmtDate(iso, precision) {
     if (!iso) return '';
     const [y, m, d] = iso.split('-').map(Number);
@@ -131,122 +368,80 @@ function fmtDate(iso, precision) {
     return `${MON[m-1]} ${d}, ${y}`;
 }
 
-function renderFeed() {
-    const q = (document.getElementById('searchInput').value || '').trim().toLowerCase();
-    document.getElementById('searchClear').style.display = q ? 'flex' : 'none';
-    let items = newsItems.filter(passesTab);
-    if (q) items = items.filter(i =>
-        [i.title, i.author_name, i.matched_series].some(t => (t || '').toLowerCase().includes(q)));
+function openBookDetails(key) {
+    const c = cards.find(x => cardKey(x) === key);
+    if (!c) return;
+    const base = window.APP_BASE_PATH || '';
+    document.getElementById('bdTitle').textContent = c.title || '';
 
-    const el = document.getElementById('newsFeed');
-    if (!items.length) {
-        el.innerHTML = `<div class="text-muted text-center py-5">
-            No ${timing} ${q ? 'matches' : 'releases'} yet.
-            ${q ? '' : 'Try <strong>Check now</strong>, or add authors under <strong>Settings</strong>.'}</div>`;
-        return;
+    const src = coverSrc(c);
+    document.getElementById('bdCover').innerHTML = src
+        ? `<img src="${src}" alt="" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${phCover(c.title, c.author, 'none')}`
+        : phCover(c.title, c.author, 'flex');
+
+    const statusLabel = { owned: 'Owned', unowned: 'Unowned (no copy yet)', upcoming: 'Upcoming', new: 'New' }[c.status];
+    const seriesTxt = c.series ? c.series + (c.series_number != null ? ` #${c.series_number}` : '') : '';
+    const rows = [];
+    rows.push(['Status', statusLabel]);
+    if (c.author) rows.push(['Author', c.author]);
+    if (seriesTxt) rows.push(['Series', seriesTxt]);
+    if (c.genre) rows.push(['Genre', c.genre]);
+    const dt = fmtDate(c.date, c.date_precision);
+    if (dt) rows.push([c.status === 'upcoming' ? 'Releases' : 'Published', dt]);
+    if (c.is_reprint && c.first_publish_year) rows.push(['First published', c.first_publish_year]);
+    if (c.binding) rows.push(['Binding', c.binding]);
+    if (c.word_count) rows.push(['Words', `${Math.round(c.word_count / 1000)}k (est.)`]);
+    if (c.page_count) rows.push(['Pages', c.page_count]);
+    document.getElementById('bdFields').innerHTML = rows.map(([k, v]) =>
+        `<div class="d-flex justify-content-between gap-3 border-bottom py-1">
+            <span class="text-muted">${k}</span><span class="fw-medium text-end">${v}</span></div>`).join('');
+
+    // Actions by status.
+    let actions = '';
+    if (c.kind === 'local') {
+        actions = `<button class="btn btn-sm btn-outline-primary" onclick="bkeOpen(${c.book_id})">
+            <i class="fas fa-pen-to-square me-1"></i>Edit book</button>`;
+    } else {
+        actions = `${c.preview_link ? `<a class="btn btn-sm btn-outline-secondary" href="${c.preview_link}" target="_blank" rel="noopener"><i class="fas fa-eye me-1"></i>Preview</a>` : ''}
+            <button class="btn btn-sm btn-outline-success" onclick="saveLocallyStub()"><i class="fas fa-download me-1"></i>Save locally</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="ignoreRelease(${c.news_id})"><i class="fas fa-ban me-1"></i>Ignore</button>`;
     }
-    el.innerHTML = items.map(i => {
-        const cover = i.thumbnail_url
-            ? `<img src="${i.thumbnail_url}" class="tbr-book-cover-img" alt="" loading="lazy"
-                    onerror="this.style.display='none';this.nextElementSibling.style.display='block';">
-               <i class="fas fa-book book-cover-fallback" style="display:none;"></i>`
-            : `<i class="fas fa-book book-cover-fallback"></i>`;
-        const kindBadge = i.kind === 'upcoming'
-            ? '<span class="badge" style="background:#0d6efd;">Upcoming</span>'
-            : '<span class="badge" style="background:#198754;">New</span>';
-        const comicBadge = i.is_comic ? '<span class="badge" style="background:#6f42c1;">Comic</span>' : '';
-        const reprintBadge = i.is_reprint
-            ? `<span class="badge bg-secondary">Reprint${i.first_publish_year ? ' · ' + i.first_publish_year : ''}</span>` : '';
-        const catBadge = comicBadge + reprintBadge;
-        const trackedBadge = i.tracked ? '<span class="badge bg-warning text-dark">Tracked</span>' : '';
-        const seriesTxt = i.matched_series
-            ? i.matched_series + (i.series_number != null ? ` #${i.series_number}` : '')
-            : (i.series_number != null ? `Book ${i.series_number}` : '');
-        const wc = i.word_count ? `${Math.round(i.word_count / 1000)}k words (est.)` : '';
-        const meta = [fmtDate(i.published_date, i.date_precision), i.genre, i.binding, wc]
-            .filter(Boolean).join(' · ');
-        return `<div class="card reading-card border-${i.kind} mb-2 fade-in"
-                     style="cursor:pointer" onclick="openNewsItem(${i.id})">
-            <div class="card-body tbr-card-body">
-                <div class="d-flex gap-3">
-                    <div class="tbr-book-cover tbr-book-cover-large flex-shrink-0">${cover}</div>
-                    <div class="tbr-info flex-grow-1">
-                        <div class="d-flex justify-content-between align-items-start gap-2">
-                            <div class="tbr-info-text">
-                                <h5 class="card-title mb-1 text-truncate">${i.title || ''}</h5>
-                                <p class="text-muted mb-1 text-truncate">${i.author_name || ''}</p>
-                                ${seriesTxt ? `<div class="tbr-series mb-1">${seriesTxt}</div>` : ''}
-                                ${meta ? `<div class="news-meta text-muted">${meta}</div>` : ''}
-                            </div>
-                            <div class="tbr-icon-stack flex-shrink-0">${kindBadge}${catBadge}${trackedBadge}</div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>`;
-    }).join('');
-}
+    document.getElementById('bdActions').innerHTML = actions;
 
-// Card tap → the shared cover-tap modal (same as Library/TBR/Journal).
-function openNewsItem(id) {
-    const i = newsItems.find(x => x.id === id);
-    if (!i) return;
-    const bookLike = { title: i.title, author: i.author_name,
-                       series: i.matched_series, series_number: i.series_number };
-    const dr = [];
-    const dt = fmtDate(i.published_date, i.date_precision);
-    if (dt) dr.push([i.kind === 'upcoming' ? 'Releases' : 'Released', dt]);
-    if (i.genre) dr.push(['Genre', i.genre]);
-    if (i.binding) dr.push(['Binding', i.binding]);
-    if (i.word_count) dr.push(['Words (est.)', `${Math.round(i.word_count / 1000)}k`]);
-    if (i.is_reprint && i.first_publish_year) dr.push(['First published', i.first_publish_year]);
-    if (i.tracked) dr.push(['Status', 'In your library (no copy yet)']);
-    const actionsHtml =
-        `${i.preview_link ? `<a class="btn btn-sm btn-outline-secondary" href="${i.preview_link}" target="_blank" rel="noopener">
-            <i class="fas fa-eye me-2 text-primary"></i>Preview</a>` : ''}
-         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="ignoreNewsItem(${i.id})">
-            <i class="fas fa-ban me-2 text-muted"></i>Ignore</button>`;
-    GreatReads.openBookActions(bookLike, {
-        title: i.title, highlights: false, sessions: false, editBook: false,
-        detailRows: dr, actionsHtml, onShow: () => injectAuthorReads(i.author_name),
-    });
+    document.getElementById('bdAuthorReads').innerHTML = '<span class="text-muted small">Loading your reads…</span>';
+    injectAuthorReads(c.author);
+
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('bookDetailsModal')).show();
 }
 
 async function injectAuthorReads(author) {
+    const el = document.getElementById('bdAuthorReads');
     try {
         const d = await GreatReads.apiCall('/news/author-reads?author=' + encodeURIComponent(author));
-        if (!d.books || !d.books.length) return;
-        const opts = document.getElementById('openBookOptions');
-        if (!opts) return;
+        if (!d.books || !d.books.length) { el.innerHTML = `<span class="text-muted small">No finished books by ${author} yet.</span>`; return; }
         const base = window.APP_BASE_PATH || '';
-        const rows = d.books.slice(0, 60).map(b => {
+        const rows = d.books.map(b => {
             const cover = b.has_cover
-                ? `<img src="${base}/static/covers/${b.id}.jpg" alt="" loading="lazy"
-                        style="width:100%;height:100%;object-fit:cover;"
-                        onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
-                   <i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
+                ? `<img src="${base}/static/covers/${b.id}.jpg" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
                 : `<i class="fas fa-book" style="color:#adb5bd;"></i>`;
-            const sub = b.series ? `<div class="text-muted text-truncate" style="font-size:0.7rem;">${b.series}${b.series_number != null ? ' #' + b.series_number : ''}</div>` : '';
-            return `<div class="d-flex align-items-center gap-2 mb-1">
-                <div style="width:32px;height:48px;flex:0 0 32px;background:#e9ecef;border-radius:3px;
-                            overflow:hidden;display:flex;align-items:center;justify-content:center;">${cover}</div>
-                <div class="flex-grow-1 small" style="min-width:0;"><div class="text-truncate">${b.title}</div>${sub}</div>
-            </div>`;
+            const sub = b.series ? `<div class="text-muted text-truncate" style="font-size:.7rem;">${b.series}${b.series_number != null ? ' #' + b.series_number : ''}</div>` : '';
+            return `<div class="col-6 col-md-4"><div class="d-flex align-items-center gap-2 mb-1">
+                <div style="width:30px;height:45px;flex:0 0 30px;background:#e9ecef;border-radius:3px;overflow:hidden;display:flex;align-items:center;justify-content:center;">${cover}</div>
+                <div class="small" style="min-width:0;"><div class="text-truncate">${b.title}</div>${sub}</div></div></div>`;
         }).join('');
-        opts.insertAdjacentHTML('beforeend',
-            `<div class="col-12"><div class="open-details">
-                <div class="text-muted small mb-2">You've read ${d.books.length} by ${author}:</div>
-                <div style="max-height:300px;overflow-y:auto;">${rows}</div>
-             </div></div>`);
-    } catch (e) {}
+        el.innerHTML = `<div class="text-muted small mb-2">You've read ${d.books.length} by ${author}:</div><div class="row g-1">${rows}</div>`;
+    } catch (e) { el.innerHTML = ''; }
 }
 
-async function ignoreNewsItem(id) {
-    try { await GreatReads.apiCall(`/news/${id}/dismiss`, { method: 'POST' }); } catch (e) {}
-    newsItems = newsItems.filter(x => x.id !== id);
-    const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
-    if (m) m.hide();
-    renderFeed();
+function saveLocallyStub() {
+    showToast('“Save locally” (accept into your DB) is coming in the next phase.', 'info');
+}
+
+async function ignoreRelease(newsId) {
+    try { await GreatReads.apiCall(`/news/${newsId}/dismiss`, { method: 'POST' }); } catch (e) {}
+    cards = cards.filter(c => c.news_id !== newsId);
+    bootstrap.Modal.getInstance(document.getElementById('bookDetailsModal'))?.hide();
+    renderAll();
     if (typeof loadNewsBadge === 'function') loadNewsBadge();
 }
 
@@ -261,15 +456,104 @@ async function checkNow() {
         await GreatReads.apiCall('/news/poll', { method: 'POST' });
         showToast('Checking for new releases — runs in the background. Refresh in a minute.', 'info');
     } catch (e) {}
-    setTimeout(async () => {
-        await loadFeed();
+    setTimeout(() => {
+        if (isRemote()) loadShelf(true);
         btn.disabled = false;
         btn.innerHTML = '<i class="fas fa-rotate me-1"></i>Check now';
         _polling = false;
     }, 8000);
 }
 
-// ── manage authors ───────────────────────────────────────────────────────
+// ── in-page Edit Book ────────────────────────────────────────────────────
+let bkeBook = null, bkeListsLoaded = false;
+
+async function bkeLoadLists() {
+    if (bkeListsLoaded) return;
+    bkeListsLoaded = true;
+    const fill = (id, arr) => { document.getElementById(id).innerHTML =
+        (arr || []).map(v => `<option value="${esc(String(v))}">`).join(''); };
+    try { const a = await GreatReads.apiCall('/books/search/authors'); fill('bkeAuthorList', a.authors || a); } catch (e) {}
+    try { const s = await GreatReads.apiCall('/books/search/series'); fill('bkeSeriesList', s.series || s); } catch (e) {}
+    try { const g = await GreatReads.apiCall('/books/search/genres'); fill('bkeGenreList', g.genres || g); } catch (e) {}
+}
+
+async function bkeOpen(bookId) {
+    bkeLoadLists();
+    bootstrap.Modal.getInstance(document.getElementById('bookDetailsModal'))?.hide();
+    let b;
+    try { b = await GreatReads.apiCall('/books/' + bookId); }
+    catch (e) { showToast('Could not load book', 'danger'); return; }
+    bkeBook = b;
+    const set = (id, v) => { document.getElementById(id).value = (v != null ? v : ''); };
+    set('bkeId', b.id); set('bkeTitle', b.title); set('bkeAuthor', b.author);
+    set('bkeSeries', b.series); set('bkeSeriesNum', b.series_number);
+    set('bkeUniverse', b.universe); set('bkeGenre', b.genre); set('bkeDate', b.date_published);
+    set('bkePages', b.page_count); set('bkeWords', b.word_count); set('bkeIsbn', b.isbn_id);
+    set('bkeCoverUrl', '');
+    bkeRenderCover();
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('bkEditModal')).show();
+}
+
+function bkeRenderCover() {
+    const base = window.APP_BASE_PATH || '', b = bkeBook;
+    document.getElementById('bkeCover').innerHTML = (b && b.cover)
+        ? `<img src="${base}/static/covers/${b.id}.jpg?v=${Date.now()}" alt="" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${phCover(b.title, b.author, 'none')}`
+        : phCover(b ? b.title : '', b ? b.author : '', 'flex');
+}
+
+async function bkeSave() {
+    const id = document.getElementById('bkeId').value;
+    const author = document.getElementById('bkeAuthor').value.trim();
+    const parts = author ? author.split(/\s+/) : [];
+    const v = id2 => { const x = document.getElementById(id2).value.trim(); return x === '' ? null : x; };
+    const num = (id2, fn) => { const x = document.getElementById(id2).value; return x === '' ? null : fn(x); };
+    const data = {
+        title: document.getElementById('bkeTitle').value.trim(),
+        author_name_first: parts.length > 1 ? parts.slice(0, -1).join(' ') : (parts[0] || null),
+        author_name_second: parts.length > 1 ? parts[parts.length - 1] : null,
+        series: v('bkeSeries'), universe: v('bkeUniverse'), genre: v('bkeGenre'),
+        series_number: num('bkeSeriesNum', parseFloat),
+        date_published: document.getElementById('bkeDate').value || null,
+        page_count: num('bkePages', parseInt), word_count: num('bkeWords', parseInt),
+        isbn_id: num('bkeIsbn', parseInt),
+    };
+    try {
+        await GreatReads.apiCall('/books/' + id, { method: 'PUT', data });
+        showToast('Book updated', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
+        loadShelf(true);   // refresh grid; stays on the current status + filters
+    } catch (e) { showToast('Save failed', 'danger'); }
+}
+
+async function bkeUploadFile() {
+    const f = document.getElementById('bkeCoverFile').files[0];
+    if (!f) return;
+    const id = document.getElementById('bkeId').value, fd = new FormData();
+    fd.append('file', f);
+    try { await GreatReads.apiCall(`/books/${id}/cover`, { method: 'POST', data: fd });
+        if (bkeBook) bkeBook.cover = true; bkeRenderCover(); showToast('Cover updated', 'success'); }
+    catch (e) { showToast('Upload failed', 'danger'); }
+    document.getElementById('bkeCoverFile').value = '';
+}
+
+async function bkeCoverFromUrl() {
+    const url = document.getElementById('bkeCoverUrl').value.trim();
+    if (!url) return;
+    const id = document.getElementById('bkeId').value;
+    try { await GreatReads.apiCall(`/books/${id}/cover/from-url`, { method: 'POST', data: { url } });
+        if (bkeBook) bkeBook.cover = true; bkeRenderCover();
+        document.getElementById('bkeCoverUrl').value = ''; showToast('Cover downloaded', 'success'); }
+    catch (e) { showToast('Could not fetch image', 'danger'); }
+}
+
+async function bkeRemoveCover() {
+    const id = document.getElementById('bkeId').value;
+    try { await GreatReads.apiCall(`/books/${id}/cover`, { method: 'DELETE' });
+        if (bkeBook) bkeBook.cover = false; bkeRenderCover(); showToast('Cover removed', 'success'); }
+    catch (e) { showToast('Remove failed', 'danger'); }
+}
+
+// ── followed authors ─────────────────────────────────────────────────────
 async function loadWatch() {
     const box = document.getElementById('manageAuthors');
     let w;
@@ -287,11 +571,9 @@ async function loadWatch() {
             <div class="form-check form-switch m-0">
                 <input class="form-check-input" type="checkbox" ${on ? 'checked' : ''}
                        onchange="toggleAuthor('${name.replace(/'/g, "\\'")}', this.checked, ${isExtra})">
-            </div>
-        </div>`;
+            </div></div>`;
     }).join('') || '<div class="text-muted small">No read authors yet.</div>';
 }
-
 async function toggleAuthor(name, on, isExtra) {
     try {
         if (isExtra && !on) await GreatReads.apiCall('/news/watch/uninclude', { method: 'POST', data: { author: name } });
@@ -300,7 +582,6 @@ async function toggleAuthor(name, on, isExtra) {
     } catch (e) {}
     loadWatch();
 }
-
 async function addExtra() {
     const input = document.getElementById('extraAuthorInput');
     const name = input.value.trim();
@@ -309,7 +590,6 @@ async function addExtra() {
     input.value = '';
     loadWatch();
 }
-
 document.getElementById('settingsPanel').addEventListener('shown.bs.collapse', loadWatch);
 </script>
 {% endblock %}

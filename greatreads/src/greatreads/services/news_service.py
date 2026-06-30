@@ -18,6 +18,7 @@ Read-only against Calibre/ABS; only writes the GR `news_items` table.
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
@@ -25,8 +26,10 @@ import re
 from datetime import date, datetime, timedelta
 from typing import Optional
 
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
+from ..config import settings
 from ..discovery.google_books_client import GoogleBooksClient
 from ..models.book import Book
 from ..models.inventory import Inventory
@@ -715,6 +718,112 @@ def mark_seen(db: Session, item_id: Optional[int] = None) -> None:
     for i in q.all():
         i.seen = True
     db.commit()
+
+
+def _owned_book_id_subq(db: Session):
+    """Subquery of book_ids that have an owned copy in any format."""
+    return (db.query(Inventory.book_id)
+            .filter(or_(Inventory.owned_physical.is_(True),
+                        Inventory.owned_ebook.is_(True),
+                        Inventory.owned_audio.is_(True)))
+            .distinct())
+
+
+def _remote_card(i: "NewsItem", status: str) -> dict:
+    return {
+        "kind": "remote", "status": status, "news_id": i.id, "book_id": i.matched_book_id,
+        "title": i.title, "author": i.author_name, "series": i.matched_series,
+        "series_number": i.series_number, "cover_url": i.thumbnail_url, "has_cover": bool(i.thumbnail_url),
+        "is_comic": i.is_comic, "is_reprint": i.is_reprint, "tracked": i.tracked,
+        "word_count": i.word_count, "genre": i.genre, "binding": i.binding,
+        "date": i.published_date.isoformat() if i.published_date else None,
+        "date_precision": i.date_precision, "first_publish_year": i.first_publish_year,
+        "preview_link": i.preview_link, "read_count": None,
+    }
+
+
+def _local_card(b: Book, status: str, read_count: int) -> dict:
+    cover_version = 0
+    if b.cover:
+        try:
+            cover_version = int((settings.covers_dir / f"{b.id}.jpg").stat().st_mtime)
+        except OSError:
+            cover_version = 0
+    return {
+        "kind": "local", "status": status, "news_id": None, "book_id": b.id,
+        "title": b.title, "author": b.author, "series": b.series, "series_number": b.series_number,
+        "cover_url": None, "has_cover": bool(b.cover), "cover_version": cover_version,
+        "is_comic": False, "is_reprint": False,
+        "tracked": status == "unowned", "word_count": b.word_count, "page_count": b.page_count,
+        "genre": b.genre, "binding": None,
+        "date": b.date_published.isoformat() if b.date_published else None,
+        "date_precision": "day", "first_publish_year": None, "preview_link": None,
+        "read_count": read_count,
+    }
+
+
+def list_shelf(db: Session, status: str = "owned", search: str = None,
+               skip: int = 0, limit: int = 60, sort_by: str = "author",
+               sort_order: str = "asc", cover: str = "all") -> dict:
+    """Unified Books-page feed (#88): normalized cards for one status.
+    owned/unowned come from the DB (split by `inv` ownership); upcoming/new from news_items."""
+    status = (status or "owned").lower()
+    like = f"%{search.strip()}%" if search and search.strip() else None
+    desc = (sort_order or "asc").lower() == "desc"
+    sort_by = (sort_by or "author").lower()
+
+    if status in ("upcoming", "new"):
+        q = db.query(NewsItem).filter(NewsItem.dismissed.is_(False), NewsItem.kind == status)
+        if like:
+            q = q.filter(or_(NewsItem.title.ilike(like), NewsItem.author_name.ilike(like),
+                             NewsItem.matched_series.ilike(like)))
+        items = q.all()
+        if cover == "yes":
+            items = [i for i in items if i.thumbnail_url]
+        elif cover == "no":
+            items = [i for i in items if not i.thumbnail_url]
+        keyf = {
+            "title": lambda i: (i.title or "").lower(),
+            "author": lambda i: (i.author_name or "").lower(),
+            "series": lambda i: ((i.matched_series or "").lower(), i.series_number or 0),
+            "date": lambda i: i.published_date or date.min,
+            "words": lambda i: i.word_count or 0,
+        }.get(sort_by, lambda i: i.published_date or date.min)
+        # default date direction differs per kind; explicit sort_order wins
+        rev = desc if sort_by in ("title", "author", "series", "date", "words") else (status == "new")
+        items.sort(key=keyf, reverse=rev)
+        total = len(items)
+        cards = [_remote_card(i, status) for i in items[skip:skip + limit]]
+        return {"status": status, "total": total, "cards": cards}
+
+    owned_ids = _owned_book_id_subq(db)
+    q = db.query(Book)
+    q = q.filter(Book.id.in_(owned_ids)) if status == "owned" else q.filter(~Book.id.in_(owned_ids))
+    if like:
+        q = q.filter(or_(Book.title.ilike(like), Book.author_name_first.ilike(like),
+                         Book.author_name_second.ilike(like), Book.series.ilike(like)))
+    if cover == "yes":
+        q = q.filter(Book.cover.is_(True))
+    elif cover == "no":
+        q = q.filter(Book.cover.is_(False))
+    total = q.count()
+    sort_cols = {
+        "title": [Book.title], "author": [Book.author_name_second, Book.author_name_first],
+        "series": [Book.series, Book.series_number], "date": [Book.date_published],
+        "words": [Book.word_count],
+    }.get(sort_by, [Book.author_name_second, Book.author_name_first])
+    order = [(c.desc() if desc else c.asc()) for c in sort_cols] + [Book.title]
+    books = q.order_by(*order).offset(skip).limit(limit).all()
+    # read-counts for this page in one query
+    ids = [b.id for b in books]
+    counts = {}
+    if ids:
+        for bid, c in (db.query(Reading.book_id, func.count(Reading.id))
+                       .filter(Reading.book_id.in_(ids), Reading.date_finished_actual.isnot(None))
+                       .group_by(Reading.book_id).all()):
+            counts[bid] = c
+    cards = [_local_card(b, status, counts.get(b.id, 0)) for b in books]
+    return {"status": status, "total": total, "cards": cards}
 
 
 def author_finished_books(db: Session, author_name: str) -> list[dict]:

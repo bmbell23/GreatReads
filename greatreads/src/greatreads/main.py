@@ -51,6 +51,9 @@ class ForwardedPrefixMiddleware(BaseHTTPMiddleware):
             request.scope["root_path"] = forwarded_prefix
 
         response = await call_next(request)
+        # Dynamic HTML pages + API JSON must never be served stale (recurring stale-page
+        # issue). Static assets/covers are excluded above and keep their own long cache.
+        response.headers["Cache-Control"] = "no-store"
         return response
 
 

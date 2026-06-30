@@ -286,6 +286,29 @@ async def download_cover_from_url(
         raise HTTPException(status_code=500, detail=f"Failed to save cover: {str(e)}")
 
 
+@router.delete("/{book_id}/cover")
+async def delete_book_cover(
+    request: Request,
+    book_id: int,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Remove a book's cover (delete the image + thumbnail, clear the flag) so it falls
+    back to the placeholder. Used to drop a wrong cover (#88)."""
+    db_book = db.query(Book).filter(Book.id == book_id).first()
+    if not db_book:
+        raise HTTPException(status_code=404, detail="Book not found")
+    for p in (settings.covers_dir / f"{book_id}.jpg",
+              Path("/app/data/covers_thumb") / f"{book_id}.jpg"):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
+    db_book.cover = False
+    db.commit()
+    return {"message": "Cover removed", "book_id": book_id}
+
+
 @router.get("/search/authors")
 async def get_authors(
     request: Request,

@@ -53,6 +53,16 @@ async def get_author_reads(author: str, db: Session = Depends(get_db)):
     return {"author": author, "books": news_service.author_finished_books(db, author)}
 
 
+@router.get("/shelf")
+async def get_shelf(status: str = "owned", search: Optional[str] = None,
+                    skip: int = 0, limit: int = 60, sort_by: str = "author",
+                    sort_order: str = "asc", cover: str = "all", db: Session = Depends(get_db)):
+    """Unified Books-page feed (#88): cover cards for one status
+    (owned | unowned | upcoming | new), paginated for infinite scroll."""
+    return news_service.list_shelf(db, status=status, search=search, skip=skip, limit=limit,
+                                   sort_by=sort_by, sort_order=sort_order, cover=cover)
+
+
 @router.post("/seen")
 async def post_seen(body: SeenBody, db: Session = Depends(get_db)):
     """Mark one item seen (with id) or all unseen items seen (no id) — clears the badge."""
