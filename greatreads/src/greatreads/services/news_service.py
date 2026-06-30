@@ -521,26 +521,42 @@ def _sig_tokens(title: Optional[str]) -> list:
     return [w for w in toks if w not in _STOPWORDS]
 
 
+def _dup_score(it) -> tuple:
+    return (1 if it.thumbnail_url else 0, 1 if it.isbn_13 else 0, len(it.title or ""))
+
+
 def _dedup_crossentry(db: Session) -> int:
-    """Collapse near-duplicate entries of the same work (same author + same first two
-    significant title words) — e.g. 'Legacies of Betrayal' and 'Legacies of Betrayal:
-    The Third Tale of Witness'. Keep the entry with the best metadata."""
-    groups: dict = {}
+    """Collapse only true prefix-extensions of the same work — same author where one
+    title's significant words are a *prefix* of the other's: 'Legacies of Betrayal' vs
+    'Legacies of Betrayal: The Third Tale of Witness'. Distinct series entries that merely
+    share a prefix ('Lucky Starr and the Oceans of Venus' vs '… Pirates of the Asteroids')
+    diverge and are NOT merged. Keeps the entry with the best metadata."""
+    by_author: dict = {}
     for it in db.query(NewsItem).all():
-        sig = _sig_tokens(it.title)
-        if len(sig) < 2:
-            continue
-        key = ((it.author_name or "").lower(), tuple(sig[:2]))
-        groups.setdefault(key, []).append(it)
+        sig = tuple(_sig_tokens(it.title))
+        if len(sig) >= 2:
+            by_author.setdefault((it.author_name or "").lower(), []).append((it, sig))
     removed = 0
-    for grp in groups.values():
-        if len(grp) < 2:
-            continue
-        grp.sort(key=lambda it: (1 if it.thumbnail_url else 0, 1 if it.isbn_13 else 0,
-                                 len(it.title or ""), -it.id), reverse=True)
-        for it in grp[1:]:
-            db.delete(it)
-            removed += 1
+    for items in by_author.values():
+        items.sort(key=lambda x: (len(x[1]), x[0].id))   # shortest title first
+        kept: list = []
+        for it, sig in items:
+            dup_idx = None
+            for idx, (_, ksig) in enumerate(kept):
+                short, lng = (ksig, sig) if len(ksig) <= len(sig) else (sig, ksig)
+                if lng[:len(short)] == short:            # one is a prefix of the other
+                    dup_idx = idx
+                    break
+            if dup_idx is None:
+                kept.append((it, sig))
+            else:
+                kit = kept[dup_idx][0]
+                if _dup_score(it) > _dup_score(kit):
+                    db.delete(kit)
+                    kept[dup_idx] = (it, sig)
+                else:
+                    db.delete(it)
+                removed += 1
     if removed:
         db.commit()
     return removed
@@ -574,6 +590,52 @@ def reprocess(db: Session) -> dict:
     removed += _dedup_untitled(db)
     removed += _dedup_crossentry(db)
     return {"removed": removed, "updated": updated, "remaining": db.query(NewsItem).count()}
+
+
+def enrich_with_openlibrary(db: Session, only_missing: bool = True) -> dict:
+    """Cross-reference each news item against OpenLibrary (#69) — no Google quota.
+
+    Adds: first-publish-year → reprint reclassification (catches pseudonym/old works
+    like Asimov's Lucky Starr), binding (HC/PB), a cover when Google had none, and a
+    word-count estimate (~300 wpp) from page_count.
+    """
+    from ..discovery.openlibrary_client import OpenLibraryClient
+    client = OpenLibraryClient()
+    today_year = date.today().year
+    n_reprint = n_bind = n_cover = n_words = 0
+    items = db.query(NewsItem).all()
+    for item in items:
+        fpy = item.first_publish_year
+        if fpy is None:
+            fpy = client.first_publish_year(item.title, item.author_name)
+            if fpy:
+                item.first_publish_year = fpy
+        rep_year = item.published_date.year if item.published_date else today_year
+        if fpy and item.category == "book" and (rep_year - fpy) >= REPRINT_MIN_AGE_YEARS:
+            item.category = "reprint"
+            n_reprint += 1
+
+        isbn = item.isbn_13 or item.isbn_10
+        pages = None
+        if isbn and (not only_missing or not item.binding or not item.thumbnail_url):
+            ed = client.edition_by_isbn(isbn)
+            pages = ed.get("pages")
+            if ed.get("binding") and not item.binding:
+                item.binding = ed["binding"]; n_bind += 1
+            if ed.get("cover_url") and not item.thumbnail_url:
+                item.thumbnail_url = ed["cover_url"]; item.low_confidence = not item.isbn_13; n_cover += 1
+
+        if item.word_count is None:
+            if pages is None and item.raw_json:
+                try:
+                    pages = json.loads(item.raw_json).get("page_count")
+                except (ValueError, TypeError):
+                    pages = None
+            if isinstance(pages, int) and pages > 0:
+                item.word_count = pages * 300; n_words += 1
+    db.commit()
+    return {"total": len(items), "reprints+": n_reprint, "binding+": n_bind,
+            "covers+": n_cover, "words+": n_words}
 
 
 def _upsert(db, author, rep, kind, low_conf, series_tag, work_key,

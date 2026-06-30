@@ -64,6 +64,8 @@ def _run_poll() -> None:
     db = SessionLocal()
     try:
         news_service.poll_releases(db)
+        news_service.reprocess(db)                 # re-clean + drop stale junk leftovers
+        news_service.enrich_with_openlibrary(db)   # OpenLibrary cross-ref (no Google quota)
     except Exception as exc:
         logger.error("manual news poll failed: %s", exc)
     finally:

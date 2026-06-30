@@ -88,10 +88,12 @@ def _poll_news():
     """Scheduled job: poll Google Books for new/upcoming releases by watched authors (#68)."""
     db = SessionLocal()
     try:
-        from .services.news_service import poll_releases
+        from .services.news_service import poll_releases, reprocess, enrich_with_openlibrary
         logger.info("Daily news poll starting…")
         result = poll_releases(db)
-        logger.info("Daily news poll complete: %s", result)
+        reprocess(db)                          # re-clean titles/junk + drop stale junk leftovers
+        enrich = enrich_with_openlibrary(db)   # cross-reference OpenLibrary (no Google quota)
+        logger.info("Daily news poll complete: %s | enrich: %s", result, enrich)
     except Exception as exc:
         logger.error("Daily news poll failed: %s", exc)
     finally:

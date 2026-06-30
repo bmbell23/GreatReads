@@ -50,6 +50,10 @@ class NewsItem(Base):
     category = Column(String, default="book", nullable=False)  # 'book' | 'comic' | 'reprint'
     kind = Column(String, nullable=False)           # 'upcoming' | 'new'
     low_confidence = Column(Boolean, default=False, nullable=False)  # missing cover/isbn
+    # Enrichment (#69 — OpenLibrary/Hardcover cross-reference)
+    binding = Column(String)                        # 'Hardcover' | 'Paperback' | None
+    first_publish_year = Column(Integer)            # work's original year (drives reprint flag)
+    word_count = Column(Integer)                    # estimated from page_count (~300 wpp)
     raw_json = Column(Text)                          # full normalized API record, for offline re-parsing
 
     seen = Column(Boolean, default=False, nullable=False)
@@ -79,6 +83,9 @@ class NewsItem(Base):
             "category": self.category,
             "kind": self.kind,
             "low_confidence": self.low_confidence,
+            "binding": self.binding,
+            "first_publish_year": self.first_publish_year,
+            "word_count": self.word_count,
             "seen": self.seen,
             "dismissed": self.dismissed,
         }

@@ -124,13 +124,14 @@ function renderFeed() {
         const comicBadge = i.category === 'comic'
             ? '<span class="badge bg-purple" style="background:#6f42c1;">Graphic Novel</span>' : '';
         const reprintBadge = i.category === 'reprint'
-            ? '<span class="badge bg-secondary" title="New edition of an older book">Reprint</span>' : '';
+            ? `<span class="badge bg-secondary" title="New edition of an older book">Reprint${i.first_publish_year ? ' · ' + i.first_publish_year : ''}</span>` : '';
         const trackedBadge = i.tracked
             ? '<span class="badge bg-warning text-dark" title="In your library list — you don\'t own a copy yet">Tracked</span>' : '';
         const seriesTxt = i.matched_series
             ? i.matched_series + (i.series_number != null ? ` #${i.series_number}` : '')
             : (i.series_number != null ? `Book ${i.series_number}` : '');
-        const metaBits = [seriesTxt, i.genre].filter(Boolean).join(' · ');
+        const wc = i.word_count ? `${Math.round(i.word_count / 1000)}k words` : '';
+        const metaBits = [seriesTxt, i.genre, i.binding, wc].filter(Boolean).join(' · ');
         const series = metaBits ? `<div class="news-series">${metaBits}</div>` : '';
         const low = i.low_confidence
             ? ' <i class="fas fa-circle-question text-muted" title="Incomplete metadata"></i>' : '';
