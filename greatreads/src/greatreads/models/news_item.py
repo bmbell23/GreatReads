@@ -47,7 +47,9 @@ class NewsItem(Base):
     genre = Column(String)                          # primary Google category, cleaned
     matched_book_id = Column(Integer)               # set when this matches a book already in the DB
     tracked = Column(Boolean, default=False, nullable=False)  # in the DB but no owned copy → "on your radar"
-    category = Column(String, default="book", nullable=False)  # 'book' | 'comic' | 'reprint'
+    category = Column(String, default="book", nullable=False)  # legacy display; superseded by flags
+    is_comic = Column(Boolean, default=False, nullable=False)   # independent flags so a book can be
+    is_reprint = Column(Boolean, default=False, nullable=False) # both (comic AND reprint) — AND filtering
     kind = Column(String, nullable=False)           # 'upcoming' | 'new'
     low_confidence = Column(Boolean, default=False, nullable=False)  # missing cover/isbn
     # Enrichment (#69 — OpenLibrary/Hardcover cross-reference)
@@ -81,6 +83,8 @@ class NewsItem(Base):
             "matched_book_id": self.matched_book_id,
             "tracked": self.tracked,
             "category": self.category,
+            "is_comic": self.is_comic,
+            "is_reprint": self.is_reprint,
             "kind": self.kind,
             "low_confidence": self.low_confidence,
             "binding": self.binding,

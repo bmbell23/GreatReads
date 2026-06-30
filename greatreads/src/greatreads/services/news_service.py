@@ -441,9 +441,16 @@ def poll_releases(db: Session) -> dict:
             if not kind:
                 _drop("5_window"); continue
 
-            # Match against the DB. Owned (copy or finished) → drop; in-DB but unowned
-            # → keep as "tracked"; not in DB → a fresh discovery.
-            owned = _best_match(rep.get("title", ""), author, None, None,
+            # Clean the title FIRST (foreign/binding/edition) so the DB-ownership match and
+            # all filters use the real title — "Tapestry of Fate_2 Hb" must match the owned
+            # "The Tapestry of Fate". Drop non-English here, before the paid edition lookup.
+            clean_title = _englishify_title(_clean_title(rep.get("title")))
+            if not clean_title:
+                _drop("1b_foreign"); continue
+
+            # Match the cleaned title against the DB. Owned (copy or finished) → drop;
+            # in-DB but unowned → tracked; not in DB → a fresh discovery.
+            owned = _best_match(clean_title, author, None, None,
                                 str(rep["_date"].year), existing_books)
             tracked, matched_id = False, None
             if owned:
@@ -459,11 +466,6 @@ def poll_releases(db: Session) -> dict:
                 continue
             processed_gids.add(gid)
 
-            # Drop non-English editions before the (paid) edition lookup.
-            clean_title = _englishify_title(_clean_title(rep.get("title")))
-            if not clean_title:
-                _drop("1b_foreign"); continue
-
             # Capture the raw record before cleaning, then enrich from sibling editions
             # (earliest-year for reprint detection, cover fallback, clean title).
             raw_json = json.dumps({k: v for k, v in rep.items() if not k.startswith("_")})
@@ -472,10 +474,11 @@ def poll_releases(db: Session) -> dict:
             rep_year = rep["_date"].year
             rep["title"], rep["thumbnail"] = display_title, thumb
 
-            category = _detect_category(display_title, rep.get("subtitle"),
-                                        rep.get("categories"), author)
-            if category == "book" and min_year and (rep_year - min_year) >= REPRINT_MIN_AGE_YEARS:
-                category = "reprint"   # an old book getting a new edition — keep, but tag it
+            # Independent flags (a book can be both a comic and a reprint → AND filtering).
+            is_comic = _detect_category(display_title, rep.get("subtitle"),
+                                        rep.get("categories"), author) == "comic"
+            is_reprint = bool(min_year and (rep_year - min_year) >= REPRINT_MIN_AGE_YEARS)
+            category = "comic" if is_comic else ("reprint" if is_reprint else "book")
             genre = _primary_genre(rep.get("categories"))
             series_number = (rep.get("series_number") or _parse_series_number(display_title)
                              or _parse_series_number(rep.get("subtitle")))
@@ -483,7 +486,8 @@ def poll_releases(db: Session) -> dict:
             low_conf = not (thumb and rep.get("isbn_13"))
             _upsert(db, author, rep, kind, low_conf, series_tag, wk,
                     category=category, tracked=tracked, matched_id=matched_id,
-                    genre=genre, series_number=series_number, raw_json=raw_json)
+                    genre=genre, series_number=series_number, raw_json=raw_json,
+                    is_comic=is_comic, is_reprint=is_reprint)
             surfaced += 1
 
     db.commit()
@@ -565,6 +569,10 @@ def _dedup_crossentry(db: Session) -> int:
 def reprocess(db: Session) -> dict:
     """Re-run title cleanup + language/junk filters + dedup over EXISTING rows using
     stored raw_json — NO API calls. Lets us iterate filtering without spending quota."""
+    existing_books = _build_existing(db)
+    owned_ids = {bid for (bid,) in db.query(Inventory.book_id).distinct() if bid}
+    owned_ids |= {bid for (bid,) in db.query(Reading.book_id)
+                  .filter(Reading.date_finished_actual.isnot(None)).distinct() if bid}
     removed = updated = 0
     for item in db.query(NewsItem).all():
         try:
@@ -578,13 +586,24 @@ def reprocess(db: Session) -> dict:
             db.delete(item)
             removed += 1
             continue
+        # Re-check ownership on the cleaned title (catches books already in the library
+        # whose raw title was too messy to match at poll time, e.g. Tapestry of Fate).
+        yr = str(item.published_date.year) if item.published_date else None
+        owned = _best_match(eng, item.author_name, None, None, yr, existing_books)
+        if owned:
+            if owned["id"] in owned_ids:
+                db.delete(item)
+                removed += 1
+                continue
+            item.tracked = True
+            item.matched_book_id = owned["id"]
         item.title = eng
         item.genre = _primary_genre(raw.get("categories"))
         if item.series_number is None:
             item.series_number = (raw.get("series_number")
                                   or _parse_series_number(eng) or _parse_series_number(raw.get("subtitle")))
-        if item.category != "reprint":                       # reprint needs an API call; leave as-is
-            item.category = _detect_category(eng, raw.get("subtitle"), raw.get("categories"), item.author_name)
+        item.is_comic = _detect_category(eng, raw.get("subtitle"), raw.get("categories"), item.author_name) == "comic"
+        item.category = "comic" if item.is_comic else ("reprint" if item.is_reprint else "book")
         updated += 1
     db.commit()
     removed += _dedup_untitled(db)
@@ -611,8 +630,10 @@ def enrich_with_openlibrary(db: Session, only_missing: bool = True) -> dict:
             if fpy:
                 item.first_publish_year = fpy
         rep_year = item.published_date.year if item.published_date else today_year
-        if fpy and item.category == "book" and (rep_year - fpy) >= REPRINT_MIN_AGE_YEARS:
-            item.category = "reprint"
+        if fpy and not item.is_reprint and (rep_year - fpy) >= REPRINT_MIN_AGE_YEARS:
+            item.is_reprint = True
+            if item.category == "book":
+                item.category = "reprint"
             n_reprint += 1
 
         isbn = item.isbn_13 or item.isbn_10
@@ -640,7 +661,8 @@ def enrich_with_openlibrary(db: Session, only_missing: bool = True) -> dict:
 
 def _upsert(db, author, rep, kind, low_conf, series_tag, work_key,
            category="book", tracked=False, matched_id=None,
-           genre=None, series_number=None, raw_json=None) -> None:
+           genre=None, series_number=None, raw_json=None,
+           is_comic=False, is_reprint=False) -> None:
     gid = rep.get("google_books_id")
     if not gid:
         return
@@ -652,8 +674,8 @@ def _upsert(db, author, rep, kind, low_conf, series_tag, work_key,
         isbn_13=rep.get("isbn_13"), isbn_10=rep.get("isbn_10"), thumbnail_url=rep.get("thumbnail"),
         preview_link=rep.get("preview_link"), matched_series=series_tag,
         series_number=series_number, genre=genre, matched_book_id=matched_id,
-        tracked=tracked, category=category, kind=kind,
-        low_confidence=low_conf, raw_json=raw_json, last_polled_at=now,
+        tracked=tracked, category=category, is_comic=is_comic, is_reprint=is_reprint,
+        kind=kind, low_confidence=low_conf, raw_json=raw_json, last_polled_at=now,
     )
     if item:
         for k, v in fields.items():       # refresh data; never touch seen/dismissed

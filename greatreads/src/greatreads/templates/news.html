@@ -21,19 +21,14 @@
         <div class="page-header-content"><h1 class="page-header-title mb-0">Books</h1></div>
     </div>
     <div class="d-flex gap-2">
-        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#managePanel">
-            <i class="fas fa-user-gear me-1"></i>Authors
+        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#settingsPanel">
+            <i class="fas fa-gear me-1"></i>Settings
         </button>
         <button class="btn btn-primary" id="checkNowBtn" onclick="checkNow()">
             <i class="fas fa-rotate me-1"></i>Check now
         </button>
     </div>
 </div>
-
-<p class="text-muted small mb-2">
-    Upcoming &amp; new releases from authors you've read (Google Books + OpenLibrary). Word counts
-    are <em>estimates</em> — Calibre provides real counts once a book is in your library.
-</p>
 
 <!-- Search (matches TBR/Journal/Library) -->
 <div class="d-flex gap-2 align-items-center mb-2">
@@ -45,19 +40,32 @@
     </div>
 </div>
 
-<!-- Filter radios -->
-<div class="d-flex justify-content-center mb-3">
-    <div class="btn-group btn-group-sm" role="group">
-        <button type="button" class="btn btn-outline-secondary active" id="tabUpcoming" onclick="setNewsTab('upcoming')">Upcoming</button>
-        <button type="button" class="btn btn-outline-secondary" id="tabNew" onclick="setNewsTab('new')">New</button>
-        <button type="button" class="btn btn-outline-secondary" id="tabComics" onclick="setNewsTab('comics')">Comics</button>
-        <button type="button" class="btn btn-outline-secondary" id="tabReprints" onclick="setNewsTab('reprints')">Reprints</button>
+<!-- Filters (shared stat-chip pills): timing (left, exclusive) + subsets (right, AND toggles) -->
+<div class="d-flex justify-content-center align-items-center flex-wrap gap-4 mb-3">
+    <div class="stat-chips d-flex">
+        <div class="stat-chip active" id="chipUpcoming" style="color:#0d6efd;" onclick="setTiming('upcoming')">
+            <i class="fas fa-calendar-day"></i><span>Upcoming</span></div>
+        <div class="stat-chip" id="chipNew" style="color:#198754;" onclick="setTiming('new')">
+            <i class="fas fa-star"></i><span>New</span></div>
+    </div>
+    <div class="stat-chips d-flex">
+        <div class="stat-chip" id="chipComics" style="color:#6f42c1;" onclick="toggleCat('comics')">
+            <i class="fas fa-book-open"></i><span>Comics</span></div>
+        <div class="stat-chip" id="chipReprints" style="color:#6c757d;" onclick="toggleCat('reprints')">
+            <i class="fas fa-clock-rotate-left"></i><span>Reprints</span></div>
     </div>
 </div>
 
-<!-- Manage watched authors -->
-<div class="collapse mb-3" id="managePanel">
+<!-- Settings (authors + about) -->
+<div class="collapse mb-3" id="settingsPanel">
     <div class="card"><div class="card-body">
+        <h6 class="mb-1"><i class="fas fa-circle-info me-1 text-primary"></i>About</h6>
+        <p class="text-muted small mb-3">
+            Upcoming &amp; new releases from authors you've read (Google Books + OpenLibrary).
+            Word counts are estimates — Calibre provides real counts once a book is in your library.
+        </p>
+        <h6 class="mb-1"><i class="fas fa-user-pen me-1 text-primary"></i>Followed authors
+            <span id="watchCount" class="text-muted small fw-normal"></span></h6>
         <div class="mb-2">
             <label class="form-label small mb-1">Watch an author you haven't read</label>
             <div class="input-group input-group-sm">
@@ -65,7 +73,7 @@
                 <button class="btn btn-outline-primary" onclick="addExtra()">Add</button>
             </div>
         </div>
-        <div class="small text-muted mb-1">Watched authors <span id="watchCount"></span> — toggle off to mute.</div>
+        <div class="small text-muted mb-1">Toggle an author off to mute their releases.</div>
         <div id="manageAuthors" class="border rounded p-2"><div class="text-muted small">Loading…</div></div>
     </div></div>
 </div>
@@ -74,7 +82,8 @@
 <div id="newsFeed"><div class="text-muted text-center py-5">Loading…</div></div>
 
 <script>
-let newsTab = 'upcoming';
+let timing = 'upcoming';          // mutually exclusive: 'upcoming' | 'new'
+let showComics = false, showReprints = false;   // independent subset toggles
 let newsItems = [];
 
 document.addEventListener('DOMContentLoaded', async () => {
@@ -83,18 +92,26 @@ document.addEventListener('DOMContentLoaded', async () => {
     if (typeof loadNewsBadge === 'function') loadNewsBadge();
 });
 
-function setNewsTab(t) {
-    newsTab = t;
-    ['Upcoming', 'New', 'Comics', 'Reprints'].forEach(x =>
-        document.getElementById('tab' + x).classList.toggle('active', x.toLowerCase() === t));
+function setTiming(t) {
+    timing = t;
+    document.getElementById('chipUpcoming').classList.toggle('active', t === 'upcoming');
+    document.getElementById('chipNew').classList.toggle('active', t === 'new');
     renderFeed();
 }
 
-// Comics and reprints get their own tabs; Upcoming/New show only genuinely-new novels.
+function toggleCat(c) {
+    if (c === 'comics') { showComics = !showComics; document.getElementById('chipComics').classList.toggle('active', showComics); }
+    else { showReprints = !showReprints; document.getElementById('chipReprints').classList.toggle('active', showReprints); }
+    renderFeed();
+}
+
+// AND filtering (like Library formats): each active subset toggle is required, so Comics +
+// Reprints together shows only items that are BOTH. No toggle → everything for the timing.
 function passesTab(i) {
-    if (newsTab === 'comics') return i.category === 'comic';
-    if (newsTab === 'reprints') return i.category === 'reprint';
-    return i.kind === newsTab && i.category === 'book';
+    if (i.kind !== timing) return false;
+    if (showComics && !i.is_comic) return false;
+    if (showReprints && !i.is_reprint) return false;
+    return true;
 }
 
 async function loadFeed() {
@@ -124,8 +141,8 @@ function renderFeed() {
     const el = document.getElementById('newsFeed');
     if (!items.length) {
         el.innerHTML = `<div class="text-muted text-center py-5">
-            No ${newsTab} ${q ? 'matches' : 'releases'} yet.
-            ${q ? '' : 'Try <strong>Check now</strong>, or add authors under <strong>Authors</strong>.'}</div>`;
+            No ${timing} ${q ? 'matches' : 'releases'} yet.
+            ${q ? '' : 'Try <strong>Check now</strong>, or add authors under <strong>Settings</strong>.'}</div>`;
         return;
     }
     el.innerHTML = items.map(i => {
@@ -137,11 +154,10 @@ function renderFeed() {
         const kindBadge = i.kind === 'upcoming'
             ? '<span class="badge" style="background:#0d6efd;">Upcoming</span>'
             : '<span class="badge" style="background:#198754;">New</span>';
-        const catBadge = i.category === 'comic'
-            ? '<span class="badge" style="background:#6f42c1;">Comic</span>'
-            : i.category === 'reprint'
-            ? `<span class="badge bg-secondary">Reprint${i.first_publish_year ? ' · ' + i.first_publish_year : ''}</span>`
-            : '';
+        const comicBadge = i.is_comic ? '<span class="badge" style="background:#6f42c1;">Comic</span>' : '';
+        const reprintBadge = i.is_reprint
+            ? `<span class="badge bg-secondary">Reprint${i.first_publish_year ? ' · ' + i.first_publish_year : ''}</span>` : '';
+        const catBadge = comicBadge + reprintBadge;
         const trackedBadge = i.tracked ? '<span class="badge bg-warning text-dark">Tracked</span>' : '';
         const seriesTxt = i.matched_series
             ? i.matched_series + (i.series_number != null ? ` #${i.series_number}` : '')
@@ -183,7 +199,7 @@ function openNewsItem(id) {
     if (i.genre) dr.push(['Genre', i.genre]);
     if (i.binding) dr.push(['Binding', i.binding]);
     if (i.word_count) dr.push(['Words (est.)', `${Math.round(i.word_count / 1000)}k`]);
-    if (i.category === 'reprint' && i.first_publish_year) dr.push(['First published', i.first_publish_year]);
+    if (i.is_reprint && i.first_publish_year) dr.push(['First published', i.first_publish_year]);
     if (i.tracked) dr.push(['Status', 'In your library (no copy yet)']);
     const actionsHtml =
         `${i.preview_link ? `<a class="btn btn-sm btn-outline-secondary" href="${i.preview_link}" target="_blank" rel="noopener">
@@ -202,12 +218,25 @@ async function injectAuthorReads(author) {
         if (!d.books || !d.books.length) return;
         const opts = document.getElementById('openBookOptions');
         if (!opts) return;
-        const list = d.books.slice(0, 20).map(b =>
-            `<div class="small text-truncate">• ${b.title}${b.series
-                ? ` <span class="text-muted">(${b.series}${b.series_number != null ? ' #' + b.series_number : ''})</span>` : ''}</div>`).join('');
+        const base = window.APP_BASE_PATH || '';
+        const rows = d.books.slice(0, 60).map(b => {
+            const cover = b.has_cover
+                ? `<img src="${base}/static/covers/${b.id}.jpg" alt="" loading="lazy"
+                        style="width:100%;height:100%;object-fit:cover;"
+                        onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">
+                   <i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
+                : `<i class="fas fa-book" style="color:#adb5bd;"></i>`;
+            const sub = b.series ? `<div class="text-muted text-truncate" style="font-size:0.7rem;">${b.series}${b.series_number != null ? ' #' + b.series_number : ''}</div>` : '';
+            return `<div class="d-flex align-items-center gap-2 mb-1">
+                <div style="width:32px;height:48px;flex:0 0 32px;background:#e9ecef;border-radius:3px;
+                            overflow:hidden;display:flex;align-items:center;justify-content:center;">${cover}</div>
+                <div class="flex-grow-1 small" style="min-width:0;"><div class="text-truncate">${b.title}</div>${sub}</div>
+            </div>`;
+        }).join('');
         opts.insertAdjacentHTML('beforeend',
             `<div class="col-12"><div class="open-details">
-                <div class="text-muted small mb-1">You've read ${d.books.length} by ${author}:</div>${list}
+                <div class="text-muted small mb-2">You've read ${d.books.length} by ${author}:</div>
+                <div style="max-height:300px;overflow-y:auto;">${rows}</div>
              </div></div>`);
     } catch (e) {}
 }
@@ -281,6 +310,6 @@ async function addExtra() {
     loadWatch();
 }
 
-document.getElementById('managePanel').addEventListener('shown.bs.collapse', loadWatch);
+document.getElementById('settingsPanel').addEventListener('shown.bs.collapse', loadWatch);
 </script>
 {% endblock %}

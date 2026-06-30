@@ -298,7 +298,7 @@ html, body {
     display: flex;
     align-items: center;
     gap: 1.25rem;
-    padding: 1rem 0;
+    padding: 0;   /* tight header — 6 pages already override 1rem→0 locally; make it the default */
 }
 
 .page-header-icon {
@@ -1313,4 +1313,33 @@ html, body {
 .emoji-rating-item.empty {
     opacity: 0.3;
     filter: grayscale(100%);
+}
+
+/* Shared search box: floating clear (X) inside the input. Previously duplicated in
+   every page's local <style> (library/tbr/journal/highlights) — now global. */
+#searchInput { padding-right: 38px; }
+.lib-search-clear {
+    position: absolute; top: 50%; right: 5px; transform: translateY(-50%);
+    width: 30px; height: 30px; border: none; background: transparent;
+    color: #adb5bd; cursor: pointer; border-radius: 50%;
+    display: flex; align-items: center; justify-content: center;
+}
+.lib-search-clear:hover { color: #6c757d; background: #f1f3f5; }
+
+/* Shared filter pills (rounded, separated) — was duplicated per page; now global. */
+.stat-chips { gap: 6px; row-gap: 6px; }
+.stat-chip {
+    display: inline-flex; align-items: center; gap: 5px;
+    padding: 3px 9px; border-radius: 999px;
+    background: #f1f3f5; cursor: pointer; user-select: none;
+    border: 2px solid transparent; transition: all 0.12s; line-height: 1;
+}
+.stat-chip i { font-size: 0.9rem; }
+.stat-chip strong, .stat-chip span { font-size: 0.85rem; font-weight: 600; }
+.stat-chip:hover { background: #e9ecef; }
+.stat-chip.active { border-color: currentColor; background: #fff; }
+@media (max-width: 575.98px) {
+    .stat-chips { gap: 4px; }
+    .stat-chip { padding: 3px 6px; gap: 3px; }
+    .stat-chip i, .stat-chip strong, .stat-chip span { font-size: 0.78rem; }
 }
