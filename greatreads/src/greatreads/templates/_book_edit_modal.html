@@ -12,12 +12,29 @@
     .ac-item { padding: .4rem .65rem; font-size: .85rem; cursor: pointer;
         white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
     .ac-item:hover, .ac-item.ac-active { background: #e9f2ff; }
+    /* Formats-owned toggles for the Add flow (#117) — mirrors library.html. */
+    .bke-fmt-option { flex: 1; max-width: 110px; }
+    .bke-fmt-btn { width: 100%; height: 72px; display: flex; flex-direction: column;
+        align-items: center; justify-content: center; border-width: 2px; background: #fff; transition: all .2s; }
+    .bke-fmt-btn:hover { transform: translateY(-2px); box-shadow: 0 4px 12px rgba(0,0,0,.15); }
+    .bke-fmt-ebook { border-color: #0066CC; color: #0066CC; }
+    .bke-fmt-ebook i { color: #0066CC; }
+    .bke-fmt-audio { border-color: #FF6600; color: #FF6600; }
+    .bke-fmt-audio i { color: #FF6600; }
+    .bke-fmt-physical { border-color: #6B4BA3; color: #6B4BA3; }
+    .bke-fmt-physical i { color: #6B4BA3; }
+    .btn-check:checked + .bke-fmt-ebook { background: #0066CC; border-color: #0066CC; color: #fff; }
+    .btn-check:checked + .bke-fmt-ebook i { color: #fff; }
+    .btn-check:checked + .bke-fmt-audio { background: #FF6600; border-color: #FF6600; color: #fff; }
+    .btn-check:checked + .bke-fmt-audio i { color: #fff; }
+    .btn-check:checked + .bke-fmt-physical { background: #6B4BA3; border-color: #6B4BA3; color: #fff; }
+    .btn-check:checked + .bke-fmt-physical i { color: #fff; }
 </style>
 <div class="modal fade" id="bkEditModal" tabindex="-1">
     <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Edit book</h5>
+                <h5 class="modal-title" id="bkeModalTitle">Edit book</h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
@@ -65,9 +82,30 @@
                         </div>
                     </div>
                 </div>
+                <!-- Formats owned — only shown when adding a new book (#117). -->
+                <div id="bkeFormatsRow" class="mt-3" style="display:none;">
+                    <label class="form-label small mb-1"><i class="fas fa-warehouse me-1"></i>Formats owned</label>
+                    <div class="d-flex gap-2 justify-content-center">
+                        <div class="bke-fmt-option">
+                            <input type="checkbox" class="btn-check" id="bkeOwnedEbook" autocomplete="off">
+                            <label class="btn bke-fmt-btn bke-fmt-ebook" for="bkeOwnedEbook">
+                                <i class="fas fa-tablet-alt fa-lg mb-1"></i><div class="fw-bold small">Ebook</div></label>
+                        </div>
+                        <div class="bke-fmt-option">
+                            <input type="checkbox" class="btn-check" id="bkeOwnedAudio" autocomplete="off">
+                            <label class="btn bke-fmt-btn bke-fmt-audio" for="bkeOwnedAudio">
+                                <i class="fas fa-headphones fa-lg mb-1"></i><div class="fw-bold small">Audio</div></label>
+                        </div>
+                        <div class="bke-fmt-option">
+                            <input type="checkbox" class="btn-check" id="bkeOwnedPhysical" autocomplete="off">
+                            <label class="btn bke-fmt-btn bke-fmt-physical" for="bkeOwnedPhysical">
+                                <i class="fas fa-book fa-lg mb-1"></i><div class="fw-bold small">Physical</div></label>
+                        </div>
+                    </div>
+                </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-outline-danger me-auto" onclick="bkeDelete()">
+                <button type="button" class="btn btn-outline-danger me-auto" id="bkeDeleteBtn" onclick="bkeDelete()">
                     <i class="fas fa-trash me-1"></i>Delete book</button>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-outline-primary" id="bkeSaveNextBtn" onclick="bkeSaveAndNext()" title="Save and edit the next book in this view">Save &amp; Next <i class="fas fa-arrow-right ms-1"></i></button>

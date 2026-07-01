@@ -43,7 +43,10 @@ html, body {
     display: flex;
     align-items: center;
     justify-content: space-between;
-    flex-wrap: wrap;
+    /* nowrap so the desktop menu stays on the brand's line instead of dropping
+       beneath the logo. Below 992px the menu becomes an absolute hamburger popup
+       (out of flow), so only brand + hamburger remain here — never wraps. */
+    flex-wrap: nowrap;
     position: relative;
 }
 
@@ -55,9 +58,16 @@ html, body {
     list-style: none;
     display: flex;
     align-items: center;
-    gap: 0.25rem;
+    gap: 0;
     margin: 0;
     padding: 0;
+}
+
+/* The "last built" stamp lives in the hamburger dropdown (#118). On desktop
+   there's no hamburger, and inlining it in the menu row pushed the nav links
+   off the right edge — so hide it here; the mobile media query re-shows it. */
+.gr-nav-build {
+    display: none;
 }
 
 .bookish-header::before {
@@ -109,18 +119,19 @@ html, body {
     color: rgba(255, 255, 255, 0.85) !important;
     font-weight: 500;
     font-size: 0.95rem;
-    padding: 0.5rem 1rem !important;
-    margin: 0 0.25rem;
+    padding: 0.5rem 0.6rem !important;
+    margin: 0;
     border-radius: 8px;
     transition: all 0.3s ease;
     position: relative;
     display: flex;
     align-items: center;
-    gap: 0.5rem;
+    gap: 0.4rem;
+    white-space: nowrap;
 }
 
 .bookish-nav-link i {
-    font-size: 1.1rem;
+    font-size: 1.05rem;
     transition: all 0.3s ease;
 }
 
@@ -255,6 +266,11 @@ html, body {
 
     .gr-nav-menu li {
         width: 100%;
+    }
+
+    /* Re-show the build stamp inside the hamburger dropdown (hidden on desktop). */
+    .gr-nav-build {
+        display: block;
     }
 
     .gr-nav-menu .bookish-nav-link {

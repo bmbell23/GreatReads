@@ -100,8 +100,8 @@
 
             <ul class="gr-nav-menu" id="grNavMenu">
                 <!-- Unified menu. Home (in-progress + stats) is the landing page;
-                     TBR is the not-started/paused backlog; Highlights deep-links into
-                     the Ereader overlay (Bookmarks live there as a sub-tab now). -->
+                     TBR is the not-started/paused backlog. Highlights now lives as a
+                     button on the Journal page (it's a finished-book thing). -->
                 <li>
                     <a class="bookish-nav-link" href="{{ url_for('root') }}" onclick="closeNavMenu()">
                         <i class="fas fa-house"></i>
@@ -124,12 +124,6 @@
                     <a class="bookish-nav-link" href="{{ url_for('library_page') }}" onclick="closeNavMenu()">
                         <i class="fas fa-book"></i>
                         <span class="nav-text">Library</span>
-                    </a>
-                </li>
-                <li>
-                    <a class="bookish-nav-link" href="{{ url_for('highlights_page') }}" onclick="closeNavMenu()">
-                        <i class="fas fa-highlighter"></i>
-                        <span class="nav-text">Highlights</span>
                     </a>
                 </li>
                 <li>
@@ -384,7 +378,7 @@
     <!-- Custom JS -->
     <script src="{{ url_for('static', path='/js/app.js') }}?v=2.0.10"></script>
     <!-- Shared Edit Book modal behavior (#110); needs GreatReads.* from app.js above -->
-    {% if current_user %}<script src="{{ url_for('static', path='/js/book_edit.js') }}?v=1"></script>{% endif %}
+    {% if current_user %}<script src="{{ url_for('static', path='/js/book_edit.js') }}?v=3"></script>{% endif %}
 
     <!-- Loading screen (#55/#114): the shared quotes.js on ONE host — same as the
          ereader (web/index.html), which works great. The doubling was base.html
