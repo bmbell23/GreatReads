@@ -43,6 +43,13 @@
        in once it's decoded so there's no grey flash between books. */
     .bd-fade-in { animation: bdFade .18s ease; }
     @keyframes bdFade { from { opacity: 0; } to { opacity: 1; } }
+    /* Custom autocomplete (#107) — replaces native <datalist> (broken in Android
+       WebView). Fixed-positioned on <body> so a scrollable modal can't clip it. */
+    .ac-menu { position: fixed; z-index: 2000; background: #fff; border: 1px solid #ced4da;
+        border-radius: .35rem; max-height: 200px; overflow-y: auto; box-shadow: 0 6px 16px rgba(0,0,0,.15); }
+    .ac-item { padding: .4rem .65rem; font-size: .85rem; cursor: pointer;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ac-item:hover, .ac-item.ac-active { background: #e9f2ff; }
     /* Bulk-select (#93) */
     .sel-check { width: 22px; height: 22px; border-radius: 50%; background: #fff;
         border: 2px solid #0d6efd; display: flex; align-items: center; justify-content: center;
@@ -153,15 +160,6 @@
 <div class="row" id="booksGrid"><div class="col-12 text-muted text-center py-5">Loading…</div></div>
 <div id="scrollSentinel" style="height:1px;"></div>
 
-<!-- Shared typeahead datalists (#92): kept at page level (not inside a modal) so
-     both the single-edit and bulk-edit forms get suggestions — a datalist nested
-     in a closed (display:none) modal won't surface options in mobile WebView. -->
-<datalist id="bkeAuthorFirstList"></datalist>
-<datalist id="bkeAuthorLastList"></datalist>
-<datalist id="bkeSeriesList"></datalist>
-<datalist id="bkeGenreList"></datalist>
-<datalist id="bkeUniverseList"></datalist>
-<datalist id="bkeTitleList"></datalist>
 
 <!-- Bulk-edit modal (#93) -->
 <div class="modal fade" id="bulkEditModal" tabindex="-1">
@@ -356,6 +354,8 @@ document.addEventListener('DOMContentLoaded', async () => {
     await loadShelf(true);
     setupInfiniteScroll();
     setupDetailSwipe();
+    wireAutocomplete();   // custom typeahead on the edit/bulk fields (#107)
+    bkeLoadLists();       // preload suggestion values so they're ready on first open
 });
 
 function setStatus(s) {
@@ -828,24 +828,89 @@ async function checkNow() {
 // ── in-page Edit Book ────────────────────────────────────────────────────
 let bkeBook = null, bkeListsLoaded = false;
 
+// Typeahead sources (#92) → now feed a custom autocomplete (#107). Native
+// <datalist> doesn't render in Android WebView, so we keep the values here and
+// draw our own dropdown (see attachAutocomplete). Powers edit + bulk-edit forms.
+const bkeSug = { first: [], last: [], series: [], universe: [], genre: [], title: [] };
+
 async function bkeLoadLists() {
     if (bkeListsLoaded) return;
     bkeListsLoaded = true;
-    const fill = (id, arr) => { const el = document.getElementById(id); if (el) el.innerHTML =
-        (arr || []).map(v => `<option value="${esc(String(v))}">`).join(''); };
-    const load = async (path, id) => {
-        try { const r = await GreatReads.apiCall(path); fill(id, Array.isArray(r) ? r : (r.items || r)); }
+    const load = async (path, key) => {
+        try { const r = await GreatReads.apiCall(path);
+            bkeSug[key] = Array.isArray(r) ? r : (r.items || []); }
         catch (e) {}
     };
-    // typeahead sources (#92) — these power the edit + bulk-edit forms
     await Promise.all([
-        load('/books/search/author-first-names', 'bkeAuthorFirstList'),
-        load('/books/search/author-last-names', 'bkeAuthorLastList'),
-        load('/books/search/series', 'bkeSeriesList'),
-        load('/books/search/genres', 'bkeGenreList'),
-        load('/books/search/universes', 'bkeUniverseList'),
-        load('/books/search/titles', 'bkeTitleList'),
+        load('/books/search/author-first-names', 'first'),
+        load('/books/search/author-last-names', 'last'),
+        load('/books/search/series', 'series'),
+        load('/books/search/genres', 'genre'),
+        load('/books/search/universes', 'universe'),
+        load('/books/search/titles', 'title'),
     ]);
+}
+
+// Custom autocomplete (#107): a tappable suggestion dropdown, WebView-safe where
+// native <datalist> is not. The menu is fixed-positioned on document.body (so a
+// scrollable modal can't clip it) and reads live from bkeSug[key].
+function attachAutocomplete(inputId, key) {
+    const input = document.getElementById(inputId);
+    if (!input || input.dataset.acWired) return;
+    input.dataset.acWired = '1';
+    input.setAttribute('autocomplete', 'off');
+    input.removeAttribute('list');                     // drop the broken native datalist
+    const menu = document.createElement('div');
+    menu.className = 'ac-menu d-none';
+    document.body.appendChild(menu);
+    let items = [], active = -1;
+    const place = () => { const r = input.getBoundingClientRect();
+        menu.style.left = r.left + 'px'; menu.style.top = r.bottom + 'px'; menu.style.width = r.width + 'px'; };
+    const hide = () => { menu.classList.add('d-none'); active = -1; };
+    const hl = () => [...menu.children].forEach((c, i) => c.classList.toggle('ac-active', i === active));
+    const render = () => {
+        const q = input.value.trim().toLowerCase();
+        const src = bkeSug[key] || [];
+        let matches = src;
+        if (q) { const s = [], h = [];
+            for (const v of src) { const lv = String(v).toLowerCase();
+                if (lv.startsWith(q)) s.push(v); else if (lv.includes(q)) h.push(v); }
+            matches = s.concat(h);
+        }
+        items = matches.slice(0, 8);
+        if (!items.length) { hide(); return; }
+        active = -1;
+        menu.innerHTML = items.map((v, i) => `<div class="ac-item" data-i="${i}">${esc(String(v))}</div>`).join('');
+        place(); menu.classList.remove('d-none');
+    };
+    const choose = v => { input.value = v; hide(); };
+    input.addEventListener('focus', render);
+    input.addEventListener('input', render);
+    input.addEventListener('blur', () => setTimeout(hide, 150));   // let a tap land first
+    input.addEventListener('keydown', e => {
+        if (menu.classList.contains('d-none')) return;
+        if (e.key === 'ArrowDown') { active = Math.min(active + 1, items.length - 1); hl(); e.preventDefault(); }
+        else if (e.key === 'ArrowUp') { active = Math.max(active - 1, 0); hl(); e.preventDefault(); }
+        else if (e.key === 'Enter') { if (active >= 0) { choose(items[active]); e.preventDefault(); } }
+        else if (e.key === 'Escape') hide();
+    });
+    // pointerdown fires before blur and covers touch + mouse (WebView is Chromium)
+    menu.addEventListener('pointerdown', e => {
+        const it = e.target.closest('.ac-item'); if (!it) return;
+        e.preventDefault(); choose(items[+it.dataset.i]);
+    });
+    window.addEventListener('resize', () => { if (!menu.classList.contains('d-none')) place(); });
+    document.addEventListener('scroll', () => { if (!menu.classList.contains('d-none')) hide(); }, true);
+}
+
+function wireAutocomplete() {
+    [['bkeAuthorFirst', 'first'], ['blkAuthorFirst', 'first'],
+     ['bkeAuthorLast', 'last'], ['blkAuthorLast', 'last'],
+     ['bkeSeries', 'series'], ['blkSeries', 'series'],
+     ['bkeUniverse', 'universe'], ['blkUniverse', 'universe'],
+     ['bkeGenre', 'genre'], ['blkGenre', 'genre'],
+     ['bkeTitle', 'title'],
+    ].forEach(([id, key]) => attachAutocomplete(id, key));
 }
 
 async function bkeOpen(bookId) {

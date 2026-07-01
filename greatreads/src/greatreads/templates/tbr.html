@@ -342,9 +342,6 @@
                 <button type="button" class="btn btn-info mb-2 mb-sm-0" id="unpauseReadingBtn" onclick="unpauseReadingFromModal()" style="display: none;">
                     <i class="fas fa-play me-1"></i>Unpause
                 </button>
-                <button type="button" class="btn btn-success mb-2 mb-sm-0" id="finishReadingBtn" onclick="finishReadingFromModal()">
-                    <i class="fas fa-check me-1"></i>Mark as Finished
-                </button>
                 <button type="button" class="btn btn-primary mb-2 mb-sm-0" onclick="GreatReads.saveReadingChanges()">
                     <i class="fas fa-save me-1"></i>Save Changes
                 </button>
@@ -1531,7 +1528,13 @@ function openReadingActions(readingId) {
             current_progress_page: (live.page != null ? live.page : reading.current_progress_page) }
         : reading;
 
-    const actionsHtml = `
+    // "Start Reading" only for a not-yet-started book (#109); starts in the format
+    // it's already associated with (reading.media), dominance follows from there.
+    const startBtn = reading.date_started ? '' : `
+        <button type="button" class="btn btn-sm btn-outline-success" onclick="tbrStartFromPopup(${reading.id})">
+            <i class="fas fa-play me-2"></i>Start Reading
+        </button>`;
+    const actionsHtml = startBtn + `
         <button type="button" class="btn btn-sm btn-outline-secondary" onclick="tbrEditFromPopup(${reading.id})">
             <i class="fas fa-edit me-2 text-primary"></i>Edit Reading
         </button>`;
@@ -1542,6 +1545,22 @@ function openReadingActions(readingId) {
         detailRows,
         actionsHtml,
     });
+}
+
+// Start a not-yet-started TBR reading straight from the card popup (#109) — same
+// as startReadingFromModal (today's date, format = reading.media, dominance follows).
+async function tbrStartFromPopup(readingId) {
+    if (!confirm('Start this reading with today\'s date?')) return;
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        await GreatReads.apiCall(`/readings/${readingId}`, {
+            method: 'PUT',
+            data: { date_started: today, status: 'In Progress' }
+        });
+        GreatReads.showToast('Reading started!', 'success');
+        bootstrap.Modal.getInstance(document.getElementById('openBookModal'))?.hide();
+        await loadTBRReadings();
+    } catch (error) { /* errors surfaced by apiCall */ }
 }
 
 function tbrEditFromPopup(readingId) {
@@ -1558,17 +1577,10 @@ function editReading(readingId) {
 }
 
 async function finishReading(readingId) {
-    if (!confirm('Mark this reading as finished with today\'s date?')) {
-        return;
-    }
-
-    try {
-        await GreatReads.finishReading(readingId);
-        GreatReads.showToast('Reading marked as finished!', 'success');
-        await loadTBRReadings(); // Refresh the list
-    } catch (error) {
-        // Error already handled by apiCall
-    }
+    if (!confirm("Mark this book as finished? You can add ratings next.")) return;
+    bootstrap.Modal.getInstance(document.getElementById('openBookModal'))?.hide();
+    // finish, then open the review form for ratings (#108)
+    await GreatReads.finishAndReview(readingId, () => loadTBRReadings());
 }
 
 async function startReadingFromModal() {
@@ -1668,23 +1680,9 @@ async function unpauseReadingFromModal() {
 
 async function finishReadingFromModal() {
     const readingId = document.getElementById('editReadingId').value;
-
-    if (!confirm('Mark this reading as finished with today\'s date?')) {
-        return;
-    }
-
-    try {
-        await GreatReads.finishReading(readingId);
-        GreatReads.showToast('Reading marked as finished!', 'success');
-
-        // Close modal
-        const modal = bootstrap.Modal.getInstance(document.getElementById('editReadingModal'));
-        modal.hide();
-
-        await loadTBRReadings(); // Refresh the list
-    } catch (error) {
-        // Error already handled by apiCall
-    }
+    if (!confirm("Mark this book as finished? You can add ratings next.")) return;
+    // finish, then re-open this form with the finished reading for ratings (#108)
+    await GreatReads.finishAndReview(readingId, () => loadTBRReadings());
 }
 
 // ── Update Progress Modal ────────────────────────────────────────────────────

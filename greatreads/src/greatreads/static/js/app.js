@@ -234,6 +234,23 @@ async function finishReading(readingId) {
     });
 }
 
+// Finish a reading, then open the full Edit Reading form so the user can add
+// ratings/review (and adjust dates) and Save (#108). The finish endpoint handles
+// the finish date + chain logic; we then re-fetch the now-finished reading (with
+// its book) and open the shared edit modal. `reload` refreshes the calling page's
+// list. Pages without the edit modal (Library) fall back to a plain finish.
+async function finishAndReview(readingId, reload) {
+    try {
+        await finishReading(readingId);
+        if (typeof reload === 'function') await reload();
+        const modal = document.getElementById('editReadingModal');
+        if (!modal) { showToast('Reading marked as finished!', 'success'); return; }
+        const reading = await apiCall(`/readings/${readingId}`);
+        showToast('Finished — add your ratings and Save.', 'success');
+        showEditModal(reading);
+    } catch (e) { /* errors surfaced by apiCall */ }
+}
+
 async function pauseReading(readingId) {
     return await apiCall(`/readings/${readingId}/pause`, {
         method: 'POST'
@@ -343,28 +360,31 @@ function showEditModal(reading) {
     const unpauseBtn = document.getElementById('unpauseReadingBtn');
     const finishBtn = document.getElementById('finishReadingBtn');
 
-    if (startBtn && finishBtn) {
+    // Finish button was removed from the edit-reading modals (#110) — finishing
+    // now happens only from the Home in-progress action / reader / physical session.
+    // Guard finishBtn so the Start/Pause/Unpause toggling still works where it's gone.
+    if (startBtn) {
         if (!reading.date_started) {
             // Not started yet - show Start buttons
             startBtn.style.display = 'inline-block';
             if (startManualBtn) startManualBtn.style.display = 'inline-block';
             if (pauseBtn) pauseBtn.style.display = 'none';
             if (unpauseBtn) unpauseBtn.style.display = 'none';
-            finishBtn.style.display = 'none';
+            if (finishBtn) finishBtn.style.display = 'none';
         } else if (reading.status === 'paused') {
-            // Paused - show Unpause and Finish buttons
+            // Paused - show Unpause button
             startBtn.style.display = 'none';
             if (startManualBtn) startManualBtn.style.display = 'none';
             if (pauseBtn) pauseBtn.style.display = 'none';
             if (unpauseBtn) unpauseBtn.style.display = 'inline-block';
-            finishBtn.style.display = 'inline-block';
+            if (finishBtn) finishBtn.style.display = 'inline-block';
         } else {
-            // In progress - show Pause and Finish buttons
+            // In progress - show Pause button
             startBtn.style.display = 'none';
             if (startManualBtn) startManualBtn.style.display = 'none';
             if (pauseBtn) pauseBtn.style.display = 'inline-block';
             if (unpauseBtn) unpauseBtn.style.display = 'none';
-            finishBtn.style.display = 'inline-block';
+            if (finishBtn) finishBtn.style.display = 'inline-block';
         }
     }
 
@@ -1331,6 +1351,7 @@ window.GreatReads = {
     apiCall,
     updateReading,
     finishReading,
+    finishAndReview,
     pauseReading,
     unpauseReading,
     startReading,

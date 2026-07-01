@@ -299,9 +299,6 @@
                 <button type="button" class="btn btn-info mb-2 mb-sm-0" id="unpauseReadingBtn" onclick="unpauseReadingFromModal()" style="display: none;">
                     <i class="fas fa-play me-1"></i>Unpause
                 </button>
-                <button type="button" class="btn btn-success mb-2 mb-sm-0" id="finishReadingBtn" onclick="finishReadingFromModal()">
-                    <i class="fas fa-check me-1"></i>Mark as Finished
-                </button>
                 <button type="button" class="btn btn-primary mb-2 mb-sm-0" onclick="GreatReads.saveReadingChanges()">
                     <i class="fas fa-save me-1"></i>Save Changes
                 </button>
@@ -571,16 +568,13 @@ async function loadCurrentlyReading() {
 // Finish an in-progress book straight from the Home popup (#65 follow-up). Uses the
 // shared GreatReads.finishReading; reloads Home after.
 async function homeFinishReading(readingId) {
-    if (!confirm("Mark this reading as finished with today's date?")) return;
-    try {
-        await GreatReads.finishReading(readingId);
-        GreatReads.showToast('Reading marked as finished!', 'success');
-        const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
-        if (m) m.hide();
-        loadDashboardStats();
-        loadMomentum();
-        loadCurrentlyReading();
-    } catch (e) { /* errors surfaced by apiCall */ }
+    if (!confirm("Mark this book as finished? You can add ratings next.")) return;
+    const m = bootstrap.Modal.getInstance(document.getElementById('openBookModal'));
+    if (m) m.hide();
+    // finish, then open the review form for ratings (#108)
+    await GreatReads.finishAndReview(readingId, () => {
+        loadDashboardStats(); loadMomentum(); loadCurrentlyReading();
+    });
 }
 
 // ── Edit Reading modal (full parity on Home, #72) ─────────────────────────────
@@ -657,13 +651,9 @@ async function unpauseReadingFromModal() {
 
 async function finishReadingFromModal() {
     const readingId = document.getElementById('editReadingId').value;
-    if (!confirm("Mark this reading as finished with today's date?")) return;
-    try {
-        await GreatReads.finishReading(readingId);
-        GreatReads.showToast('Reading marked as finished!', 'success');
-        closeEditReadingModal();
-        await refreshReadings();
-    } catch (e) { /* surfaced by apiCall */ }
+    if (!confirm("Mark this book as finished? You can add ratings next.")) return;
+    // finish, then re-open this form with the finished reading for ratings (#108)
+    await GreatReads.finishAndReview(readingId, () => refreshReadings());
 }
 
 async function deleteReadingFromModal() {
