@@ -13,6 +13,11 @@
             <div class="modal-body">
                 <form id="editReadingForm">
                     <input type="hidden" id="editReadingId" name="reading_id">
+                    {# Read picker for multi-read books (#127); hidden when only one read. #}
+                    <div id="editReadRow" class="mb-3" style="display:none;">
+                        <label class="form-label small mb-1 text-muted">Reading</label>
+                        <select class="form-select form-select-sm" id="editReadSelect" onchange="GreatReads.editSelectRead(this.value)"></select>
+                    </div>
                     <div class="row mb-3">
                         <div class="col-12 col-md-8">
                             <h6 class="text-muted">Book</h6>
@@ -78,58 +83,7 @@
                             </div>
                         </div>
                     </div>
-                    <h6 class="text-muted mb-3">Ratings</h6>
-                    <div class="row mb-3">
-                        <div class="col-12 col-md-6 mb-3">
-                            <label class="form-label">Enjoyment</label>
-                            <div class="emoji-rating" data-rating-type="enjoyment" data-emoji="star">
-                                <input type="hidden" id="editRatingEnjoyment" name="rating_enjoyment" value="0">
-                                <div class="emoji-rating-display"></div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label class="form-label">Writing Quality</label>
-                            <div class="emoji-rating" data-rating-type="writing" data-emoji="star">
-                                <input type="hidden" id="editRatingWriting" name="rating_writing" value="0">
-                                <div class="emoji-rating-display"></div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label class="form-label">Characters</label>
-                            <div class="emoji-rating" data-rating-type="characters" data-emoji="star">
-                                <input type="hidden" id="editRatingCharacters" name="rating_characters" value="0">
-                                <div class="emoji-rating-display"></div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label class="form-label">World Building</label>
-                            <div class="emoji-rating" data-rating-type="world_building" data-emoji="star">
-                                <input type="hidden" id="editRatingWorldBuilding" name="rating_world_building" value="0">
-                                <div class="emoji-rating-display"></div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label class="form-label">Readability</label>
-                            <div class="emoji-rating" data-rating-type="readability" data-emoji="star">
-                                <input type="hidden" id="editRatingReadability" name="rating_readability" value="0">
-                                <div class="emoji-rating-display"></div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label class="form-label">Horror Rating</label>
-                            <div class="emoji-rating" data-rating-type="horror" data-emoji="blood">
-                                <input type="hidden" id="editRatingHorror" name="rating_horror" value="0">
-                                <div class="emoji-rating-display"></div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label class="form-label">Spice Rating</label>
-                            <div class="emoji-rating" data-rating-type="spice" data-emoji="pepper">
-                                <input type="hidden" id="editRatingSpice" name="rating_spice" value="0">
-                                <div class="emoji-rating-display"></div>
-                            </div>
-                        </div>
-                    </div>
+                    {# Ratings moved to their own view+edit screen (#127). #}
                 </form>
             </div>
             <div class="modal-footer flex-wrap">

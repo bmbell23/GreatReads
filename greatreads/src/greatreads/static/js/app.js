@@ -450,6 +450,9 @@ function showEditModal(reading) {
         }
     });
 
+    // Read picker for multi-read books (#127).
+    grPopulateEditReadDropdown(reading);
+
     // Show modal
     const bsModal = new bootstrap.Modal(modal);
     bsModal.show();
@@ -874,9 +877,27 @@ async function grOpenEditReading(rid) {
     GreatReads.showEditModal(rd);
 }
 function grEditReadingById(rid) { grOpenEditReading(rid); }
-// "Not Yet Rated" → same Edit Reading modal (which holds the emoji-rating inputs) so the
-// user can enter ratings.
-function grEditRatings(rid) { grOpenEditReading(rid); }
+
+// Edit Reading read-picker (#127): populate the modal's read dropdown from the book's
+// readings (hidden for single-read); switching re-opens the modal for that read.
+async function grPopulateEditReadDropdown(reading) {
+    const row = document.getElementById('editReadRow');
+    const sel = document.getElementById('editReadSelect');
+    if (!row || !sel || !reading) return;
+    const bid = reading.book && reading.book.id;
+    const readings = await grLoadReadings(bid, reading.id);
+    if (readings.length <= 1) { row.style.display = 'none'; return; }
+    sel.innerHTML = readings.map((rd, i) =>
+        `<option value="${rd.id}"${rd.id === reading.id ? ' selected' : ''}>${grReadLabel(rd, i)}</option>`).join('');
+    row.style.display = '';
+}
+async function grEditSelectRead(rid) {
+    rid = parseInt(rid, 10);
+    let rd;
+    try { rd = await apiCall('/readings/' + rid); } catch (e) { return; }
+    rd.book = grActiveBook || rd.book || {};
+    showEditModal(rd);
+}
 
 // Build & show the unified cover-tap popup. Used by Library, TBR, and Journal.
 //   book : enriched book dict (calibre_id, abs_id, inventory, series, counts…)
@@ -893,8 +914,14 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     if (!book) return;
     grActiveBook = book;   // for GreatReads.openSeries() + the injected sections (#120)
     if (!keepNav) grNav = { items: [], index: -1 };   // direct open → no prev/next arrows
-    const canRead = !!book.calibre_id;
-    const canListen = !!book.abs_id;
+    // Read/Listen tiles require BOTH a working source link AND that the user owns
+    // the format. calibre_id/abs_id come from ExternalImport, which can go stale
+    // (not pruned when a book leaves Calibre/ABS — see #129), so gating on the link
+    // alone showed a Read tile for un-owned/gone ebooks (#128). owned_ebook/owned_audio
+    // ride along on every book dict via enrich_book_dict → Inventory.to_dict.
+    const grOwnsFormat = f => (book.inventory || []).some(i => i[f]);
+    const canRead = !!book.calibre_id && grOwnsFormat('owned_ebook');
+    const canListen = !!book.abs_id && grOwnsFormat('owned_audio');
     // encodeURIComponent leaves ' unescaped, which would break the inline onclick
     // string for titles with apostrophes — escape it explicitly.
     const titleEnc = encodeURIComponent(book.title || '').replace(/'/g, '%27');
@@ -917,8 +944,11 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
             rows.push(['Published', d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })]);
         }
     }
-    if (book.word_count) rows.push(['Words', Number(book.word_count).toLocaleString()]);
-    if (book.page_count) rows.push(['Pages', Number(book.page_count).toLocaleString()]);
+    // Length: words + pages on one line to keep the field list short (#127).
+    const lenParts = [];
+    if (book.word_count) lenParts.push(`${Number(book.word_count).toLocaleString()} words`);
+    if (book.page_count) lenParts.push(`${Number(book.page_count).toLocaleString()} pages`);
+    if (lenParts.length) rows.push(['Length', lenParts.join(' • ')]);
     if (Array.isArray(opts.detailRows)) rows.push(...opts.detailRows.filter(Boolean));
 
     // Logging progress / a physical session belongs to the READING, not inventory:
@@ -959,6 +989,16 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
         const es = r.date_est_start, ee = r.date_est_end || r.date_finished_estimate;
         if (es || ee) rows.push(['Planned', `${es ? formatDateSmart(es) : 'TBD'} – ${ee ? formatDateSmart(ee) : 'TBD'}`]);
     }
+    // Reading Position (in-progress): current % with the high-water mark appended async.
+    if (ipReading) {
+        const cur = Math.round(ipReading.current_progress_percent || 0);
+        rows.push(['Reading Position', `<span id="gbaPos">${cur}%</span>`]);
+    }
+    // Reading Sessions summary (N @ avg) — filled async from the sessions list (#127).
+    const startedOrFinished = !!(r && (r.is_started || r.is_finished)) || (book.read_count || 0) > 0;
+    if (book.id != null && startedOrFinished) {
+        rows.push(['Reading Sessions', '<span id="gbaSess" class="text-muted">…</span>']);
+    }
 
     // Compact format tiles, laid out in a ROW beneath the cover + details. Physical is
     // a peer tile ("Read", purple, book icon); tap-to-log only when in progress.
@@ -983,7 +1023,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
             <span class="text-muted">${k}</span><span class="fw-medium text-end">${v}</span>
         </div>`).join('')}</div>` : '';
     const row1 = `
-        <div class="col-12"><div class="d-flex gap-3">
+        <div class="col-12"><div class="d-flex gap-3 align-items-start">
             <div class="gba-detail-cover flex-shrink-0">${coverInner}</div>
             <div class="flex-grow-1">${detailsInner}</div>
         </div></div>`;
@@ -1031,12 +1071,17 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     const startedNotFinished = !!(r && r.is_started && !r.is_finished);
     const hasFinishedRead = !!(r && r.is_finished) ||
         (Array.isArray(book.readings) && book.readings.some(x => x.date_finished_actual));
-    const showSessionsStats = opts.sessions !== false && book.id != null && (startedNotFinished || hasFinishedRead);
-    // Show for any started reading — in-progress OR finished (paired with View Ratings).
-    const showSessionsBtn = opts.sessions !== false && book.id != null && (startedNotFinished || hasFinishedRead);
+    // A not-started reread (TBR) has prior finished reads worth viewing even though the
+    // current reading isn't started — detect via read_count (prior completions). (#127)
+    const hasHistory = hasFinishedRead || (book.read_count || 0) > 0;
+    // Show for any started reading OR a reread with history (paired with View Ratings).
+    const showSessionsBtn = opts.sessions !== false && book.id != null && (startedNotFinished || hasHistory);
+    // Default the sessions view to the clicked read only when it's actually started;
+    // a not-started (planned) read → 'All reads' (null) since it has no session window.
+    const sessRid = (r && r.is_started) ? r.id : 'null';
     const sessionsBtn = showSessionsBtn ? `
                 <button type="button" id="seeSessionsBtn" class="btn btn-sm btn-outline-secondary"
-                        onclick="GreatReads.showReadingSessions(${book.id}, '${titleEnc}')">
+                        onclick="GreatReads.showReadingSessions(${book.id}, '${titleEnc}', ${sessRid})">
                     <i class="fas fa-clock-rotate-left me-2 text-info"></i>View Reading Sessions
                 </button>` : '';
 
@@ -1060,9 +1105,12 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     // both finished AND in-progress books get a ratings button ("Not Yet Rated" if none).
     const finishedReading = (r && r.is_finished) ? r
         : (Array.isArray(book.readings) ? book.readings.find(x => x.date_finished_actual) : null);
+    // Fall back to the current reading id for a reread with history (its finished reads
+    // may not be in this page's book.readings) — the Ratings screen loads all reads (#127).
     const rateTargetId = ratingReadingId != null ? ratingReadingId
         : (finishedReading ? finishedReading.id
-        : (ipReading ? ipReading.id : null));
+        : (ipReading ? ipReading.id
+        : (hasHistory && r ? r.id : null)));
     let viewRatingsBtn = '';
     if (rateTargetId != null) {
         const rated = ratingReadingId != null;
@@ -1138,53 +1186,34 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
         }).catch(() => {});
     }
 
-    // Reading-session stats (#77): count + average sitting length, and reveal the
-    // "See Reading Sessions" button. One summary call serves both; only shows once
-    // there are qualified sessions (books read before session logging show nothing).
-    if (showSessionsStats) {
-        // Show the two rows for any started book (even at 0 / —); the button is
-        // finished-only and handled separately (#111).
-        const renderSessionStats = (sessions, minutes) => {
-            const det = document.querySelector('#openBookOptions .open-details');
-            if (!det) return;
-            const avg = sessions > 0 ? formatDuration(minutes / sessions) : '—';
-            det.insertAdjacentHTML('beforeend',
-                `<div class="d-flex justify-content-between gap-3">
-                    <span class="text-muted">Reading Sessions</span>
-                    <span class="fw-medium text-end">${sessions}</span>
-                </div>
-                <div class="d-flex justify-content-between gap-3">
-                    <span class="text-muted">Average Session Time</span>
-                    <span class="fw-medium text-end">${avg}</span>
-                </div>`);
+    // Reading-session summary (#77, #127): count + avg sitting length on ONE line —
+    // "18 @ 17m avg." — filling the placeholder added to the details above.
+    if (book.id != null && startedOrFinished) {
+        const fillSess = (sessions, minutes) => {
+            const el = document.getElementById('gbaSess');
+            if (!el) return;
+            if (sessions > 0) {
+                el.textContent = `${sessions} @ ${formatDuration(minutes / sessions)} avg`;
+                el.classList.remove('text-muted');
+            } else { el.textContent = 'None yet'; }
         };
         fetch(`${GR_EREADER_API}/sessions-summary-gr/${book.id}`)
             .then(r => r.ok ? r.json() : null)
-            .then(d => renderSessionStats((d && d.sessions) || 0, (d && d.minutes) || 0))
-            .catch(() => renderSessionStats(0, 0));
+            .then(d => fillSess((d && d.sessions) || 0, (d && d.minutes) || 0))
+            .catch(() => fillSess(0, 0));
     }
 
-    // Reading position + word-credit mark (#86): show the current position, and if
-    // the #79 high-water-mark is ahead of it (so words aren't crediting), surface it
-    // and reveal the reset button.
-    if (progKey) {
+    // Reading Position (#86, #127): live current % with the #79 high-water mark folded
+    // in — "83% (85% max)", or just "83%" when at the mark. Fills the placeholder above.
+    if (ipReading && progKey) {
         fetch(`${GR_EREADER_API}/progress/${encodeURIComponent(progKey)}`)
             .then(r => r.ok ? r.json() : null)
             .then(p => {
-                if (!p || typeof p.progress !== 'number') return;
-                const det = document.querySelector('#openBookOptions .open-details');
+                const el = document.getElementById('gbaPos');
+                if (!el || !p || typeof p.progress !== 'number') return;
                 const pct = Math.round(p.progress * 100);
-                const hwm = (typeof p.maxProgress === 'number') ? p.maxProgress : null;
-                const stuck = hwm != null && hwm > p.progress + 0.005;
-                if (det && ipReading) {   // reading position only for in-progress books (#111)
-                    let rows = `<div class="d-flex justify-content-between gap-3">
-                        <span class="text-muted">Reading position</span>
-                        <span class="fw-medium text-end">${pct}%${p.page ? ` · p. ${p.page}` : ''}</span></div>`;
-                    if (stuck) rows += `<div class="d-flex justify-content-between gap-3">
-                        <span class="text-muted">Word credit resumes past</span>
-                        <span class="fw-medium text-end" style="color:#dc3545;">${Math.round(hwm * 100)}%</span></div>`;
-                    det.insertAdjacentHTML('beforeend', rows);
-                }
+                const hwm = (typeof p.maxProgress === 'number') ? Math.round(p.maxProgress * 100) : null;
+                el.textContent = (hwm != null && hwm > pct) ? `${pct}% (${hwm}% max)` : `${pct}%`;
             })
             .catch(() => {});
     }
@@ -1269,37 +1298,129 @@ function resetCreditFromModal() {
         .catch(() => showToast('Reset failed', 'warning'));
 }
 
-// "View Ratings" (#111): show a reading's category star ratings in a popup that
-// stacks above the book-actions popup. (A multi-read picker comes in a later phase.)
-async function grShowRatings(readingId) {
-    const body = document.getElementById('vrModalBody');
-    if (!body) return;
-    body.innerHTML = '<div class="text-muted small">Loading…</div>';
-    bootstrap.Modal.getOrCreateInstance(document.getElementById('viewRatingsModal')).show();
-    let reading;
-    try { reading = await apiCall(`/readings/${readingId}`); }
-    catch (e) { body.innerHTML = '<div class="text-danger small">Could not load ratings.</div>'; return; }
-    const cats = [
-        ['Enjoyment', reading.rating_enjoyment, 'fa-star', '#e0a800'],
-        ['Writing', reading.rating_writing, 'fa-star', '#e0a800'],
-        ['Characters', reading.rating_characters, 'fa-star', '#e0a800'],
-        ['World building', reading.rating_world_building, 'fa-star', '#e0a800'],
-        ['Readability', reading.rating_readability, 'fa-star', '#e0a800'],
-        ['Horror', reading.rating_horror, 'fa-droplet', '#dc3545'],
-        ['Spice', reading.rating_spice, 'fa-pepper-hot', '#dc3545'],
-    ];
-    const rows = cats.filter(([, v]) => v > 0).map(([label, v, icon, color]) =>
-        `<div class="d-flex justify-content-between gap-3 py-1 border-bottom">
-            <span class="text-muted">${label}</span>
-            <span class="fw-medium text-end">${v}<i class="fas ${icon} ms-1" style="color:${color};"></i></span>
-        </div>`).join('');
-    body.innerHTML = rows || '<div class="text-muted small">No ratings recorded for this reading.</div>';
+// ── Shared read selector (#127): a book has 1..N readings; the ratings/edit/sessions
+// screens let you pick which read. Chronological order (Read #1 = earliest). ──
+function grSortReadings(readings) {
+    // Chronological (Read #1 = oldest). A planned/not-started read has no start/finish,
+    // so key off its est-start, else a far-future sentinel so it sorts LAST (newest read).
+    const key = r => r.date_started || r.date_finished_actual || r.date_est_start || '9999-12-31';
+    return [...(readings || [])].sort((a, b) => String(key(a)).localeCompare(String(key(b))));
+}
+function grReadLabel(reading, index) {
+    let sub;
+    if (reading.date_finished_actual) sub = 'finished ' + formatDateSmart(reading.date_finished_actual);
+    else if (reading.date_started) sub = 'in progress';
+    else sub = 'not started';
+    return `Read #${index + 1} · ${sub}`;
+}
+// A <select> of the book's reads (hidden when there's only one). extraOpts prepends
+// custom entries (e.g. sessions' "All reads").
+function grReadDropdown(readings, selectedRid, onchangeFn, extraOpts) {
+    if ((!readings || readings.length <= 1) && !(extraOpts && extraOpts.length)) return '';
+    const pre = (extraOpts || []).map(([v, label]) =>
+        `<option value="${v}"${String(v) === String(selectedRid) ? ' selected' : ''}>${label}</option>`).join('');
+    const opts = readings.map((rd, i) =>
+        `<option value="${rd.id}"${rd.id === selectedRid ? ' selected' : ''}>${grReadLabel(rd, i)}</option>`).join('');
+    return `<div class="mb-3"><select class="form-select form-select-sm" onchange="${onchangeFn}(this.value)">${pre}${opts}</select></div>`;
+}
+// Load a book's readings for the pickers (robust: page data may lack a full readings[]).
+async function grLoadReadings(bid, fallbackRid) {
+    if (bid != null) {
+        try { const d = await apiCall('/books/' + bid + '/details'); if (d.readings) return grSortReadings(d.readings); }
+        catch (e) { /* fall through */ }
+    }
+    if (fallbackRid != null) {
+        try { return [await apiCall('/readings/' + fallbackRid)]; } catch (e) { /* */ }
+    }
+    return [];
 }
 
-// "See Reading Sessions" (#77): read-only list of every qualified sitting for a
-// book. Stacks above the cover popup. Columns: Date & Time (YYMMDD - HH:MM-HH:MM),
-// Duration, Words, WPM — newest first.
-function grShowReadingSessions(bookId, titleEnc) {
+// ── Ratings screen (#127): view + edit a read's ratings, with a read picker. ──
+const GR_RATING_CATS = [
+    ['enjoyment', 'Enjoyment', 'star'], ['writing', 'Writing Quality', 'star'],
+    ['characters', 'Characters', 'star'], ['world_building', 'World Building', 'star'],
+    ['readability', 'Readability', 'star'], ['horror', 'Horror', 'blood'], ['spice', 'Spice', 'pepper'],
+];
+let grRatingsState = { readings: [], rid: null };
+async function grOpenRatings(rid) {
+    const body = document.getElementById('vrModalBody');
+    if (!body) return;
+    body.innerHTML = '<div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin"></i></div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('viewRatingsModal')).show();
+    const bid = grActiveBook && grActiveBook.id;
+    const readings = await grLoadReadings(bid, rid);
+    if (!readings.length) { body.innerHTML = '<div class="text-danger small">Could not load ratings.</div>'; return; }
+    // Default selection: the passed read, but if it's a planned/not-started read (reread
+    // opened from TBR) prefer the most recent FINISHED read — that's what has ratings.
+    let sel = readings.find(x => x.id === rid);
+    if (sel && !sel.date_started && !sel.date_finished_actual) {
+        const fin = grSortReadings(readings.filter(x => x.date_finished_actual));
+        if (fin.length) sel = fin[fin.length - 1];
+    }
+    grRatingsState = { readings, rid: (sel ? sel.id : readings[readings.length - 1].id) };
+    grRenderRatings();
+}
+function grRenderRatings() {
+    const body = document.getElementById('vrModalBody');
+    const { readings, rid } = grRatingsState;
+    // "All reads (avg)" — read-only average per category across reads that rated it.
+    const extra = readings.length > 1 ? [['all', '★ All reads (avg)']] : [];
+    const dropdown = grReadDropdown(readings, rid, 'GreatReads.ratingsSelectRead', extra);
+    if (rid === 'all') {
+        const rows = GR_RATING_CATS.map(([key, label, emoji]) => {
+            const vals = readings.map(x => x['rating_' + key] || 0).filter(v => v > 0);
+            if (!vals.length) return '';
+            const avg = vals.reduce((a, b) => a + b, 0) / vals.length;
+            return `<div class="d-flex justify-content-between gap-3 py-1 border-bottom">
+                <span class="text-muted">${label}</span>
+                <span class="fw-medium text-end">${avg.toFixed(1)} ${getEmojiForType(emoji)}
+                    <span class="small text-muted">(avg of ${vals.length})</span></span>
+            </div>`;
+        }).filter(Boolean).join('');
+        body.innerHTML = dropdown + (rows || '<div class="text-muted small py-2">No ratings across reads yet.</div>');
+        return;
+    }
+    const reading = readings.find(x => x.id === rid) || readings[0];
+    const blocks = GR_RATING_CATS.map(([key, label, emoji]) => `
+        <div class="col-6 mb-3">
+            <label class="form-label small mb-1">${label}</label>
+            <div class="emoji-rating" data-rating-type="${key}" data-emoji="${emoji}">
+                <input type="hidden" id="vrRating_${key}" value="${reading['rating_' + key] || 0}">
+                <div class="emoji-rating-display"></div>
+            </div>
+        </div>`).join('');
+    body.innerHTML = `
+        ${dropdown}
+        <div class="row">${blocks}</div>
+        <div class="d-flex justify-content-end mt-1">
+            <button type="button" class="btn btn-sm btn-primary" onclick="GreatReads.saveRatings()">
+                <i class="fas fa-check me-1"></i>Save ratings</button>
+        </div>`;
+    body.querySelectorAll('.emoji-rating').forEach(c => initEmojiRating(c));
+}
+function grRatingsSelectRead(sel) { grRatingsState.rid = (sel === 'all') ? 'all' : parseInt(sel, 10); grRenderRatings(); }
+async function grSaveRatings() {
+    const rid = grRatingsState.rid;
+    if (rid == null || rid === 'all') return;   // 'all' is a read-only average view
+    const data = {};
+    GR_RATING_CATS.forEach(([key]) => {
+        const el = document.getElementById('vrRating_' + key);
+        const v = el ? (parseInt(el.value) || 0) : 0;
+        data['rating_' + key] = v > 0 ? v : null;
+    });
+    try { await apiCall('/readings/' + rid, { method: 'PUT', data }); }
+    catch (e) { if (typeof showToast === 'function') showToast('Save failed', 'danger'); return; }
+    const reading = grRatingsState.readings.find(x => x.id === rid);
+    if (reading) GR_RATING_CATS.forEach(([key]) => { reading['rating_' + key] = data['rating_' + key]; });
+    if (typeof showToast === 'function') showToast('Ratings saved', 'success');
+    if (typeof window.refreshReadings === 'function') { try { window.refreshReadings(); } catch (e) {} }
+}
+
+// Reading Sessions (#77, #127): every qualified sitting for a book, with a read picker
+// (multi-read) that filters sessions to the selected read's date window. "All reads"
+// shows everything. Columns: Date & Time (YYMMDD - HH:MM-HH:MM), Duration, Words, WPM.
+let grSessState = { readings: [], sessions: [], sel: 'all' };
+async function grShowReadingSessions(bookId, titleEnc, rid) {
     const modalEl = document.getElementById('readingSessionsModal');
     if (!modalEl) return;
     const title = decodeURIComponent(titleEnc || '');
@@ -1308,31 +1429,51 @@ function grShowReadingSessions(bookId, titleEnc) {
     const body = document.getElementById('rsModalBody');
     body.innerHTML = '<div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin"></i></div>';
     bootstrap.Modal.getOrCreateInstance(modalEl).show();
-
-    // YYMMDD - HH:MM-HH:MM from epoch-ms start/end (local time, matching activity_date).
+    const [readings, sessionsResp] = await Promise.all([
+        grLoadReadings(bookId, rid),
+        fetch(`${GR_EREADER_API}/sessions-list-gr/${bookId}`).then(r => r.ok ? r.json() : null).catch(() => null),
+    ]);
+    grSessState = {
+        readings,
+        sessions: (sessionsResp && sessionsResp.sessions) || [],
+        // Default to the clicked read when it exists, else all.
+        sel: (rid != null && readings.find(x => x.id === rid)) ? rid : 'all',
+    };
+    grRenderSessions();
+}
+function grSessSelectRead(sel) { grSessState.sel = (sel === 'all') ? 'all' : parseInt(sel, 10); grRenderSessions(); }
+function grRenderSessions() {
+    const body = document.getElementById('rsModalBody');
+    const { readings, sessions, sel } = grSessState;
+    // Filter sessions to the selected read's [start → finish|now] window (by activity date).
+    let shown = sessions;
+    if (sel !== 'all') {
+        const rd = readings.find(x => x.id === sel);
+        if (rd) {
+            const startMs = rd.date_started ? new Date(rd.date_started + 'T00:00:00').getTime() : -Infinity;
+            const endMs = rd.date_finished_actual ? new Date(rd.date_finished_actual + 'T23:59:59').getTime() : Infinity;
+            shown = sessions.filter(ss => ss.startedAt >= startMs && ss.startedAt <= endMs);
+        }
+    }
     const fmtDT = (start, end) => {
         const s = new Date(start), e = new Date(end), p = n => String(n).padStart(2, '0');
         const ymd = p(s.getFullYear() % 100) + p(s.getMonth() + 1) + p(s.getDate());
         const hm = d => p(d.getHours()) + ':' + p(d.getMinutes());
         return `${ymd} - ${hm(s)}-${hm(e)}`;
     };
-
-    fetch(`${GR_EREADER_API}/sessions-list-gr/${bookId}`)
-        .then(r => r.ok ? r.json() : null)
-        .then(d => {
-            const sessions = (d && d.sessions) || [];
-            if (!sessions.length) {
-                body.innerHTML = '<p class="text-muted mb-0 text-center py-3">No reading sessions recorded.</p>';
-                return;
-            }
-            const rowsHtml = sessions.map(ss => `
+    const picker = grReadDropdown(readings, sel, 'GreatReads.sessionsSelectRead', [['all', 'All reads']]);
+    if (!shown.length) {
+        body.innerHTML = picker + '<p class="text-muted mb-0 text-center py-3">No reading sessions recorded.</p>';
+        return;
+    }
+    const rowsHtml = shown.map(ss => `
                 <tr>
                     <td class="text-nowrap">${fmtDT(ss.startedAt, ss.endedAt)}</td>
                     <td class="text-end">${formatDuration(ss.minutes)}</td>
                     <td class="text-end">${Number(ss.words || 0).toLocaleString()}</td>
                     <td class="text-end">${ss.wpm != null ? ss.wpm : '—'}</td>
                 </tr>`).join('');
-            body.innerHTML = `
+    body.innerHTML = picker + `
                 <div class="table-responsive">
                     <table class="table table-sm mb-0 align-middle">
                         <thead><tr>
@@ -1344,10 +1485,6 @@ function grShowReadingSessions(bookId, titleEnc) {
                         <tbody>${rowsHtml}</tbody>
                     </table>
                 </div>`;
-        })
-        .catch(() => {
-            body.innerHTML = '<p class="text-danger mb-0 text-center py-3">Error loading sessions.</p>';
-        });
 }
 
 // Reset the #79 word-credit high-water-mark to the current position (#86), so
@@ -1751,9 +1888,13 @@ window.GreatReads = {
     openBookNav: grOpenBookNav,
     navStep: grNavStep,
     editReadingById: grEditReadingById,
-    editRatings: grEditRatings,
+    editSelectRead: grEditSelectRead,
     showReadingSessions: grShowReadingSessions,
-    showRatings: grShowRatings,
+    sessionsSelectRead: grSessSelectRead,
+    showRatings: grOpenRatings,          // View Ratings → view+edit screen (#127)
+    editRatings: grOpenRatings,          // "Not Yet Rated" → same screen, editable
+    ratingsSelectRead: grRatingsSelectRead,
+    saveRatings: grSaveRatings,
     resetCreditMark: grResetCreditMark,
     updatePhysicalProgress: grUpdatePhysicalProgress,
     startReadingSession: grStartReadingSession,
