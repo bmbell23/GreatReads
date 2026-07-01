@@ -15,14 +15,19 @@
         display: flex; align-items: center; justify-content: center; overflow: hidden; }
     .books-cover img { width: 100%; height: 100%; object-fit: cover; }
     .books-cover .book-cover-fallback { font-size: 1.8rem; color: #adb5bd; }
-    /* Boilerplate cover for books with no image: title top, author bottom (#88). */
+    /* Boilerplate cover for books with no image (#88; art refresh #105). The book
+       is still treated as "no cover" — this parchment is purely placeholder art,
+       not a real cover. Title top, author bottom, in a bookish serif. */
     .books-ph { width: 100%; height: 100%; display: flex; flex-direction: column;
-        justify-content: space-between; padding: 10px 6px; text-align: center;
-        background: linear-gradient(160deg, #efe9dd, #ddd3c0); color: #5b5347; }
-    .books-ph-title { font-size: .74rem; font-weight: 700; line-height: 1.12; overflow: hidden;
-        display: -webkit-box; -webkit-line-clamp: 5; -webkit-box-orient: vertical; }
-    .books-ph-author { font-size: .64rem; font-style: italic; overflow: hidden;
-        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+        justify-content: space-between; padding: 14px 9px; text-align: center; color: #463a28;
+        background: #e4d9c2 url("{{ url_for('static', path='/img/placeholder-cover.webp') }}") center/cover no-repeat;
+        font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif; }
+    .books-ph-title { font-size: .92rem; font-weight: 800; line-height: 1.1; letter-spacing: .01em;
+        overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+        text-shadow: 0 1px 1px rgba(255,250,240,.6); }
+    .books-ph-author { font-size: .7rem; font-style: italic; color: #6b5a3d; overflow: hidden;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+        text-shadow: 0 1px 1px rgba(255,250,240,.55); }
     .books-badge-tl { position: absolute; top: 4px; left: 4px; display: flex; gap: 3px; }
     .books-badge-tr { position: absolute; top: 4px; right: 4px; display: flex; gap: 3px; }
     .books-readcount { background: #198754; color: #fff; border-radius: 999px; font-size: .7rem;
@@ -278,6 +283,7 @@
                 <button type="button" class="btn btn-outline-danger me-auto" onclick="bkeDelete()">
                     <i class="fas fa-trash me-1"></i>Delete book</button>
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-outline-primary" id="bkeSaveNextBtn" onclick="bkeSaveAndNext()" title="Save and edit the next book in this view">Save &amp; Next <i class="fas fa-arrow-right ms-1"></i></button>
                 <button type="button" class="btn btn-primary" onclick="bkeSave()">Save changes</button>
             </div>
         </div>
@@ -331,6 +337,9 @@ const isRemote = () => shelfStatus === 'upcoming' || shelfStatus === 'new';
 const cardKey = c => (c.kind === 'local' ? 'L' + c.book_id : 'R' + c.news_id);
 
 function esc(s) { return (s || '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+// Display-only title fallback for books with a blank title — shown in the UI but
+// never written back to the field (#106).
+const dispTitle = t => (t && String(t).trim()) ? t : 'Untitled';
 // Cover URL for a card: local file (cache-busted by mtime) or the remote thumbnail.
 function coverSrc(c) {
     const base = window.APP_BASE_PATH || '';
@@ -339,7 +348,7 @@ function coverSrc(c) {
 }
 function phCover(title, author, disp) {
     return `<div class="books-ph" style="display:${disp};">
-        <div class="books-ph-title">${esc(title)}</div>
+        <div class="books-ph-title">${esc(dispTitle(title))}</div>
         <div class="books-ph-author">${esc(author)}</div></div>`;
 }
 
@@ -522,7 +531,7 @@ function cardHtml(c) {
         : (rc ? `<div class="books-badge-tl">${rc}</div>` : '');
     const click = selectable ? `toggleSelect('${key}')` : `openBookDetails('${key}')`;
     return `<div class="col-4 col-sm-3 col-lg-2 mb-3">
-        <div class="card books-card status-${c.status}${isSel ? ' sel-on' : ''}" style="cursor:pointer;" onclick="${click}" title="${(c.title || '').replace(/"/g, '&quot;')}">
+        <div class="card books-card status-${c.status}${isSel ? ' sel-on' : ''}" style="cursor:pointer;" onclick="${click}" title="${esc(dispTitle(c.title))}">
             <div class="books-cover">${cover}
                 ${tl}
                 ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
@@ -654,7 +663,7 @@ function openBookDetails(key, navList) {
     updateBdNavButtons();
     bootstrap.Modal.getInstance(document.getElementById('seriesModal'))?.hide();
     const base = window.APP_BASE_PATH || '';
-    document.getElementById('bdTitle').textContent = c.title || '';
+    document.getElementById('bdTitle').textContent = dispTitle(c.title);
 
     setBdCover(c);   // preload + fade swap, no grey flash between books (#100)
 
@@ -730,10 +739,10 @@ function seriesMiniHtml(c, currentId, withCaption) {
     const cur = c.book_id === currentId ? ' style="outline:2px solid var(--bs-primary);outline-offset:1px;border-radius:4px;"' : '';
     const num = c.series_number != null ? `#${c.series_number}` : '';
     const caption = withCaption
-        ? `<div class="small text-truncate mt-1" title="${esc(c.title)}">${num ? num + ' · ' : ''}${esc(c.title)}</div>`
+        ? `<div class="small text-truncate mt-1" title="${esc(dispTitle(c.title))}">${num ? num + ' · ' : ''}${esc(dispTitle(c.title))}</div>`
         : (num ? `<div class="text-muted text-center" style="font-size:.65rem;line-height:1.4;">${num}</div>` : '');
     return `<div class="col-4 col-sm-3 col-lg-2 mb-2">
-        <div class="card books-card status-${c.status}" data-bid="${c.book_id}" style="cursor:pointer;"${cur} onclick="openBookDetails('${cardKey(c)}')" title="${esc(c.title)}">
+        <div class="card books-card status-${c.status}" data-bid="${c.book_id}" style="cursor:pointer;"${cur} onclick="openBookDetails('${cardKey(c)}')" title="${esc(dispTitle(c.title))}">
             <div class="books-cover">${cover}</div>
         </div>${caption}</div>`;
 }
@@ -854,6 +863,9 @@ async function bkeOpen(bookId) {
     set('bkePages', b.page_count); set('bkeWords', b.word_count); set('bkeIsbn', b.isbn_id);
     set('bkeCoverUrl', '');
     bkeRenderCover();
+    // "Save & Next" only makes sense when there's a next editable book in view (#104)
+    const nb = document.getElementById('bkeSaveNextBtn');
+    if (nb) nb.disabled = bkeNextLocalId(b.id) == null;
     bootstrap.Modal.getOrCreateInstance(document.getElementById('bkEditModal')).show();
 }
 
@@ -864,7 +876,10 @@ function bkeRenderCover() {
         : phCover(b ? b.title : '', b ? b.author : '', 'flex');
 }
 
-async function bkeSave() {
+// Save the edit modal's fields (PUT + patch the card in place, keep scroll #99).
+// Returns the saved book id on success, or null on failure — callers decide
+// whether to close the modal (bkeSave) or advance to the next book (#104).
+async function _bkeSaveCore() {
     const id = document.getElementById('bkeId').value;
     const v = id2 => { const x = document.getElementById(id2).value.trim(); return x === '' ? null : x; };
     const num = (id2, fn) => { const x = document.getElementById(id2).value; return x === '' ? null : fn(x); };
@@ -880,7 +895,6 @@ async function bkeSave() {
     try {
         await GreatReads.apiCall('/books/' + id, { method: 'PUT', data });
         showToast('Book updated', 'success');
-        bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
         // patch the card in place so we keep scroll + filter, no reload (#99)
         patchLocalCard(parseInt(id, 10), {
             title: data.title,
@@ -893,7 +907,37 @@ async function bkeSave() {
             cover_version: Math.floor(Date.now() / 1000),
         });
         renderKeepScroll();
-    } catch (e) { showToast('Save failed', 'danger'); }
+        return parseInt(id, 10);
+    } catch (e) { showToast('Save failed', 'danger'); return null; }
+}
+
+async function bkeSave() {
+    if (await _bkeSaveCore() != null)
+        bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
+}
+
+// The next editable (local) book after the one being edited, in the current
+// visible order (respects the active search/filter/sort) — null at the end (#104).
+function bkeNextLocalId(afterId) {
+    const list = visibleCards();
+    const i = list.findIndex(c => c.kind === 'local' && c.book_id === afterId);
+    if (i < 0) return null;
+    for (let j = i + 1; j < list.length; j++)
+        if (list[j].kind === 'local') return list[j].book_id;
+    return null;
+}
+
+// Save, then jump straight into editing the next book in this view (#104).
+async function bkeSaveAndNext() {
+    const curId = parseInt(document.getElementById('bkeId').value, 10);
+    const nextId = bkeNextLocalId(curId);   // resolve before save (order is stable across an in-place edit)
+    if (await _bkeSaveCore() == null) return;
+    if (nextId != null) {
+        bkeOpen(nextId);   // repopulate the still-open modal with the next book
+    } else {
+        bootstrap.Modal.getInstance(document.getElementById('bkEditModal'))?.hide();
+        showToast('Saved — that was the last book in this view.', 'info');
+    }
 }
 
 async function bkeDelete() {
