@@ -760,7 +760,7 @@
             left: 0;
             right: 0;
             height: 24px;
-            z-index: 99999;
+            z-index: 9600;  /* above page content, below all overlays (10000+) — #115 */
             display: flex;
             align-items: center;
             justify-content: center;   /* brand is centred */
@@ -800,7 +800,7 @@
             right: 0;
             width: 40px;
             height: 88px;
-            z-index: 99998;
+            z-index: 9600;  /* above page content, below all overlays (10000+) — was 99998, stole taps from the settings ✕ (#115) */
             cursor: pointer;
             display: flex;
             justify-content: center;
