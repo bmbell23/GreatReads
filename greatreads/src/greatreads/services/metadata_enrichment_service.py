@@ -273,19 +273,10 @@ def _rating_display(v) -> Optional[str]:
 
 
 def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
-    """Return the compare-window payload for one book, or None if it doesn't exist."""
+    """Compare-window payload for one saved book, or None if it doesn't exist."""
     book = db.query(Book).filter(Book.id == book_id).first()
     if not book:
         return None
-
-    cached = _CACHE.get(book_id)
-    if cached and (time.time() - cached[0]) < _CACHE_TTL:
-        return cached[1]
-
-    title = (book.title or "").strip()
-    author = book.author or ""
-    author_last = (book.author_name_second or "").strip()
-
     # Prefer an ISBN from inventory as the precise lookup key; most records
     # (and all Unowned ones) have none → fall back to title+author.
     isbn = None
@@ -294,6 +285,43 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
         if cand:
             isbn = cand
             break
+    current = {
+        "date": book.date_published.isoformat() if book.date_published else None,
+        "page_count": book.page_count,
+        "series_number": book.series_number,
+        "genres": [t.name for t in book.tags] if book.tags else [],
+        "public_rating": book.public_rating,
+        "description": book.description,
+        "cover": bool(book.cover),
+    }
+    return _suggest_core(db, book_id=book_id, title=(book.title or "").strip(),
+                         author=book.author or "", author_last=(book.author_name_second or "").strip(),
+                         isbn=isbn, current=current)
+
+
+def suggest_metadata_adhoc(db: Session, title: str, author: str) -> Optional[dict]:
+    """Compare-window payload for a NOT-yet-saved book (a release / new entry, #161):
+    look up by title+author with no id and no current values. The client applies accepted
+    candidates into the Add-book form (there's nothing to PUT yet)."""
+    title = (title or "").strip()
+    if not title:
+        return None
+    author = (author or "").strip()
+    author_last = author.rsplit(" ", 1)[-1] if author else ""
+    empty = {"date": None, "page_count": None, "series_number": None,
+             "genres": [], "public_rating": None, "description": None, "cover": False}
+    return _suggest_core(db, book_id=None, title=title, author=author,
+                         author_last=author_last, isbn=None, current=empty)
+
+
+def _suggest_core(db: Session, *, book_id, title, author, author_last, isbn, current) -> Optional[dict]:
+    """Shared engine for the compare window — used by both the saved-book path and the
+    id-less adhoc path (#161). ``current`` carries the book's present values (all empty
+    for a new book) so each row can show 'Keep current'."""
+    cache_key = book_id if book_id is not None else f"adhoc:{title}|{author}".lower()
+    cached = _CACHE.get(cache_key)
+    if cached and (time.time() - cached[0]) < _CACHE_TTL:
+        return cached[1]
 
     api_key = os.environ.get("GOOGLE_BOOKS_API_KEY")
     g = _google_fields(isbn, title, author, api_key) if api_key else {}
@@ -318,7 +346,7 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
         return text if len(text) <= n else text[:n].rstrip() + "…"
 
     vocab = _genre_vocabulary(db)
-    current_genres = [t.name for t in book.tags] if book.tags else []
+    current_genres = list(current.get("genres") or [])
     genre_candidates = [
         (_clean_genre_names(a.get("genres"), vocab), _AP),
         (_clean_genre_names(g.get("genres"), vocab), _GB),
@@ -326,8 +354,8 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
         (_clean_genre_names(o.get("genres"), vocab, vocab_only=True), _OL),
     ]
 
-    cur_date = book.date_published.isoformat() if book.date_published else None
-    cur_syn = _strip_html(book.description)
+    cur_date = current.get("date")
+    cur_syn = _strip_html(current.get("description"))
     fields = [
         _build_field(
             "date_published", "Published", _date_display(cur_date),
@@ -337,17 +365,17 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
              cand(g.get("date"), _GB, _date_display(g.get("date")))],
         ),
         _build_field(
-            "page_count", "Pages", book.page_count,
+            "page_count", "Pages", current.get("page_count"),
             [cand(g.get("page_count"), _GB),
              cand(o.get("page_count"), _OL)],
         ),
         _build_field(
-            "series_number", "Series #", book.series_number,
+            "series_number", "Series #", current.get("series_number"),
             [cand(g.get("series_number"), _GB)],
         ),
         _build_genres(current_genres, genre_candidates),
         _build_field(
-            "public_rating", "Public rating", _rating_display(book.public_rating),
+            "public_rating", "Public rating", _rating_display(current.get("public_rating")),
             [cand(a.get("public_rating"), _AP, _rating_display(a.get("public_rating"))),
              cand(g.get("public_rating"), _GB, _rating_display(g.get("public_rating")))],
         ),
@@ -358,7 +386,7 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
             kind="text",
         ),
         _build_field(
-            "cover", "Cover", bool(book.cover),
+            "cover", "Cover", bool(current.get("cover")),
             # Google Books covers are dropped — they're frequently the 575×750 "image
             # not available" placeholder. Apple Books first, OpenLibrary fallback.
             [cand(None, _AP, "Apple Books cover", url=a.get("cover_url")),
@@ -375,5 +403,5 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
                       "apple": bool(a)},
         "fields": [f for f in fields if f],
     }
-    _CACHE[book_id] = (time.time(), payload)
+    _CACHE[cache_key] = (time.time(), payload)
     return payload

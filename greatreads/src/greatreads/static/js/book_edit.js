@@ -20,6 +20,7 @@
     // endpoints (which need an id) can't run at pick-time — buffer the chosen
     // file/URL and upload it right after the create POST returns the new id.
     let bkeIsNew = false, bkePendingCoverFile = null, bkePendingCoverUrl = null;
+    let bkePendingRating = null;   // #161: public_rating accepted while creating (no form field)
     const bkeSug = { first: [], last: [], series: [], universe: [], genre: [], title: [] };
     let bkeGenres = [];   // #156: the book's genres, edited as pills
 
@@ -161,14 +162,15 @@
     // ("Add book", no Delete/Save & Next) vs edit mode ("Edit book", Delete shown).
     function bkeSetMode(isNew) {
         bkeIsNew = isNew;
-        bkePendingCoverFile = null; bkePendingCoverUrl = null;
+        bkePendingCoverFile = null; bkePendingCoverUrl = null; bkePendingRating = null;
         const title = document.getElementById('bkeModalTitle');
         if (title) title.textContent = isNew ? 'Add book' : 'Edit book';
         const del = document.getElementById('bkeDeleteBtn');
         if (del) del.style.display = isNew ? 'none' : '';
-        // "Request metadata" (#119) needs a saved id to apply against — edit mode only.
+        // "Request metadata" (#119) — in edit mode it applies to the saved book; in
+        // create mode (#161) it looks up by title+author and fills the form.
         const enrich = document.getElementById('bkeEnrichBtn');
-        if (enrich) enrich.style.display = isNew ? 'none' : '';
+        if (enrich) enrich.style.display = '';
         const nb = document.getElementById('bkeSaveNextBtn');
         if (nb && isNew) nb.style.display = 'none';
         // Primary button reads "Create" when adding, "Save changes" when editing;
@@ -307,6 +309,8 @@
             page_count: num('bkePages', parseInt), word_count: num('bkeWords', parseInt),
             isbn_id: num('bkeIsbn', parseInt),
         };
+        // Public rating has no form field; carry an enrichment-accepted value through (#161).
+        if (bkePendingRating != null) data.public_rating = bkePendingRating;
         if (bkeIsNew) return _bkeCreate(data);
         try {
             await api('/books/' + id, { method: 'PUT', data });
@@ -472,15 +476,26 @@
 
     async function bkeRequestMetadata() {
         const id = document.getElementById('bkeId').value;
-        if (!id) return;
+        // Create mode (#161): no id yet → look up by the form's title + author and fill
+        // the form on accept. Edit mode: look up the saved book and apply via PUT.
+        let request;
+        if (id) {
+            request = api('/enrichment/' + id + '/suggest', { method: 'POST' });
+        } else {
+            const title = document.getElementById('bkeTitle').value.trim();
+            if (!title) { toast('Enter a title first', 'info'); return; }
+            const author = [document.getElementById('bkeAuthorFirst').value.trim(),
+                            document.getElementById('bkeAuthorLast').value.trim()].filter(Boolean).join(' ');
+            request = api('/enrichment/lookup', { method: 'POST', data: { title, author } });
+        }
         const body = document.getElementById('bkeMetaBody');
         const sub = document.getElementById('bkeMetaSub');
         body.innerHTML = '<div class="text-center text-muted py-4">'
-            + '<i class="fas fa-spinner fa-spin me-2"></i>Searching OpenLibrary + Google Books…</div>';
+            + '<i class="fas fa-spinner fa-spin me-2"></i>Searching Apple Books + Google + OpenLibrary…</div>';
         sub.textContent = '';
         bootstrap.Modal.getOrCreateInstance(document.getElementById('bkeMetaModal')).show();
         let res;
-        try { res = await api('/enrichment/' + id + '/suggest', { method: 'POST' }); }
+        try { res = await request; }
         catch (e) { body.innerHTML = '<div class="text-danger py-3">Lookup failed.</div>'; return; }
         bkeRenderMeta(res);
     }
@@ -583,7 +598,6 @@
 
     async function bkeApplyMetadata() {
         const id = document.getElementById('bkeId').value;
-        if (!id) return;
         const data = {};          // book fields to PUT
         let coverUrl = null;
         const norm = a => [...new Set(a.map(s => s.toLowerCase()))].sort().join('');
@@ -615,15 +629,23 @@
         if (!Object.keys(data).length && !coverUrl) {
             toast('Nothing selected to accept', 'info'); return;
         }
-        try {
-            if (Object.keys(data).length) await api('/books/' + id, { method: 'PUT', data });
-            if (coverUrl) {
-                await api(`/books/${id}/cover/from-url`, { method: 'POST', data: { url: coverUrl } });
-                if (bkeBook) bkeBook.cover = true;
-            }
-        } catch (e) { toast('Apply failed', 'danger'); return; }
+        // Edit mode: write immediately (PUT + cover-from-url). Create mode (#161): there's
+        // no id yet, so buffer the cover + rating and just fill the form; the create POST
+        // persists everything together.
+        if (id) {
+            try {
+                if (Object.keys(data).length) await api('/books/' + id, { method: 'PUT', data });
+                if (coverUrl) {
+                    await api(`/books/${id}/cover/from-url`, { method: 'POST', data: { url: coverUrl } });
+                    if (bkeBook) bkeBook.cover = true;
+                }
+            } catch (e) { toast('Apply failed', 'danger'); return; }
+        } else {
+            if (coverUrl) { bkePendingCoverUrl = coverUrl; bkePendingCoverFile = null; }
+            if (data.public_rating != null) bkePendingRating = data.public_rating;
+        }
         // Sync the Edit Book inputs (+ bkeBook) so the visible form matches what we
-        // just wrote — otherwise a later "Save changes" would revert these fields.
+        // just wrote/buffered — otherwise a later "Save changes" would revert these.
         Object.entries(data).forEach(([field, val]) => {
             const inputId = bkeMetaFieldToInput[field];
             const el = inputId && document.getElementById(inputId);
@@ -633,8 +655,7 @@
         if (data.tags) bkeSetGenres(data.tags);   // #156: reflect accepted genres in the pills
         bkeRenderCover();
         toast('Metadata applied', 'success');
-        const after = hooks().afterSave;
-        if (after) after(parseInt(id, 10), data, bkeBook);
+        if (id) { const after = hooks().afterSave; if (after) after(parseInt(id, 10), data, bkeBook); }
         bootstrap.Modal.getInstance(document.getElementById('bkeMetaModal'))?.hide();
     }
 

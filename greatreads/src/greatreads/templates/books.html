@@ -1374,7 +1374,7 @@ async function injectAuthorReads(author) {
 // detected release so the user reviews/edits before it's written to the DB. On successful
 // create, afterCreate() dismisses the release from the feed.
 let _saveLocallyNewsId = null;
-function saveLocally(newsId) {
+function saveLocally(newsId, autoEnrich) {
     const c = (bdCurrent && bdCurrent.news_id === newsId) ? bdCurrent
         : cards.find(x => x.news_id === newsId);
     if (!c) return;
@@ -1394,6 +1394,9 @@ function saveLocally(newsId) {
         word_count: c.word_count,
         cover_url: c.cover_url,
     });
+    // #161: for a release, auto-run Request metadata so the user can fill synopsis/
+    // genres/rating/cover before creating the Wishlist record.
+    if (autoEnrich) setTimeout(() => { if (typeof bkeRequestMetadata === 'function') bkeRequestMetadata(); }, 400);
 }
 
 async function ignoreRelease(newsId) {
