@@ -12,7 +12,7 @@ from pydantic import BaseModel
 from ..database import get_db
 from ..models.book import Book, BookCreate, BookUpdate, BookResponse
 from ..models.reading import Reading
-from ..models.tag import Tag
+from ..models.tag import Tag, book_tags
 from ..models.inventory import Inventory
 from ..models.external_import import ExternalImport
 from ..models.user import User
@@ -155,6 +155,117 @@ async def backfill_run(
     """Trigger one metadata backfill batch on demand from Settings (#166)."""
     from ..services.metadata_backfill_service import backfill_batch
     return backfill_batch(db)
+
+
+@router.post("/upgrade-covers")
+async def upgrade_covers(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Find low-resolution covers and replace them with Apple Books hi-res (#165)."""
+    from ..services.cover_upgrade_service import upgrade_low_res
+    return upgrade_low_res(db)
+
+
+# ── Genre management (#167) — list / merge / rename / delete, on the Tag store ──
+@router.get("/genres-list")
+async def genres_list(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """All genres (Tag names) with how many books use each, for Settings management."""
+    from sqlalchemy import func as _func
+    rows = (db.query(Tag.name, _func.count(book_tags.c.book_id))
+            .outerjoin(book_tags, book_tags.c.tag_id == Tag.id)
+            .group_by(Tag.id).order_by(Tag.name).all())
+    return {"genres": [{"name": n, "count": c} for (n, c) in rows]}
+
+
+class GenreMergeRequest(BaseModel):
+    from_name: str
+    into_name: str
+
+
+@router.post("/genres/merge")
+async def genres_merge(
+    request: Request,
+    payload: GenreMergeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Merge one genre into another: move every book onto the target genre, then drop
+    the source genre (#167). Case-insensitive; no-op if they're the same."""
+    src = db.query(Tag).filter(Tag.name.ilike(payload.from_name.strip())).first()
+    if not src:
+        raise HTTPException(status_code=404, detail="Genre not found")
+    dst = get_or_create_tags(db, [payload.into_name.strip()])[0]
+    if dst.id == src.id:
+        return {"merged": 0}
+    moved = 0
+    for book in list(src.books):
+        if dst not in book.tags:
+            book.tags.append(dst)
+        book.tags.remove(src)
+        if book.genre and book.genre.lower() == src.name.lower():
+            book.genre = dst.name
+        moved += 1
+    db.delete(src)
+    db.commit()
+    return {"merged": moved, "into": dst.name}
+
+
+class GenreRenameRequest(BaseModel):
+    name: str
+    new_name: str
+
+
+@router.post("/genres/rename")
+async def genres_rename(
+    request: Request,
+    payload: GenreRenameRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Rename a genre. If the new name already exists, this becomes a merge (#167)."""
+    tag = db.query(Tag).filter(Tag.name.ilike(payload.name.strip())).first()
+    if not tag:
+        raise HTTPException(status_code=404, detail="Genre not found")
+    new = payload.new_name.strip()
+    if not new:
+        raise HTTPException(status_code=400, detail="New name required")
+    existing = db.query(Tag).filter(Tag.name.ilike(new), Tag.id != tag.id).first()
+    if existing:
+        return await genres_merge(request, GenreMergeRequest(from_name=tag.name, into_name=new), db, current_user)
+    old = tag.name
+    tag.name = new
+    for book in list(tag.books):
+        if book.genre and book.genre.lower() == old.lower():
+            book.genre = new
+    db.commit()
+    return {"renamed": new}
+
+
+class GenreDeleteRequest(BaseModel):
+    name: str
+
+
+@router.post("/genres/delete")
+async def genres_delete(
+    request: Request,
+    payload: GenreDeleteRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete a genre from all books (#167)."""
+    tag = db.query(Tag).filter(Tag.name.ilike(payload.name.strip())).first()
+    if not tag:
+        raise HTTPException(status_code=404, detail="Genre not found")
+    n = len(tag.books)
+    db.delete(tag)   # cascades the book_tags rows
+    db.commit()
+    return {"deleted": tag.name, "books_affected": n}
 
 
 @router.get("/{book_id}")

@@ -349,6 +349,27 @@
             </div>
         </div>
 
+        <!-- Genre management (#167) -->
+        <div class="card mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0"><i class="fas fa-tags me-2"></i>Genres</h5>
+                <span class="small text-muted" id="gm-total"></span>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-2">Manage the genre vocabulary — merge near-duplicates (e.g.
+                    “Fantasy fiction” → “Fantasy”), rename, or delete. Changes apply across all books.</p>
+                <div class="row g-2 align-items-end mb-3">
+                    <div class="col"><label class="form-label small mb-0">Merge</label>
+                        <select class="form-select form-select-sm" id="gm-from"></select></div>
+                    <div class="col-auto pb-1 small text-muted">into</div>
+                    <div class="col"><label class="form-label small mb-0">&nbsp;</label>
+                        <select class="form-select form-select-sm" id="gm-into"></select></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-primary" onclick="mergeGenres()">Merge</button></div>
+                </div>
+                <div id="gm-list" style="max-height:320px;overflow:auto;"></div>
+            </div>
+        </div>
+
         <!-- Metadata Backfill sweep (#166) -->
         <div class="card mb-4">
             <div class="card-header d-flex align-items-center justify-content-between">
@@ -375,10 +396,13 @@
                 <div class="form-text">Higher batch / shorter interval fills faster but uses more of the ~1,000/day
                     Google Books quota (each book ≈ 1 call). 10 books/60 min ≈ 240/day is safe; keep the daily
                     total under ~800 to leave room for the release poll.</div>
-                <div class="mt-2">
+                <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
                     <button class="btn btn-sm btn-outline-primary" id="mbf-run" onclick="runBackfill()">
                         <i class="fas fa-play me-1"></i>Run a batch now</button>
-                    <span class="small text-muted ms-2" id="mbf-status"></span>
+                    <button class="btn btn-sm btn-outline-secondary" id="cov-run" onclick="upgradeCovers()"
+                            title="Find small/low-resolution covers and replace them with Apple Books hi-res">
+                        <i class="fas fa-image me-1"></i>Upgrade low-res covers</button>
+                    <span class="small text-muted" id="mbf-status"></span>
                 </div>
             </div>
         </div>
@@ -665,6 +689,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadChartPreferences();
     loadLeftHandedMode();
     loadBackfillStatus();
+    loadGenres();
 
     // Show/hide auto WPD section when radio changes
     document.querySelectorAll('input[name="wpdMode"]').forEach(r => {
@@ -674,6 +699,61 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+// Genre management (#167).
+function _gmEsc(s){ return (s||'').replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function _gmEnc(s){ return encodeURIComponent(s).replace(/'/g,'%27'); }
+async function loadGenres() {
+    let genres = [];
+    try { const r = await GreatReads.apiCall('/books/genres-list'); genres = r.genres || []; } catch (e) {}
+    const total = document.getElementById('gm-total'); if (total) total.textContent = `${genres.length} genres`;
+    const opts = genres.map(g => `<option value="${_gmEsc(g.name)}">${_gmEsc(g.name)} (${g.count})</option>`).join('');
+    ['gm-from','gm-into'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = opts; });
+    const list = document.getElementById('gm-list');
+    if (list) list.innerHTML = genres.length ? genres.map(g => `
+        <div class="d-flex align-items-center justify-content-between border-bottom py-1">
+            <span>${_gmEsc(g.name)} <span class="text-muted small">(${g.count})</span></span>
+            <span class="text-nowrap">
+                <button class="btn btn-sm btn-link p-0 me-2" onclick="renameGenre('${_gmEnc(g.name)}')">Rename</button>
+                <button class="btn btn-sm btn-link text-danger p-0" onclick="deleteGenre('${_gmEnc(g.name)}')">Delete</button>
+            </span></div>`).join('') : '<div class="text-muted small">No genres yet.</div>';
+}
+async function mergeGenres() {
+    const from = document.getElementById('gm-from').value, into = document.getElementById('gm-into').value;
+    if (!from || !into || from.toLowerCase() === into.toLowerCase()) { GreatReads.showToast('Pick two different genres.', 'warning'); return; }
+    if (!confirm(`Merge “${from}” into “${into}”? This moves all its books and removes “${from}”.`)) return;
+    try {
+        const r = await GreatReads.apiCall('/books/genres/merge', { method: 'POST', data: { from_name: from, into_name: into } });
+        GreatReads.showToast(`Merged ${r.merged} book${r.merged === 1 ? '' : 's'} into “${r.into}”.`, 'success'); loadGenres();
+    } catch (e) {}
+}
+async function renameGenre(nameEnc) {
+    const name = decodeURIComponent(nameEnc);
+    const nn = prompt(`Rename genre “${name}” to:`, name);
+    if (!nn || nn.trim() === name) return;
+    try { await GreatReads.apiCall('/books/genres/rename', { method: 'POST', data: { name, new_name: nn.trim() } });
+        GreatReads.showToast('Renamed.', 'success'); loadGenres(); } catch (e) {}
+}
+async function deleteGenre(nameEnc) {
+    const name = decodeURIComponent(nameEnc);
+    if (!confirm(`Delete genre “${name}” from all books?`)) return;
+    try { const r = await GreatReads.apiCall('/books/genres/delete', { method: 'POST', data: { name } });
+        GreatReads.showToast(`Deleted “${r.deleted}” (${r.books_affected} book${r.books_affected === 1 ? '' : 's'}).`, 'success'); loadGenres(); } catch (e) {}
+}
+
+// Low-res cover upgrade (#165).
+async function upgradeCovers() {
+    const btn = document.getElementById('cov-run'), st = document.getElementById('mbf-status');
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = 'Scanning covers…';
+    try {
+        const r = await GreatReads.apiCall('/books/upgrade-covers', { method: 'POST' });
+        if (st) st.textContent = r.upgraded
+            ? `Upgraded ${r.upgraded} cover${r.upgraded === 1 ? '' : 's'} (of ${r.processed_lowres} low-res checked).`
+            : `No upgrades found (${r.processed_lowres} low-res checked).`;
+    } catch (e) { if (st) st.textContent = 'Cover upgrade failed.'; }
+    if (btn) btn.disabled = false;
+}
 
 // Metadata backfill status + on-demand run (#166).
 async function loadBackfillStatus() {
