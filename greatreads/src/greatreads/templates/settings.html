@@ -349,6 +349,31 @@
             </div>
         </div>
 
+        <!-- Metadata Backfill sweep (#166) -->
+        <div class="card mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0"><i class="fas fa-wand-magic-sparkles me-2"></i>Metadata Backfill</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-2">A background sweep fills in <strong>missing</strong> book
+                    metadata — synopsis, genres, public rating, publish date, page count — from Apple Books,
+                    Google Books and OpenLibrary. It only fills EMPTY fields (never overwrites Calibre or your
+                    edits) and spends a bounded slice of the daily Google quota.</p>
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Books still missing fields</span>
+                    <span class="font-monospace" id="mbf-candidates">…</span></div>
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Cadence</span>
+                    <span class="font-monospace" id="mbf-cadence">…</span></div>
+                <div class="d-flex justify-content-between py-1">
+                    <span class="text-muted">Google Books key</span>
+                    <span class="font-monospace" id="mbf-key">…</span></div>
+                <button class="btn btn-sm btn-outline-primary mt-3" id="mbf-run" onclick="runBackfill()">
+                    <i class="fas fa-play me-1"></i>Run a batch now</button>
+                <span class="small text-muted ms-2" id="mbf-status"></span>
+            </div>
+        </div>
+
         <!-- About Card (folded in from the former standalone Ereader About page) -->
         <div class="card mb-4">
             <div class="card-header d-flex align-items-center justify-content-between">
@@ -630,6 +655,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadReadingSpeeds();
     loadChartPreferences();
     loadLeftHandedMode();
+    loadBackfillStatus();
 
     // Show/hide auto WPD section when radio changes
     document.querySelectorAll('input[name="wpdMode"]').forEach(r => {
@@ -639,6 +665,29 @@ document.addEventListener('DOMContentLoaded', function() {
         });
     });
 });
+
+// Metadata backfill status + on-demand run (#166).
+async function loadBackfillStatus() {
+    try {
+        const s = await GreatReads.apiCall('/books/backfill-status');
+        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        set('mbf-candidates', s.candidates);
+        set('mbf-cadence', `${s.batch_size} book${s.batch_size === 1 ? '' : 's'} every ${s.interval_min} min`);
+        set('mbf-key', s.google_key ? 'configured' : 'missing (Google source disabled)');
+    } catch (e) { /* leave placeholders */ }
+}
+async function runBackfill() {
+    const btn = document.getElementById('mbf-run'), st = document.getElementById('mbf-status');
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = 'Running…';
+    try {
+        const r = await GreatReads.apiCall('/books/backfill-run', { method: 'POST' });
+        const u = r.updated || 0, f = r.fields_filled || 0;
+        if (st) st.textContent = u ? `Filled ${f} field${f === 1 ? '' : 's'} across ${u} book${u === 1 ? '' : 's'}.` : 'Nothing new found this batch.';
+        loadBackfillStatus();
+    } catch (e) { if (st) st.textContent = 'Run failed.'; }
+    if (btn) btn.disabled = false;
+}
 
 async function loadWpdMode() {
     try {

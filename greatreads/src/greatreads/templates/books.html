@@ -477,25 +477,21 @@ window.bkeHooks = {
         renderKeepScroll();
     },
     afterCreate(id, data, book) {
-        // Came from "Save locally" on a detected release (#68): drop that release from
-        // the feed now it's in the library, and clear the unread badge for it.
+        if (book && book.is_owned) GreatReads.showToast('Added to your Library', 'success');
+        // Came from "Add to Wishlist" on a detected release: drop that release from the
+        // current feed (it's been added) and STAY on this shelf so the user keeps
+        // browsing New/Upcoming — don't bounce them to the Wishlist tab.
         if (_saveLocallyNewsId != null) {
             const nid = _saveLocallyNewsId; _saveLocallyNewsId = null;
             GreatReads.apiCall(`/news/${nid}/dismiss`, { method: 'POST' }).catch(() => {});
             cards = cards.filter(c => c.news_id !== nid);
+            shelfTotal = Math.max(0, shelfTotal - 1);
             if (typeof loadNewsBadge === 'function') loadNewsBadge();
+            renderKeepScroll();   // stay put, preserve scroll
+            return;
         }
-        // Owned books live on the Library page now (#152) — if the user ticked a
-        // Formats-owned box, it's a Library book, so just refresh here; otherwise it's
-        // a Wishlist add, so land on the Wishlist so they see it.
-        if (book && book.is_owned) {
-            GreatReads.showToast('Added to your Library', 'success');
-            loadShelf(true);
-        } else if (shelfStatus !== 'unowned') {
-            setStatus('unowned');
-        } else {
-            loadShelf(true);
-        }
+        // Non-release create: refresh the current shelf in place.
+        loadShelf(true);
     },
     afterDelete(id) {
         cards = cards.filter(c => !(c.kind === 'local' && c.book_id === id));
@@ -1011,6 +1007,11 @@ async function libbyLoadSeries(c) {
     if (rows.length <= 1) { box.innerHTML = ''; return; }
     rows.sort((a, b) => (parseFloat(a.seriesIndex) || 999) - (parseFloat(b.seriesIndex) || 999));
     libbySeriesRows = rows;
+    // Tag each series entry with real GreatReads ownership so owned ones show
+    // "In library" instead of an availability/wait badge (#164).
+    rows.forEach(r => { r.kind = 'libby'; });
+    try { await annotateLibbyOwnership(rows); } catch (e) { /* best-effort */ }
+    if (libbyActive !== c) return;
     const mini = rows.map((r, i) => libbySeriesMini(r, i)).join('');
     box.innerHTML = `<hr class="my-2"><div class="text-muted small mb-2"><i class="fas fa-layer-group me-1"></i>In this series (${rows.length}) — full series on Libby</div><div class="row g-2">${mini}</div>`;
 }
@@ -1019,7 +1020,8 @@ function libbySeriesMini(r, i) {
     const cover = r.cover
         ? `<img src="${r.cover}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;"><i class="fas fa-book text-muted"></i></div>`
         : '<div style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;"><i class="fas fa-book text-muted"></i></div>';
-    const avail = r.isAvailable ? '<span class="badge bg-success" style="font-size:.6rem;">Available</span>'
+    const avail = libbyIsOwned(r) ? '<span class="badge bg-primary" style="font-size:.6rem;">In library</span>'
+        : r.isAvailable ? '<span class="badge bg-success" style="font-size:.6rem;">Available</span>'
         : r.onHold ? '<span class="badge bg-info text-dark" style="font-size:.6rem;">On hold</span>'
         : `<span class="badge bg-warning text-dark" style="font-size:.6rem;">${esc(libbyWaitText(r.estimatedWaitDays))}</span>`;
     const idx = (r.seriesIndex !== '' && r.seriesIndex != null) ? `#${esc(String(r.seriesIndex))} ` : '';
