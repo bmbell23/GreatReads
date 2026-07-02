@@ -15,12 +15,14 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Any, Optional
 
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from ..config import settings
 from ..models.book import Book
 from ..models.inventory import Inventory
 from ..models.external_import import ExternalImport
+from ..models.tag import Tag
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +134,57 @@ def _get_calibre_word_count(conn: sqlite3.Connection, book_id: int) -> Optional[
     except Exception as exc:
         logger.warning("Could not read Calibre word_count for book %s: %s", book_id, exc)
         return None
+
+
+def _get_calibre_tags(conn: sqlite3.Connection, book_id: int) -> list[str]:
+    """Genre-ish tags for a Calibre book. Skips Calibre's structured metadata tags
+    (containing ':' or '=', e.g. 'series:…', 'genre:fantasy', 'nyt:…=…') so only
+    human genre labels come through."""
+    try:
+        rows = conn.execute(
+            "SELECT t.name FROM tags t JOIN books_tags_link l ON l.tag = t.id WHERE l.book = ?",
+            (book_id,),
+        ).fetchall()
+    except Exception as exc:
+        logger.warning("Could not read Calibre tags for book %s: %s", book_id, exc)
+        return []
+    out = []
+    for (name,) in rows:
+        n = (name or "").strip()
+        if n and ":" not in n and "=" not in n:
+            out.append(n)
+    return out
+
+
+def _calibre_public_rating(raw) -> Optional[float]:
+    """Calibre stores ratings 0–10 (2 per star); convert to a 0–5 public rating."""
+    try:
+        val = float(raw) / 2.0
+        return val if 0 < val <= 5 else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _apply_tags(db: Session, book: Book, names: list[str]) -> int:
+    """Union genre tag names onto a book (case-insensitive), reusing/creating Tag rows.
+    Never removes existing (possibly user-added) tags. Returns how many were added."""
+    if not names:
+        return 0
+    existing = {(t.name or "").lower() for t in book.tags}
+    added = 0
+    for name in names:
+        n = (name or "").strip()
+        if not n or n.lower() in existing:
+            continue
+        tag = db.query(Tag).filter(func.lower(Tag.name) == n.lower()).first()
+        if tag is None:
+            tag = Tag(name=n)
+            db.add(tag)
+            db.flush()
+        book.tags.append(tag)
+        existing.add(n.lower())
+        added += 1
+    return added
 
 
 def _get_calibre_word_count_map(conn: sqlite3.Connection) -> dict[int, int]:
@@ -465,8 +518,16 @@ def refresh_calibre_metadata(db: Session) -> dict[str, Any]:
             uni = _get_calibre_universe(conn, cal_id)
             if uni:
                 fills["universe"] = uni
+        if not book.description and row[9]:
+            fills["description"] = row[9]
+        if book.public_rating is None:
+            pr = _calibre_public_rating(row[8])
+            if pr is not None:
+                fills["public_rating"] = pr
 
-        if fills:
+        tags_added = _apply_tags(db, book, _get_calibre_tags(conn, cal_id))
+
+        if fills or tags_added:
             for k, v in fills.items():
                 setattr(book, k, v)
             updated += 1
@@ -507,7 +568,11 @@ def import_calibre_book(
     # Read custom fields before closing connection
     universe = _get_calibre_universe(conn, int(cal_id))
     word_count = _get_calibre_word_count(conn, int(cal_id))
+    cal_tags = _get_calibre_tags(conn, int(cal_id))
     conn.close()
+
+    cal_description = row[9] or None                 # comments.text = synopsis
+    cal_public_rating = _calibre_public_rating(row[8])   # 0–10 → 0–5
 
     first, last = _split_author(row[7] or "")
     isbn_raw = row[10] or ""
@@ -539,6 +604,8 @@ def import_calibre_book(
             "series": cal_series,
             "series_number": cal_series_num,
             "word_count": word_count,
+            "description": cal_description,
+            "public_rating": cal_public_rating,
             "cover": False,
         }
         if override:
@@ -550,6 +617,7 @@ def import_calibre_book(
         book = Book(**fields)
         db.add(book)
         db.flush()  # get book.id
+        _apply_tags(db, book, cal_tags)
 
         # Copy cover
         if row[3] and row[4]:
@@ -585,6 +653,12 @@ def import_calibre_book(
         # Merge word count: fill in if missing
         if word_count and not book.word_count:
             book.word_count = word_count
+        # Merge synopsis / public rating: fill only when blank (don't clobber edits)
+        if cal_description and not book.description:
+            book.description = cal_description
+        if cal_public_rating is not None and book.public_rating is None:
+            book.public_rating = cal_public_rating
+        _apply_tags(db, book, cal_tags)   # union genre tags (keeps user tags)
         # Apply explicit user-selected field overrides (take precedence over auto-merge)
         if override:
             for field in ('series', 'series_number', 'universe'):

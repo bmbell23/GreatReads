@@ -240,6 +240,19 @@ function grCoverOnload(img) {
 }
 function grCoverError(img) { grCoverFallback(img); }
 
+// Calibre synopses are HTML (comments.text). Strip to plain text but keep paragraph
+// breaks, and decode entities safely (textarea never executes markup).
+function grSynopsisText(html) {
+    if (!html) return '';
+    let t = String(html)
+        .replace(/<\s*br\s*\/?>/gi, '\n')
+        .replace(/<\/\s*(p|div|li)\s*>/gi, '\n')
+        .replace(/<[^>]+>/g, '');
+    const ta = document.createElement('textarea');
+    ta.innerHTML = t;
+    return ta.value.replace(/\n{3,}/g, '\n\n').trim();
+}
+
 // Reading management functions
 async function updateReading(readingId, data) {
     return await apiCall(`/readings/${readingId}`, {
@@ -969,6 +982,9 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     if (book.word_count) lenParts.push(`${Number(book.word_count).toLocaleString()} words`);
     if (book.page_count) lenParts.push(`${Number(book.page_count).toLocaleString()} pages`);
     if (lenParts.length) rows.push(['Length', lenParts.join(' • ')]);
+    // Public/community rating — SEPARATE from the user's own rating (which is the
+    // View Ratings button). Only shown when we have one.
+    if (book.public_rating != null) rows.push(['Public rating', `★ ${Number(book.public_rating).toFixed(1)} / 5`]);
     if (Array.isArray(opts.detailRows)) rows.push(...opts.detailRows.filter(Boolean));
 
     // Logging progress / a physical session belongs to the READING, not inventory:
@@ -1175,8 +1191,19 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
             <div class="open-secondary">${secondaryInner}</div>
         </div>` : '';
 
+    // Genre tags (chips) + synopsis — shown below the actions (the "rich" details
+    // the user asked to match: #149).
+    const tagChips = (Array.isArray(book.tags) && book.tags.length)
+        ? `<div class="col-12"><div class="d-flex flex-wrap gap-1 mb-1">${
+              book.tags.slice(0, 24).map(t => `<span class="badge bg-light text-dark border">${grEsc(t)}</span>`).join('')
+           }</div></div>` : '';
+    const synText = grSynopsisText(book.description);
+    const synBlock = synText
+        ? `<div class="col-12 mt-1"><div class="text-muted small fw-semibold mb-1">Synopsis</div>
+             <div class="small" style="white-space:pre-line;max-height:16em;overflow:auto;">${grEsc(synText)}</div></div>` : '';
+
     document.getElementById('openBookOptions').innerHTML =
-        row1 + formatRow + extraInfo + secondary;
+        row1 + formatRow + extraInfo + secondary + tagChips + synBlock;
     bootstrap.Modal.getOrCreateInstance(document.getElementById('openBookModal')).show();
 
     // #120: enrich with the "In this series" strip + "You've read # by <author>" section

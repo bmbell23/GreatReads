@@ -29,6 +29,9 @@ class Book(Base):
     genre = Column(VARCHAR)
     cover = Column(Boolean, nullable=False, default=False)
     isbn_id = Column(Integer)
+    description = Column(String)                 # synopsis (from Calibre comments / enrichment)
+    public_rating = Column(Float)                # community/public rating 0–5, SEPARATE from the
+                                                 # user's own ratings (which live on Reading)
 
     # Relationships
     readings = relationship("Reading", back_populates="book", cascade="all, delete-orphan")
@@ -84,6 +87,8 @@ class Book(Base):
             "isbn_id": self.isbn_id,
             "words_per_page": self.words_per_page,
             "tags": [tag.name for tag in self.tags] if self.tags else [],
+            "description": self.description,
+            "public_rating": self.public_rating,
         }
 
 
