@@ -469,3 +469,103 @@ async def libby_ownership(
             "calibre_id": m["calibre_id"] if m else None,
         })
     return {"results": results}
+
+
+# ── Wishlist integration (#170) — add Libby titles/holds to the Wishlist ──────────
+def _build_all_index(db: Session) -> list[dict]:
+    """title/author tokens for EVERY book (owned or Wishlist), so we find-or-create
+    without spawning duplicates."""
+    return [{"book_id": b.id, "tt": _tokens(b.title), "at": _tokens(b.author or "")}
+            for b in db.query(Book).filter(Book.title.isnot(None)).all()]
+
+
+def _ensure_wishlist_book(db: Session, title: str, author: str, series, series_number, index):
+    """Find a matching DB book or create an unowned Wishlist record. (book, created)."""
+    m = _match_owned(title or "", author or "", index) if index else None
+    if m:
+        return db.query(Book).filter(Book.id == m["book_id"]).first(), False
+    from ..services.import_service import _split_author
+    first, second = _split_author(author or "")
+    try:
+        sn = float(series_number) if series_number not in (None, "") else None
+    except (ValueError, TypeError):
+        sn = None
+    b = Book(title=(title or "").strip(), author_name_first=first or None,
+             author_name_second=second or None, series=(series or None),
+             series_number=sn, cover=False)
+    db.add(b)
+    db.commit()
+    db.refresh(b)
+    return b, True
+
+
+async def _save_cover(book_id: int, url: str) -> bool:
+    if not url:
+        return False
+    from ..config import settings
+    covers_dir = settings.covers_dir
+    covers_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        async with httpx.AsyncClient(timeout=20.0, follow_redirects=True,
+                                     headers={"User-Agent": "Mozilla/5.0 GreatReads/cover-fetch"}) as c:
+            r = await c.get(url)
+        if r.status_code == 200 and r.headers.get("content-type", "").lower().startswith("image/"):
+            (covers_dir / f"{book_id}.jpg").write_bytes(r.content)
+            return True
+    except Exception:
+        pass
+    return False
+
+
+class WishlistAddRequest(BaseModel):
+    title: str
+    author: str = ""
+    series: str | None = None
+    series_number: float | None = None
+    cover_url: str | None = None
+
+
+@router.post("/wishlist-add")
+async def libby_wishlist_add(
+    payload: WishlistAddRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Find-or-create an unowned Wishlist record for a Libby title (#170)."""
+    if not (payload.title or "").strip():
+        raise HTTPException(status_code=400, detail="Title required")
+    index = _build_all_index(db)
+    book, created = _ensure_wishlist_book(db, payload.title, payload.author,
+                                          payload.series, payload.series_number, index)
+    if created and payload.cover_url and await _save_cover(book.id, payload.cover_url):
+        book.cover = True
+        db.commit()
+    return {"book_id": book.id, "created": created, "title": book.title}
+
+
+@router.post("/holds-to-wishlist")
+async def libby_holds_to_wishlist(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Ensure every current Libby hold has a Wishlist record (#170 backfill)."""
+    try:
+        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+            resp = await client.get(f"{LIBBY_ENGINE_URL}/api/holds")
+        holds = (resp.json() or {}).get("holds", []) if resp.status_code == 200 else []
+    except Exception:
+        raise HTTPException(status_code=502, detail="Libby engine unreachable")
+    index = _build_all_index(db)
+    added = existing = 0
+    for h in holds:
+        book, created = _ensure_wishlist_book(db, h.get("title", ""), h.get("author", ""),
+                                              h.get("series"), h.get("seriesIndex"), index)
+        if created:
+            added += 1
+            if h.get("cover") and await _save_cover(book.id, h["cover"]):
+                book.cover = True
+                db.commit()
+            index.append({"book_id": book.id, "tt": _tokens(book.title), "at": _tokens(book.author or "")})
+        else:
+            existing += 1
+    return {"added": added, "existing": existing, "total": len(holds)}

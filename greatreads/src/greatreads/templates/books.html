@@ -902,7 +902,19 @@ async function loadLibbyLoansHolds(kind) {
         grid.innerHTML = `<div class="col-12 text-muted text-center py-5"><i class="fas ${kind === 'holds' ? 'fa-clock' : 'fa-book-open-reader'} fa-2x mb-2 d-block"></i>No ${kind} right now.</div>`;
         return;
     }
-    grid.innerHTML = items.map(it => libbyLoanHoldCard(it, kind)).join('');
+    const header = kind === 'holds'
+        ? `<div class="col-12 mb-2"><button class="btn btn-sm btn-outline-primary" onclick="grHoldsToWishlist(this)"
+               title="Make sure every title you have on hold is also on your Wishlist"><i class="fas fa-bookmark me-1"></i>Add all holds to Wishlist</button></div>`
+        : '';
+    grid.innerHTML = header + items.map(it => libbyLoanHoldCard(it, kind)).join('');
+}
+async function grHoldsToWishlist(btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding…'; }
+    try {
+        const r = await GreatReads.apiCall('/libby/holds-to-wishlist', { method: 'POST' });
+        showToast(`Added ${r.added} new to Wishlist${r.existing ? ` (${r.existing} already there)` : ''}.`, 'success');
+    } catch (e) { showToast('Couldn’t sync holds to Wishlist.', 'danger'); }
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-bookmark me-1"></i>Add all holds to Wishlist'; }
 }
 function libbyLoanHoldCard(it, kind) {
     const cover = it.cover
@@ -1017,7 +1029,11 @@ function openLibbyDetails(c) {
     // opts.actionsHtml renders. So the whole Libby panel goes through actionsHtml.
     const owned = libbyIsOwned(c)
         ? '<div class="alert alert-success py-1 px-2 small mb-2 w-100"><i class="fas fa-check-circle me-1"></i>Already in your GreatReads library.</div>' : '';
-    const actionsHtml = `${owned}<div id="libbyRich" class="mb-2 w-100"></div>${libbyLibraryChooser(c)}<div id="libbyAction" class="mt-1 mb-2 w-100"></div><div id="libbySeries" class="w-100"></div>`;
+    // Add-to-Wishlist for titles you don't already have (#170) — handy when a title is
+    // only holdable, or you just want to track it.
+    const wishBtn = libbyIsOwned(c) ? ''
+        : `<button class="btn btn-sm btn-outline-primary w-100 mb-2" id="libbyWishBtn" onclick="grLibbyAddWishlist(libbyActive)"><i class="fas fa-bookmark me-2"></i>Add to Wishlist</button>`;
+    const actionsHtml = `${owned}${wishBtn}<div id="libbyRich" class="mb-2 w-100"></div>${libbyLibraryChooser(c)}<div id="libbyAction" class="mt-1 mb-2 w-100"></div><div id="libbySeries" class="w-100"></div>`;
 
     GreatReads.openBookActions(book, {
         title: c.title, actionsHtml,
@@ -1163,10 +1179,28 @@ async function libbyPlaceHold() {
         await GreatReads.apiCall('/libby/holds/place', { method: 'POST', data: { title_id: c.title_id, card_id: cardId }, silent: true });
         showToast('Hold placed.', 'success');
         if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>On hold';
+        grLibbyAddWishlist(c, true);   // #170: anything on hold is also on the Wishlist
     } catch (e) {
         showToast(libbyErrMsg(e, 'hold'), 'danger');
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-clock me-2"></i>Place hold'; }
     }
+}
+
+// Add-to-Wishlist for a Libby card (#170): find-or-create an unowned DB record.
+async function grLibbyAddWishlist(c, silent) {
+    if (!c || !c.title) return;
+    const btn = document.getElementById('libbyWishBtn');
+    if (btn && !silent) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Adding…'; }
+    let r;
+    try {
+        r = await GreatReads.apiCall('/libby/wishlist-add', { method: 'POST', silent: true, data: {
+            title: c.title, author: c.author || '', series: c.series || '',
+            series_number: c.series_number, cover_url: c.cover_url || (c._row && c._row.cover) || '',
+        } });
+    } catch (e) { if (!silent) { showToast('Couldn’t add to Wishlist.', 'danger'); if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-bookmark me-2"></i>Add to Wishlist'; } } return; }
+    if (!silent) showToast(r.created ? `Added “${c.title}” to your Wishlist.` : `“${c.title}” is already in your library.`, r.created ? 'success' : 'info');
+    if (btn) { btn.disabled = true; btn.innerHTML = `<i class="fas fa-check me-2"></i>${r.created ? 'On your Wishlist' : 'Already in library'}`; }
+    return r;
 }
 
 // ── Bulk select / edit (#93) ─────────────────────────────────────────────
