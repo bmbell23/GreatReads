@@ -962,7 +962,11 @@ let libbyActive = null;
 
 // True when GreatReads already owns this title (server-annotated grOwned wins;
 // falls back to the engine's Calibre fuzzy match).
-const libbyIsOwned = c => (c.grOwned != null ? !!c.grOwned : !!c.inLibrary);
+// "In your GreatReads library" = ONLY the real title+author match (grOwned, set by
+// annotateLibbyOwnership). Do NOT fall back to Libby's own `inLibrary` flag — that means
+// "in the OverDrive collection", not that YOU own it, and reading it before the async
+// match finished caused false "In library" that flickered off (same-author lookalikes).
+const libbyIsOwned = c => !!c.grOwned;
 
 function libbyWaitText(days) {
     if (days == null || days <= 0) return 'wait';
@@ -1017,8 +1021,12 @@ function libbyRenderAction() {
 // Open a Libby search result in the shared cover-tap popup with rich metadata,
 // Borrow/Hold actions, and the FULL series (incl. foreign titles) from OverDrive.
 // (book.series is blanked so the DB-only series strip doesn't duplicate ours.)
-function openLibbyDetails(c) {
+async function openLibbyDetails(c) {
     libbyActive = c;
+    // Resolve real GreatReads ownership BEFORE rendering so the "In library" state is
+    // correct on first paint (no flicker / false positive from a pending match).
+    if (c.grOwned == null) { try { await annotateLibbyOwnership([c]); } catch (e) { c.grOwned = false; } }
+    if (libbyActive !== c) return;   // superseded while awaiting
     const book = {
         id: null, title: c.title, author: c.author, series: '', universe: '',
         series_number: c.series_number, cover_url: c.cover_url || null,
