@@ -21,6 +21,7 @@
     // file/URL and upload it right after the create POST returns the new id.
     let bkeIsNew = false, bkePendingCoverFile = null, bkePendingCoverUrl = null;
     const bkeSug = { first: [], last: [], series: [], universe: [], genre: [], title: [] };
+    let bkeGenres = [];   // #156: the book's genres, edited as pills
 
     async function bkeLoadLists() {
         if (bkeListsLoaded) return;
@@ -29,11 +30,24 @@
             try { const r = await api(path); bkeSug[key] = Array.isArray(r) ? r : (r.items || []); }
             catch (e) {}
         };
+        const loadGenreVocab = async () => {
+            // Genres now live in the Tag store (#149/#158); merge Tag names with the
+            // legacy single-genre strings so the pill autocomplete offers everything the
+            // library already uses (deduped, case-insensitively).
+            let names = [];
+            try {
+                const [tags, genres] = await Promise.all([api('/books/search/tags'), api('/books/search/genres')]);
+                names = [].concat(Array.isArray(tags) ? tags : [], Array.isArray(genres) ? genres : []);
+            } catch (e) {}
+            const seen = new Set(); const out = [];
+            for (const n of names) { const low = String(n).toLowerCase(); if (n && !seen.has(low)) { seen.add(low); out.push(n); } }
+            bkeSug.genre = out.sort((a, b) => a.localeCompare(b));
+        };
         await Promise.all([
             load('/books/search/author-first-names', 'first'),
             load('/books/search/author-last-names', 'last'),
             load('/books/search/series', 'series'),
-            load('/books/search/genres', 'genre'),
+            loadGenreVocab(),
             load('/books/search/universes', 'universe'),
             load('/books/search/titles', 'title'),
         ]);
@@ -41,7 +55,7 @@
 
     // Custom autocomplete (#107): WebView-safe dropdown (native <datalist> fails
     // there). Fixed-positioned on <body> so a scrollable modal can't clip it.
-    function attachAutocomplete(inputId, key) {
+    function attachAutocomplete(inputId, key, onChoose) {
         const input = document.getElementById(inputId);
         if (!input || input.dataset.acWired) return;
         input.dataset.acWired = '1';
@@ -70,7 +84,9 @@
             menu.innerHTML = items.map((v, i) => `<div class="ac-item" data-i="${i}">${esc(String(v))}</div>`).join('');
             place(); menu.classList.remove('d-none');
         };
-        const choose = v => { input.value = v; hide(); };
+        // Pills mode (#156): onChoose consumes the value and the input clears for the
+        // next entry, instead of the input holding a single value.
+        const choose = v => { if (onChoose) { onChoose(v); input.value = ''; hide(); } else { input.value = v; hide(); } };
         input.addEventListener('focus', render);
         input.addEventListener('input', render);
         input.addEventListener('blur', () => setTimeout(hide, 150));
@@ -94,10 +110,53 @@
          ['bkeAuthorLast', 'last'], ['blkAuthorLast', 'last'],
          ['bkeSeries', 'series'], ['blkSeries', 'series'],
          ['bkeUniverse', 'universe'], ['blkUniverse', 'universe'],
-         ['bkeGenre', 'genre'], ['blkGenre', 'genre'],
+         ['blkGenre', 'genre'],
          ['bkeTitle', 'title'],
         ].forEach(([id, key]) => attachAutocomplete(id, key));
+        // Genres pill input (#156): selecting a suggestion adds a chip.
+        attachAutocomplete('bkeGenreInput', 'genre', bkeAddGenre);
     }
+
+    // ── Genre pills (#156) ───────────────────────────────────────────────────────
+    function bkeRenderGenres() {
+        const box = document.getElementById('bkeGenres');
+        const input = document.getElementById('bkeGenreInput');
+        if (!box || !input) return;
+        box.querySelectorAll('.bke-genre-chip').forEach(c => c.remove());
+        bkeGenres.forEach(name => {
+            const chip = document.createElement('span');
+            chip.className = 'bke-genre-chip';
+            chip.innerHTML = `<span></span><button type="button" title="Remove" aria-label="Remove">&times;</button>`;
+            chip.querySelector('span').textContent = name;
+            chip.querySelector('button').addEventListener('click', () => bkeRemoveGenre(name));
+            box.insertBefore(chip, input);
+        });
+    }
+    function bkeAddGenre(name) {
+        name = String(name || '').trim();
+        if (!name) return;
+        // Snap to an existing genre's canonical casing; else keep as typed (deduped).
+        const canon = (bkeSug.genre || []).find(g => g.toLowerCase() === name.toLowerCase());
+        const value = canon || name;
+        if (!bkeGenres.some(g => g.toLowerCase() === value.toLowerCase())) {
+            bkeGenres.push(value);
+            if (!bkeSug.genre.some(g => g.toLowerCase() === value.toLowerCase())) bkeSug.genre.push(value);
+            bkeRenderGenres();
+        }
+    }
+    function bkeRemoveGenre(name) {
+        bkeGenres = bkeGenres.filter(g => g.toLowerCase() !== String(name).toLowerCase());
+        bkeRenderGenres();
+    }
+    function bkeGenreKey(e) {
+        const input = e.target;
+        if (e.key === 'Enter' || e.key === ',') {
+            if (input.value.trim()) { bkeAddGenre(input.value); input.value = ''; e.preventDefault(); }
+        } else if (e.key === 'Backspace' && !input.value && bkeGenres.length) {
+            bkeRemoveGenre(bkeGenres[bkeGenres.length - 1]); e.preventDefault();
+        }
+    }
+    function bkeSetGenres(list) { bkeGenres = Array.isArray(list) ? list.filter(Boolean).slice() : []; bkeRenderGenres(); }
 
     // Reset the modal chrome to whichever mode we're opening in: create mode
     // ("Add book", no Delete/Save & Next) vs edit mode ("Edit book", Delete shown).
@@ -146,8 +205,9 @@
         bkeBook = null;
         bkeSetMode(true);
         ['bkeId', 'bkeTitle', 'bkeAuthorFirst', 'bkeAuthorLast', 'bkeSeries', 'bkeSeriesNum',
-         'bkeUniverse', 'bkeGenre', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl']
+         'bkeUniverse', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl', 'bkeDescription']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
+        bkeSetGenres([]);
         if (prefill) {
             const set = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
             set('bkeTitle', prefill.title);
@@ -155,7 +215,7 @@
             set('bkeAuthorLast', prefill.author_last);
             set('bkeSeries', prefill.series);
             set('bkeSeriesNum', prefill.series_number);
-            set('bkeGenre', prefill.genre);
+            if (prefill.genre) bkeAddGenre(prefill.genre);
             set('bkeDate', prefill.date_published);
             set('bkePages', prefill.page_count);
             set('bkeWords', prefill.word_count);
@@ -170,9 +230,11 @@
     async function bkeOpen(bookId) {
         bkeLoadLists();
         // close whichever popup launched us (Books details modal or the shared
-        // book-actions popup) so the editor isn't stacked on top of it
+        // book-actions popup) so the editor isn't stacked on top of it. Route the
+        // shared popup through grHidePopupForEdit so Cancel/Save returns to it (#157).
         bootstrap.Modal.getInstance(document.getElementById('bookDetailsModal'))?.hide();
-        bootstrap.Modal.getInstance(document.getElementById('openBookModal'))?.hide();
+        if (typeof grHidePopupForEdit === 'function') grHidePopupForEdit();
+        else bootstrap.Modal.getInstance(document.getElementById('openBookModal'))?.hide();
         let b;
         try { b = await api('/books/' + bookId); }
         catch (e) { toast('Could not load book', 'danger'); return; }
@@ -182,9 +244,12 @@
         set('bkeId', b.id); set('bkeTitle', b.title);
         set('bkeAuthorFirst', b.author_name_first); set('bkeAuthorLast', b.author_name_second);
         set('bkeSeries', b.series); set('bkeSeriesNum', b.series_number);
-        set('bkeUniverse', b.universe); set('bkeGenre', b.genre); set('bkeDate', b.date_published);
+        set('bkeUniverse', b.universe); set('bkeDate', b.date_published);
         set('bkePages', b.page_count); set('bkeWords', b.word_count); set('bkeIsbn', b.isbn_id);
         set('bkeCoverUrl', '');
+        set('bkeDescription', b.description);
+        // Genres from the tag store (#156); fall back to the legacy single genre.
+        bkeSetGenres((Array.isArray(b.tags) && b.tags.length) ? b.tags : (b.genre ? [b.genre] : []));
         bkeRenderCover();
         // Load the book's current format ownership into the picker (edit mode).
         try {
@@ -233,7 +298,11 @@
         const data = {
             title: document.getElementById('bkeTitle').value.trim(),
             author_name_first: v('bkeAuthorFirst'), author_name_second: v('bkeAuthorLast'),
-            series: v('bkeSeries'), universe: v('bkeUniverse'), genre: v('bkeGenre'),
+            series: v('bkeSeries'), universe: v('bkeUniverse'),
+            // Genres are pills now (#156): persist the set; keep the legacy single genre
+            // in sync as the primary (first) so existing genre filters keep working.
+            tags: bkeGenres.slice(), genre: bkeGenres[0] || null,
+            description: v('bkeDescription'),
             series_number: num('bkeSeriesNum', parseFloat),
             date_published: document.getElementById('bkeDate').value || null,
             page_count: num('bkePages', parseInt), word_count: num('bkeWords', parseInt),
@@ -321,19 +390,19 @@
         const carry = {
             first: g('bkeAuthorFirst').value, last: g('bkeAuthorLast').value,
             series: g('bkeSeries').value, universe: g('bkeUniverse').value,
-            genre: g('bkeGenre').value, snum: g('bkeSeriesNum').value,
+            genres: bkeGenres.slice(), snum: g('bkeSeriesNum').value,
         };
         if (await _bkeSaveCore() == null) return;   // validation/error → stay put
         // Reset to a fresh create, then repopulate the carry-overs + incremented series #.
         bkeBook = null;
         bkeSetMode(true);   // resets chrome, formats, cover buffers; keeps text inputs
-        ['bkeId', 'bkeTitle', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl']
+        ['bkeId', 'bkeTitle', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl', 'bkeDescription']
             .forEach(id => { const el = g(id); if (el) el.value = ''; });
         g('bkeAuthorFirst').value = carry.first;
         g('bkeAuthorLast').value = carry.last;
         g('bkeSeries').value = carry.series;
         g('bkeUniverse').value = carry.universe;
-        g('bkeGenre').value = carry.genre;
+        bkeSetGenres(carry.genres);   // carry genres over to the next entry (#156)
         const n = parseFloat(carry.snum);
         g('bkeSeriesNum').value = Number.isFinite(n) ? n + 1 : '';
         bkeRenderCover();
@@ -399,7 +468,7 @@
     // syncs the Edit Book inputs so a later "Save changes" stays consistent.
     const bkeMetaFieldToInput = {
         date_published: 'bkeDate', page_count: 'bkePages',
-        series_number: 'bkeSeriesNum', genre: 'bkeGenre',
+        series_number: 'bkeSeriesNum', description: 'bkeDescription',
     };
 
     async function bkeRequestMetadata() {
@@ -529,8 +598,7 @@
                 if (norm(names) !== norm(cur)) {
                     data.tags = names;                         // PUT replaces the Genres set
                     // Backfill the legacy single genre if the book has none yet (never clobber).
-                    const g = document.getElementById('bkeGenre');
-                    if (names.length && !((g && g.value.trim()) || (bkeBook && bkeBook.genre)))
+                    if (names.length && !(bkeGenres.length || (bkeBook && bkeBook.genre)))
                         data.genre = names[0];
                 }
                 return;
@@ -563,6 +631,7 @@
             if (el) el.value = (val == null ? '' : val);
             if (bkeBook) bkeBook[field] = val;
         });
+        if (data.tags) bkeSetGenres(data.tags);   // #156: reflect accepted genres in the pills
         bkeRenderCover();
         toast('Metadata applied', 'success');
         const after = hooks().afterSave;
@@ -575,6 +644,7 @@
         bkeOpen, bkeOpenNew, bkeSave, bkeSaveAndNext, bkeCreateAnother, bkeDelete,
         bkeUploadFile, bkeCoverFromUrl, bkeRemoveCover, bkeLoadLists, wireBookEdit: wireAutocomplete,
         bkeRequestMetadata, bkeApplyMetadata,
+        bkeGenreKey, bkeAddGenre, bkeRemoveGenre,
     });
 
     document.addEventListener('DOMContentLoaded', () => { wireAutocomplete(); bkeLoadLists(); });

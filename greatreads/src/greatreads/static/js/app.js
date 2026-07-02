@@ -486,6 +486,9 @@ function showEditModal(reading) {
     // Read picker for multi-read books (#127).
     grPopulateEditReadDropdown(reading);
 
+    // #157: if this was launched from the book popup, hide it and arm the return.
+    grHidePopupForEdit();
+
     // Show modal
     const bsModal = new bootstrap.Modal(modal);
     bsModal.show();
@@ -711,6 +714,43 @@ let grActivePhysicalReading = null;
 // The book behind the currently-open popup, so GreatReads.openSeries() can read its
 // series/universe without embedding strings in inline onclick handlers (#120).
 let grActiveBook = null;
+
+// #157: remember the popup we opened Edit Book / Edit Reading FROM, so cancelling
+// (or saving) the editor returns to that book-detail popup instead of dropping to
+// the underlying page. grLastPopup holds the args to re-open; grReturnToPopup is set
+// only when an editor is opened while the popup was actually visible.
+let grLastPopup = null;
+let grReturnToPopup = false;
+
+// Called by the editors (Edit Book: book_edit.js; Edit Reading: showEditModal) as they
+// open. Hides the popup and, if it was visible, arms the return so the editor's close
+// re-opens it. Safe no-op when no popup is open.
+function grHidePopupForEdit() {
+    const el = document.getElementById('openBookModal');
+    if (el && el.classList.contains('show')) grReturnToPopup = true;
+    bootstrap.Modal.getInstance(el)?.hide();
+}
+
+// Fired on the editors' hidden.bs.modal. Re-opens the source popup, refreshed from the
+// server (so edits show immediately), falling back to the cached book on any error.
+async function grReopenPopupAfterEdit() {
+    if (!grReturnToPopup || !grLastPopup) return;
+    grReturnToPopup = false;
+    const { opts, keepNav } = grLastPopup;
+    let book = grLastPopup.book;
+    if (book && book.id != null) {
+        try { const fresh = await apiCall(`/books/${book.id}/details`); if (fresh) book = fresh; }
+        catch (e) { /* keep cached book */ }
+    }
+    grOpenBookActions(book, opts, keepNav);
+}
+
+document.addEventListener('DOMContentLoaded', () => {
+    ['bkEditModal', 'editReadingModal'].forEach(id => {
+        const el = document.getElementById(id);
+        if (el) el.addEventListener('hidden.bs.modal', grReopenPopupAfterEdit);
+    });
+});
 
 // ── Shared series-strip + author-reads sections for the book popup (#120) ──────────
 function grEsc(s) {
@@ -982,9 +1022,25 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     if (book.word_count) lenParts.push(`${Number(book.word_count).toLocaleString()} words`);
     if (book.page_count) lenParts.push(`${Number(book.page_count).toLocaleString()} pages`);
     if (lenParts.length) rows.push(['Length', lenParts.join(' • ')]);
-    // Public/community rating — SEPARATE from the user's own rating (which is the
-    // View Ratings button). Only shown when we have one.
-    if (book.public_rating != null) rows.push(['Public rating', `★ ${Number(book.public_rating).toFixed(1)} / 5`]);
+    // Ratings (#150): your private rating (mean of each rated read's overall — the
+    // average of the 5 core sub-ratings, EXCLUDING spice/horror — averaged across the
+    // book's rated reads) shown beside the public/community rating. Editing still lives
+    // behind the View Ratings button below. Only shown when we have at least one.
+    {
+        const coreKeys = ['rating_enjoyment', 'rating_writing', 'rating_characters',
+            'rating_world_building', 'rating_readability'];
+        const rOverall = x => {
+            if (x && x.rating_overall != null) return x.rating_overall;
+            const vals = coreKeys.map(k => x && x[k]).filter(v => v != null && v > 0);
+            return vals.length ? vals.reduce((a, b) => a + b, 0) / vals.length : null;
+        };
+        const privVals = (Array.isArray(book.readings) ? book.readings : []).map(rOverall).filter(v => v != null);
+        const priv = privVals.length ? privVals.reduce((a, b) => a + b, 0) / privVals.length : null;
+        const parts = [];
+        if (priv != null) parts.push(`You ${priv.toFixed(1)}`);
+        if (book.public_rating != null) parts.push(`Public ${Number(book.public_rating).toFixed(1)}`);
+        if (parts.length) rows.push(['Ratings', `★ ${parts.join(' · ')}`]);
+    }
     if (Array.isArray(opts.detailRows)) rows.push(...opts.detailRows.filter(Boolean));
 
     // Logging progress / a physical session belongs to the READING, not inventory:
@@ -1204,6 +1260,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
 
     document.getElementById('openBookOptions').innerHTML =
         row1 + formatRow + extraInfo + secondary + tagChips + synBlock;
+    grLastPopup = { book, opts, keepNav };   // #157: so editors can return here
     bootstrap.Modal.getOrCreateInstance(document.getElementById('openBookModal')).show();
 
     // #120: enrich with the "In this series" strip + "You've read # by <author>" section
