@@ -1,5 +1,5 @@
 {% extends "base.html" %}
-{% block title %}GreatReads - Books{% endblock %}
+{% block title %}GreatReads - Store{% endblock %}
 
 {% block content %}
 <style>
@@ -64,8 +64,8 @@
 <!-- Header -->
 <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
     <div class="page-header-bookish mb-0">
-        <div class="page-header-icon"><i class="fas fa-book-bookmark"></i></div>
-        <div class="page-header-content"><h1 class="page-header-title mb-0">Books</h1></div>
+        <div class="page-header-icon"><i class="fas fa-store"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Store</h1></div>
     </div>
     <div class="d-flex gap-2">
         <button class="btn btn-success" id="addBookBtn" type="button" onclick="bkeOpenNew()">
@@ -124,9 +124,9 @@
 
 <!-- Status (exclusive). Graphic-novel/reprint show-toggles moved into the Sort dropdown (#151). -->
 <div class="d-flex justify-content-center align-items-center flex-wrap gap-4 mb-3">
+    <!-- Owned dropped (lives on Library); Unowned → Wishlist. Store = Wishlist + Upcoming + New + Libby (#152). -->
     <div class="stat-chips d-flex">
-        <div class="stat-chip active" id="stOwned"    style="color:#198754;" onclick="setStatus('owned')"><i class="fas fa-circle-check"></i><span>Owned</span></div>
-        <div class="stat-chip"        id="stUnowned"  style="color:#0d6efd;" onclick="setStatus('unowned')"><i class="fas fa-bookmark"></i><span>Unowned</span></div>
+        <div class="stat-chip active" id="stUnowned"  style="color:#0d6efd;" onclick="setStatus('unowned')"><i class="fas fa-bookmark"></i><span>Wishlist</span></div>
         <div class="stat-chip"        id="stUpcoming" style="color:#e0a800;" onclick="setStatus('upcoming')"><i class="fas fa-calendar-day"></i><span>Upcoming</span></div>
         <div class="stat-chip"        id="stNew"      style="color:#6f42c1;" onclick="setStatus('new')"><i class="fas fa-star"></i><span>New</span></div>
         <div class="stat-chip"        id="stLibby"    style="color:#d63384;" title="Search library ebooks on Libby/OverDrive and borrow into GreatReads" onclick="setStatus('libby')"><i class="fas fa-building-columns"></i><span>Libby</span></div>
@@ -149,11 +149,11 @@
         </div>
         <h6 class="mb-1"><i class="fas fa-circle-info me-1 text-primary"></i>About</h6>
         <p class="text-muted small mb-3">
-            Your whole book lifecycle on one page: <span style="color:#198754;">Owned</span> /
-            <span style="color:#0d6efd;">Unowned</span> books in your library, plus
-            <span style="color:#e0a800;">Upcoming</span> / <span style="color:#6f42c1;">New</span>
-            releases from authors you follow (Google Books + OpenLibrary). Word counts are estimates —
-            Calibre provides real counts once a book is owned.
+            Discover and acquire in one place: your <span style="color:#0d6efd;">Wishlist</span>
+            (books you want but don't own yet), plus <span style="color:#e0a800;">Upcoming</span> /
+            <span style="color:#6f42c1;">New</span> releases from authors you follow
+            (Google Books + OpenLibrary), and Libby library search. Owned books live on the Library page.
+            Word counts are estimates — Calibre provides real counts once a book is owned.
         </p>
         <h6 class="mb-1"><i class="fas fa-broom me-1 text-primary"></i>Maintenance</h6>
         <p class="text-muted small mb-2">
@@ -363,7 +363,7 @@
 </div>
 
 <script>
-let shelfStatus = 'owned';
+let shelfStatus = 'unowned';   // Store lands on the Wishlist (#152); Owned moved to Library
 let showComics = false, showReprints = false;
 let cardReg = {};   // cardKey → card, persists across shelves so siblings stay openable
 let cards = [], shelfTotal = 0, shelfSkip = 0, shelfLoading = false, _searchTimer = null, shelfGen = 0;
@@ -465,11 +465,17 @@ window.bkeHooks = {
             cards = cards.filter(c => c.news_id !== nid);
             if (typeof loadNewsBadge === 'function') loadNewsBadge();
         }
-        // A new book lands on Owned or Unowned depending on whether the user
-        // ticked any Formats-owned box (#117). Switch to that tab so they see it.
-        const tab = (book && book.is_owned) ? 'owned' : 'unowned';
-        if (shelfStatus !== tab) setStatus(tab);
-        else loadShelf(true);
+        // Owned books live on the Library page now (#152) — if the user ticked a
+        // Formats-owned box, it's a Library book, so just refresh here; otherwise it's
+        // a Wishlist add, so land on the Wishlist so they see it.
+        if (book && book.is_owned) {
+            GreatReads.showToast('Added to your Library', 'success');
+            loadShelf(true);
+        } else if (shelfStatus !== 'unowned') {
+            setStatus('unowned');
+        } else {
+            loadShelf(true);
+        }
     },
     afterDelete(id) {
         cards = cards.filter(c => !(c.kind === 'local' && c.book_id === id));
@@ -491,7 +497,7 @@ function setStatus(s) {
     if (s === shelfStatus) return;
     shelfStatus = s;
     selected.clear();   // selection is per-shelf; don't carry across statuses
-    ['Owned', 'Unowned', 'Upcoming', 'New', 'Libby'].forEach(x =>
+    ['Unowned', 'Upcoming', 'New', 'Libby'].forEach(x =>
         document.getElementById('st' + x).classList.toggle('active', x.toLowerCase() === s));
     // Show/Reprints toggles apply to releases only (#151).
     document.querySelectorAll('.catItem, #catSection').forEach(el => el.style.display = isRemote() ? '' : 'none');
@@ -1039,7 +1045,7 @@ function toggleSelectMode() {
     document.getElementById('bulkBar').classList.toggle('d-none', !selectMode);
     document.getElementById('bulkBar').classList.toggle('d-flex', selectMode);
     if (selectMode && isRemote())
-        showToast('Bulk edit applies to your Owned/Unowned books.', 'info');
+        showToast('Bulk edit applies to your Wishlist / Library books.', 'info');
     renderAll();
 }
 
@@ -1174,7 +1180,7 @@ function openBookDetails(key, navList) {
 
     setBdCover(c);   // preload + fade swap, no grey flash between books (#100)
 
-    const statusLabel = { owned: 'Owned', unowned: 'Unowned (no copy yet)', upcoming: 'Upcoming', new: 'New' }[c.status];
+    const statusLabel = { owned: 'Owned', unowned: 'Wishlist (no copy yet)', upcoming: 'Upcoming', new: 'New' }[c.status];
     const seriesTxt = c.series
         ? `<a href="#" onclick="openSeries();return false;">${esc(c.series)}${c.series_number != null ? ` #${c.series_number}` : ''}</a>`
         : '';
@@ -1200,7 +1206,7 @@ function openBookDetails(key, navList) {
             <i class="fas fa-pen-to-square me-1"></i>Edit book</button>`;
     } else {
         actions = `${c.preview_link ? `<a class="btn btn-sm btn-outline-secondary" href="${c.preview_link}" target="_blank" rel="noopener"><i class="fas fa-eye me-1"></i>Preview</a>` : ''}
-            <button class="btn btn-sm btn-outline-success" onclick="saveLocally(${c.news_id})"><i class="fas fa-download me-1"></i>Save locally</button>
+            <button class="btn btn-sm btn-outline-success" onclick="saveLocally(${c.news_id})"><i class="fas fa-bookmark me-1"></i>Add to Wishlist</button>
             <button class="btn btn-sm btn-outline-secondary" onclick="ignoreRelease(${c.news_id})"><i class="fas fa-ban me-1"></i>Ignore</button>`;
     }
     document.getElementById('bdActions').innerHTML = actions;
