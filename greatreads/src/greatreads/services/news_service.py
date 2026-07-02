@@ -37,6 +37,7 @@ from ..models.book import Book
 from ..models.inventory import Inventory
 from ..models.news_item import NewsItem
 from ..models.reading import Reading
+from ..models.tag import Tag
 from ..models.user_settings import UserSettings
 from ..services.import_service import _best_match, _build_existing, _split_author, _word_tokens
 
@@ -1046,6 +1047,30 @@ def author_books(db: Session, author_name: str) -> dict:
     cards = [_local_card(b, "owned" if b.id in owned else "unowned", counts.get(b.id, 0))
              for b in books]
     return {"author": author_name, "cards": cards}
+
+
+def genre_books(db: Session, genre: str) -> dict:
+    """ALL DB books tagged with this genre (any ownership), ordered by author then series
+    then title — for the genre view opened by clicking a genre chip in the popup (#155).
+    Matches the Tag store; also catches the legacy single-genre string for coverage."""
+    genre = (genre or "").strip()
+    if not genre:
+        return {"genre": genre, "cards": []}
+    books = (db.query(Book)
+             .filter(or_(Book.tags.any(Tag.name.ilike(genre)), Book.genre.ilike(genre)))
+             .all())
+    owned = {bid for (bid,) in _owned_book_id_subq(db).all()}
+    ids = [b.id for b in books]
+    counts = {}
+    if ids:
+        for bid, c in (db.query(Reading.book_id, func.count(Reading.id))
+                       .filter(Reading.book_id.in_(ids), Reading.date_finished_actual.isnot(None))
+                       .group_by(Reading.book_id).all()):
+            counts[bid] = c
+    books.sort(key=lambda b: (b.author_sorted or "~", b.series or "~", b.series_number or 0, b.title or ""))
+    cards = [_local_card(b, "owned" if b.id in owned else "unowned", counts.get(b.id, 0))
+             for b in books]
+    return {"genre": genre, "cards": cards}
 
 
 def dismiss(db: Session, item_id: int) -> bool:

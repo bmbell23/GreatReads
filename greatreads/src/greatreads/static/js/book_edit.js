@@ -110,7 +110,6 @@
          ['bkeAuthorLast', 'last'], ['blkAuthorLast', 'last'],
          ['bkeSeries', 'series'], ['blkSeries', 'series'],
          ['bkeUniverse', 'universe'], ['blkUniverse', 'universe'],
-         ['blkGenre', 'genre'],
          ['bkeTitle', 'title'],
         ].forEach(([id, key]) => attachAutocomplete(id, key));
         // Genres pill input (#156): selecting a suggestion adds a chip.

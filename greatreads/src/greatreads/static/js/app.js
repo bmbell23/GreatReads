@@ -820,6 +820,21 @@ async function grOpenSeries() {
         ? list.map(c => grSeriesMini(c, b.id, true)).join('')
         : '<div class="col-12 text-muted text-center py-4">No books found in this series.</div>';
 }
+// Genre view (#155): all DB books with this genre, shown in the Series modal (reused).
+async function grOpenGenre(genreEnc) {
+    const genre = decodeURIComponent(genreEnc || '');   // chip passes a URL-encoded token
+    if (!genre) return;
+    document.getElementById('grSeriesTitle').textContent = genre;
+    document.getElementById('grSeriesGrid').innerHTML = '<div class="col-12 text-muted text-center py-4">Loading…</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('grSeriesModal')).show();
+    let cards;
+    try { const d = await GreatReads.apiCall('/news/genre?name=' + encodeURIComponent(genre)); cards = d.cards || []; }
+    catch (e) { cards = []; }
+    const cur = grActiveBook && grActiveBook.id;
+    document.getElementById('grSeriesGrid').innerHTML = cards.length
+        ? cards.map(c => grSeriesMini(c, cur, true)).join('')
+        : '<div class="col-12 text-muted text-center py-4">No books found in this genre.</div>';
+}
 // Author view (#155): all DB books by this author, shown in the Series modal (reused).
 async function grOpenAuthor() {
     const b = grActiveBook;
@@ -1268,7 +1283,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     // the user asked to match: #149).
     const tagChips = (Array.isArray(book.tags) && book.tags.length)
         ? `<div class="col-12"><div class="d-flex flex-wrap gap-1 mb-1">${
-              book.tags.slice(0, 24).map(t => `<span class="badge bg-light text-dark border">${grEsc(t)}</span>`).join('')
+              book.tags.slice(0, 24).map(t => `<a href="#" class="badge bg-light text-dark border text-decoration-none gba-genre-chip" onclick="GreatReads.openGenre('${encodeURIComponent(t).replace(/'/g, '%27')}');return false;">${grEsc(t)}</a>`).join('')
            }</div></div>` : '';
     const synText = grSynopsisText(book.description);
     const synBlock = synText
@@ -2047,6 +2062,7 @@ window.GreatReads = {
     openBookActions: grOpenBookActions,
     openSeries: grOpenSeries,
     openAuthor: grOpenAuthor,
+    openGenre: grOpenGenre,
     openBookById: grOpenBookById,
     openBookNav: grOpenBookNav,
     navStep: grNavStep,

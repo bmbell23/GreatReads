@@ -335,6 +335,37 @@ class BulkUpdateRequest(BaseModel):
     series_number: Optional[float] = None
     universe: Optional[str] = None
     genre: Optional[str] = None
+    # Genres as a set (#160): union into each book's genres ('add') or overwrite them
+    # ('replace'). Sent alongside/instead of the scalar fields.
+    genres: Optional[List[str]] = None
+    genres_mode: Optional[str] = None   # 'add' | 'replace'
+
+
+class IdsRequest(BaseModel):
+    ids: List[int]
+
+
+@router.post("/genres-summary")
+async def genres_summary(
+    request: Request,
+    payload: IdsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Genres across a selection (#160): which are on ALL the books (common) vs only
+    some (partial), so the bulk-edit screen can show the shared starting point."""
+    books = db.query(Book).filter(Book.id.in_(payload.ids)).all()
+    n = len(books)
+    if not n:
+        return {"count": 0, "common": [], "partial": []}
+    from collections import Counter
+    cnt: Counter = Counter()
+    for b in books:
+        for t in b.tags:
+            cnt[t.name] += 1
+    common = sorted([name for name, c in cnt.items() if c == n], key=str.lower)
+    partial = sorted([name for name, c in cnt.items() if c < n], key=str.lower)
+    return {"count": n, "common": common, "partial": partial}
 
 
 @router.post("/bulk-update")
@@ -345,18 +376,35 @@ async def bulk_update_books(
     current_user: User = Depends(get_current_user)
 ):
     """Set shared field(s) across many books at once (#93). A field is applied only if
-    it was sent (exclude_unset); send an empty string to deliberately clear a field."""
-    fields = payload.model_dump(exclude_unset=True, exclude={'ids'})
+    it was sent (exclude_unset); send an empty string to deliberately clear a field.
+    Genres (#160) apply as a set: 'add' unions the given names into each book, 'replace'
+    overwrites each book's genres with exactly the given set (empty = clear)."""
+    fields = payload.model_dump(exclude_unset=True, exclude={'ids', 'genres', 'genres_mode'})
     # treat "" as an explicit clear → None; absent fields were already dropped above
     fields = {k: (None if v == "" else v) for k, v in fields.items()}
-    if not payload.ids or not fields:
+    # genres apply when a mode was chosen (replace can legitimately clear with [] )
+    apply_genres = payload.genres_mode in ("add", "replace")
+    if not payload.ids or (not fields and not apply_genres):
         return {"updated": 0}
     books = db.query(Book).filter(Book.id.in_(payload.ids)).all()
+    new_tags = get_or_create_tags(db, payload.genres or []) if apply_genres else []
     for b in books:
         for k, v in fields.items():
             setattr(b, k, v)
+        if apply_genres:
+            if payload.genres_mode == "replace":
+                b.tags = list(new_tags)
+                b.genre = (payload.genres or [None])[0] if payload.genres else None
+            else:  # union, never removing existing
+                have = {t.name.lower() for t in b.tags}
+                for t in new_tags:
+                    if t.name.lower() not in have:
+                        b.tags.append(t)
+                if not b.genre and payload.genres:
+                    b.genre = payload.genres[0]
     db.commit()
-    return {"updated": len(books), "fields": list(fields.keys())}
+    return {"updated": len(books), "fields": list(fields.keys()),
+            "genres_mode": payload.genres_mode}
 
 
 class BulkDeleteRequest(BaseModel):
