@@ -96,6 +96,37 @@ async def get_books(
     return enriched_books
 
 
+# Static paths MUST be declared before the dynamic /{book_id} route below, or
+# FastAPI parses e.g. "backfill-status" as a book_id (422). (#166)
+@router.get("/backfill-status")
+async def backfill_status(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Metadata backfill sweep status for Settings (#166): how many library books still
+    need fields, plus the current cadence/batch config."""
+    import os
+    from ..services.metadata_backfill_service import candidate_query, BATCH_SIZE
+    return {
+        "candidates": candidate_query(db).count(),
+        "batch_size": BATCH_SIZE,
+        "interval_min": int(os.environ.get("METADATA_BACKFILL_INTERVAL_MIN", "60")),
+        "google_key": bool(os.environ.get("GOOGLE_BOOKS_API_KEY")),
+    }
+
+
+@router.post("/backfill-run")
+async def backfill_run(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Trigger one metadata backfill batch on demand from Settings (#166)."""
+    from ..services.metadata_backfill_service import backfill_batch
+    return backfill_batch(db)
+
+
 @router.get("/{book_id}")
 async def get_book(
     request: Request,
@@ -407,35 +438,6 @@ async def bulk_update_books(
     db.commit()
     return {"updated": len(books), "fields": list(fields.keys()),
             "genres_mode": payload.genres_mode}
-
-
-@router.get("/backfill-status")
-async def backfill_status(
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Metadata backfill sweep status for Settings (#166): how many library books still
-    need fields, plus the current cadence/batch config."""
-    import os
-    from ..services.metadata_backfill_service import candidate_query, BATCH_SIZE
-    return {
-        "candidates": candidate_query(db).count(),
-        "batch_size": BATCH_SIZE,
-        "interval_min": int(os.environ.get("METADATA_BACKFILL_INTERVAL_MIN", "60")),
-        "google_key": bool(os.environ.get("GOOGLE_BOOKS_API_KEY")),
-    }
-
-
-@router.post("/backfill-run")
-async def backfill_run(
-    request: Request,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Trigger one metadata backfill batch on demand from Settings (#166)."""
-    from ..services.metadata_backfill_service import backfill_batch
-    return backfill_batch(db)
 
 
 @router.post("/bulk-enrich")
