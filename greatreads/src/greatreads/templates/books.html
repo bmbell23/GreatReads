@@ -130,6 +130,8 @@
         <div class="stat-chip"        id="stUpcoming" style="color:#e0a800;" onclick="setStatus('upcoming')"><i class="fas fa-calendar-day"></i><span>Upcoming</span></div>
         <div class="stat-chip"        id="stNew"      style="color:#6f42c1;" onclick="setStatus('new')"><i class="fas fa-star"></i><span>New</span></div>
         <div class="stat-chip"        id="stLibby"    style="color:#d63384;" title="Search library ebooks on Libby/OverDrive and borrow into GreatReads" onclick="setStatus('libby')"><i class="fas fa-building-columns"></i><span>Libby</span></div>
+        <div class="stat-chip"        id="stHolds"    style="color:#fd7e14;" title="Your Libby holds and their estimated wait" onclick="setStatus('holds')"><i class="fas fa-clock"></i><span>Holds</span></div>
+        <div class="stat-chip"        id="stLoans"    style="color:#20c997;" title="Your current Libby loans — return them here" onclick="setStatus('loans')"><i class="fas fa-book-open-reader"></i><span>Loans</span></div>
     </div>
 </div>
 
@@ -513,7 +515,7 @@ function setStatus(s) {
     if (s === shelfStatus) return;
     shelfStatus = s;
     selected.clear();   // selection is per-shelf; don't carry across statuses
-    ['Unowned', 'Upcoming', 'New', 'Libby'].forEach(x =>
+    ['Unowned', 'Upcoming', 'New', 'Libby', 'Holds', 'Loans'].forEach(x =>
         document.getElementById('st' + x).classList.toggle('active', x.toLowerCase() === s));
     // Show/Reprints toggles apply to releases only (#151).
     document.querySelectorAll('.catItem, #catSection').forEach(el => el.style.display = isRemote() ? '' : 'none');
@@ -550,6 +552,8 @@ function clearSearch() { document.getElementById('searchInput').value = ''; onSe
 
 async function loadShelf(reset) {
     if (shelfStatus === 'libby') return loadLibbyShelf(reset);   // #142 Libby search category
+    if (shelfStatus === 'holds') return loadLibbyLoansHolds('holds');   // #163
+    if (shelfStatus === 'loans') return loadLibbyLoansHolds('loans');   // #163
     // Appends wait for an in-flight load; resets always supersede (bump generation).
     if (!reset && shelfLoading) return;
     if (reset) {
@@ -876,6 +880,69 @@ function renderLibby(q) {
         return;
     }
     grid.innerHTML = cards.map(cardHtml).join('');
+}
+
+// ── Holds / Loans shelves (#163) ─────────────────────────────────────────────
+async function loadLibbyLoansHolds(kind) {
+    const grid = document.getElementById('booksGrid');
+    const sc = document.getElementById('shelfCount');
+    cards = []; shelfTotal = 0; shelfLoading = false;   // no pagination for these
+    grid.innerHTML = `<div class="col-12 text-muted text-center py-5"><span class="spinner-border spinner-border-sm me-2"></span>Loading your ${kind}…</div>`;
+    let r;
+    try { r = await GreatReads.apiCall('/libby/' + kind); }
+    catch (e) {
+        if (shelfStatus !== kind) return;
+        grid.innerHTML = `<div class="col-12 text-danger text-center py-5">Couldn’t load your ${kind} — is the Libby engine running?</div>`;
+        if (sc) sc.textContent = ''; return;
+    }
+    if (shelfStatus !== kind) return;
+    const items = (r && r[kind]) || [];
+    if (sc) sc.textContent = items.length ? `${items.length} ${kind === 'holds' ? (items.length === 1 ? 'hold' : 'holds') : (items.length === 1 ? 'loan' : 'loans')}` : '';
+    if (!items.length) {
+        grid.innerHTML = `<div class="col-12 text-muted text-center py-5"><i class="fas ${kind === 'holds' ? 'fa-clock' : 'fa-book-open-reader'} fa-2x mb-2 d-block"></i>No ${kind} right now.</div>`;
+        return;
+    }
+    grid.innerHTML = items.map(it => libbyLoanHoldCard(it, kind)).join('');
+}
+function libbyLoanHoldCard(it, kind) {
+    const cover = it.cover
+        ? `<img src="${esc(it.cover)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;"><i class="fas fa-book text-muted"></i></div>`
+        : `<div style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;"><i class="fas fa-book text-muted"></i></div>`;
+    const tid = esc(String(it.id)), cid = esc(String(it.cardId)), lib = esc(it.libraryName || '');
+    let meta, action;
+    if (kind === 'holds') {
+        const wait = it.isAvailable ? '<span class="text-success fw-semibold">Ready to borrow</span>'
+            : `${it.holdPosition != null ? `#${it.holdPosition}${it.holdsCount ? ' of ' + it.holdsCount : ''}` : ''}${it.estimatedWaitDays != null ? ` · ${esc(libbyWaitText(it.estimatedWaitDays))}` : ''}`;
+        meta = `<div class="small text-muted text-truncate">${lib}</div><div class="small">${wait}</div>${it.placedDate ? `<div class="small text-muted">Placed ${esc(String(it.placedDate).slice(0, 10))}</div>` : ''}`;
+        action = `<button class="btn btn-sm btn-outline-danger w-100 mt-1" onclick="libbyCancelHold('${tid}','${cid}',this)"><i class="fas fa-xmark me-1"></i>Cancel hold</button>`;
+    } else {
+        const due = it.expireDate || it.dueDate || it.expires;
+        const left = (it.daysLeft != null) ? `${it.daysLeft} day${it.daysLeft === 1 ? '' : 's'} left` : (due ? `Due ${esc(String(due).slice(0, 10))}` : '');
+        meta = `<div class="small text-muted text-truncate">${lib}</div><div class="small">${esc(left)}</div>`;
+        action = `<button class="btn btn-sm btn-outline-secondary w-100 mt-1" onclick="libbyReturnLoan('${tid}','${cid}',this)"><i class="fas fa-rotate-left me-1"></i>Return</button>`;
+    }
+    return `<div class="col-6 col-md-4 col-lg-3 mb-3"><div class="card h-100 p-2">
+        <div class="d-flex gap-2">
+            <div style="width:52px;flex:0 0 52px;aspect-ratio:2/3;background:#e9ecef;border-radius:4px;overflow:hidden;">${cover}</div>
+            <div style="min-width:0;flex:1;"><div class="fw-semibold small text-truncate">${esc(dispTitle(it.title))}</div>
+                <div class="small text-muted text-truncate">${esc(it.author || '')}</div>${meta}</div>
+        </div>${action}</div></div>`;
+}
+async function libbyCancelHold(titleId, cardId, btn) {
+    if (!confirm('Cancel this hold?')) return;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+    try { await GreatReads.apiCall('/libby/holds/cancel', { method: 'POST', data: { title_id: titleId, card_id: cardId }, silent: true }); }
+    catch (e) { showToast(libbyErrMsg(e, 'cancel'), 'danger'); if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-xmark me-1"></i>Cancel hold'; } return; }
+    showToast('Hold cancelled.', 'success');
+    const col = btn && btn.closest('[class*="col-"]'); if (col) col.remove();
+}
+async function libbyReturnLoan(titleId, cardId, btn) {
+    if (!confirm('Return this loan?')) return;
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm"></span>'; }
+    try { await GreatReads.apiCall('/libby/return', { method: 'POST', data: { title_id: titleId, card_id: cardId }, silent: true }); }
+    catch (e) { showToast(libbyErrMsg(e, 'return'), 'danger'); if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-rotate-left me-1"></i>Return'; } return; }
+    showToast('Returned.', 'success');
+    const col = btn && btn.closest('[class*="col-"]'); if (col) col.remove();
 }
 
 // The Libby result currently open in the shared popup (borrow/hold handlers read it).

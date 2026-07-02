@@ -1055,9 +1055,13 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
             rows.push(['Published', d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })]);
         }
     }
-    // Length: words + pages on one line to keep the field list short (#127).
+    // Length: words + pages on one line to keep the field list short (#127). When we have
+    // pages but no real word count (a Wishlist/release book), show an ESTIMATE derived
+    // from pages (~300 wpp) — never stored, so the real Calibre count always wins once we
+    // actually get the book (#168).
     const lenParts = [];
     if (book.word_count) lenParts.push(`${Number(book.word_count).toLocaleString()} words`);
+    else if (book.page_count) lenParts.push(`≈ ${Math.round(book.page_count * 300 / 1000)}k words (est.)`);
     if (book.page_count) lenParts.push(`${Number(book.page_count).toLocaleString()} pages`);
     if (lenParts.length) rows.push(['Length', lenParts.join(' • ')]);
     // Ratings (#150): your private rating (mean of each rated read's overall — the

@@ -372,6 +372,9 @@
                         <input type="number" class="form-control form-control-sm" id="mbf-interval" min="5" max="1440" style="width:120px;"></div>
                     <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" id="mbf-save" onclick="saveBackfillConfig()">Save cadence</button></div>
                 </div>
+                <div class="form-text">Higher batch / shorter interval fills faster but uses more of the ~1,000/day
+                    Google Books quota (each book ≈ 1 call). 10 books/60 min ≈ 240/day is safe; keep the daily
+                    total under ~800 to leave room for the release poll.</div>
                 <div class="mt-2">
                     <button class="btn btn-sm btn-outline-primary" id="mbf-run" onclick="runBackfill()">
                         <i class="fas fa-play me-1"></i>Run a batch now</button>
