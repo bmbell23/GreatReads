@@ -165,6 +165,22 @@ def _poll_news():
         db.close()
 
 
+def _metadata_backfill():
+    """Scheduled sweep (#159): fill empty synopsis/genre/public-rating/date/pages on
+    library books from Apple/Google/OpenLibrary, spending a bounded slice of the daily
+    Google quota. Backfill-only — never clobbers Calibre/user values."""
+    db = SessionLocal()
+    try:
+        from .services.metadata_backfill_service import backfill_batch
+        result = backfill_batch(db)
+        if result.get("updated"):
+            logger.info("Metadata backfill: %s", result)
+    except Exception as exc:
+        logger.error("Metadata backfill failed: %s", exc)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -182,7 +198,7 @@ async def lifespan(app: FastAPI):
 
     # ── Midnight chain-recalculation scheduler (Mountain Time) ──────────
     try:
-        from datetime import datetime
+        from datetime import datetime, timedelta
         from apscheduler.schedulers.background import BackgroundScheduler
         from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.interval import IntervalTrigger
@@ -211,6 +227,17 @@ async def lifespan(app: FastAPI):
             CronTrigger(hour=5, minute=30, timezone="America/Denver"),
             id="daily_news_poll",
             replace_existing=True,
+        )
+        # Metadata backfill sweep (#159) — keeps the daily Google quota busy filling
+        # empty synopsis/genre/rating/date/pages on library books, a small batch each run.
+        scheduler.add_job(
+            _metadata_backfill,
+            IntervalTrigger(minutes=int(os.environ.get("METADATA_BACKFILL_INTERVAL_MIN", "60"))),
+            id="metadata_backfill",
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(minutes=3),
+            coalesce=True,
+            max_instances=1,
         )
         scheduler.start()
         logger.info(

@@ -409,6 +409,20 @@ async def bulk_update_books(
             "genres_mode": payload.genres_mode}
 
 
+@router.post("/bulk-enrich")
+async def bulk_enrich_books(
+    request: Request,
+    payload: IdsRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """On-demand metadata backfill for a selection (#159): fill ONLY empty synopsis/
+    genre/public-rating/date/pages from Apple/Google/OpenLibrary — never clobbering
+    existing values. Returns {processed, updated, fields_filled}."""
+    from ..services.metadata_backfill_service import backfill_ids
+    return backfill_ids(db, payload.ids)
+
+
 class BulkDeleteRequest(BaseModel):
     """Bulk-delete payload (#102): delete every listed book."""
     ids: List[int]

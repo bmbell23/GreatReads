@@ -26,6 +26,7 @@
         const c = $('grBulkCount'); if (c) c.textContent = n;
         const e = $('grBulkEditBtn'); if (e) e.disabled = n === 0;
         const d = $('grBulkDeleteBtn'); if (d) d.disabled = n === 0;
+        const en = $('grBulkEnrichBtn'); if (en) en.disabled = n === 0;
     }
     function setModeUI(on) {
         const btn = $('grBulkModeBtn');
@@ -142,6 +143,19 @@
         if (payload.author_name_first && payload.author_name_second) patch.author = payload.author_name_first + ' ' + payload.author_name_second;
         if (payload.genres_mode === 'replace' && payload.genres.length) patch.genre = payload.genres[0];
         if (hooks.afterEdit) hooks.afterEdit(ids, patch);
+        exitMode();
+    };
+
+    window.grBulkFetchMeta = async function () {
+        const ids = [...sel];
+        if (!ids.length) return;
+        toast(`Fetching metadata for ${ids.length} book${ids.length > 1 ? 's' : ''}…`, 'info');
+        let r;
+        try { r = await api('/books/bulk-enrich', { method: 'POST', data: { ids } }); }
+        catch (e) { toast('Fetch metadata failed', 'danger'); return; }
+        const u = (r && r.updated) || 0, f = (r && r.fields_filled) || 0;
+        toast(u ? `Filled ${f} field${f === 1 ? '' : 's'} across ${u} book${u === 1 ? '' : 's'}` : 'Nothing new found for the selection', u ? 'success' : 'info');
+        if (hooks.afterEnrich) hooks.afterEnrich(ids); else if (hooks.reRender) hooks.reRender();
         exitMode();
     };
 
