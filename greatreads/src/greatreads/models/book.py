@@ -109,6 +109,8 @@ class BookBase(BaseModel):
     cover: bool = False
     isbn_id: Optional[int] = None
     tags: Optional[List[str]] = None
+    description: Optional[str] = None       # synopsis (#149/#158)
+    public_rating: Optional[float] = None   # community rating 0–5 (#149/#158)
 
 
 class BookCreate(BookBase):

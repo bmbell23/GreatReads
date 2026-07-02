@@ -143,6 +143,13 @@
     .bke-cover-opt-cap { font-size: .8rem; text-align: center; display: flex; flex-wrap: wrap;
         align-items: center; justify-content: center; gap: .25rem; }
     .bke-cover-opt input { align-self: center; }
+    /* Genres multi-select (#158): checkbox chips, pre-checked = already on the book. */
+    .bke-genre-opt { display: inline-flex; align-items: center; gap: .1rem; cursor: pointer;
+        padding: .2rem .55rem; border: 1px solid #e2e8f0; border-radius: 999px; margin: 0;
+        font-size: .85rem; background: #fff; }
+    .bke-genre-opt:hover { background: #f8f9fa; }
+    .bke-genre-opt-sel { border-color: #0d6efd; background: #eef4ff; }
+    .bke-genre-opt input { margin: 0; }
 </style>
 <div class="modal fade" id="bkeMetaModal" tabindex="-1">
     <div class="modal-dialog modal-dialog-centered modal-dialog-scrollable">

@@ -38,8 +38,8 @@ class ITunesClient:
         self.session = requests.Session()
         self.session.headers.update({"User-Agent": _UA})
 
-    def cover_by_title_author(self, title: str, author: str) -> Optional[str]:
-        """High-res Apple Books cover URL for a title (+author), or None on miss."""
+    def _search_one(self, title: str, author: str) -> Optional[dict]:
+        """Raw first iTunes ebook result for a title (+author), or None on miss."""
         term = " ".join(p for p in (title, author) if p).strip()
         if not term:
             return None
@@ -53,6 +53,33 @@ class ITunesClient:
             results = r.json().get("results", [])
         except (requests.exceptions.RequestException, ValueError):
             return None
-        if not results:
+        return results[0] if results else None
+
+    def cover_by_title_author(self, title: str, author: str) -> Optional[str]:
+        """High-res Apple Books cover URL for a title (+author), or None on miss."""
+        r = self._search_one(title, author)
+        return _upscale(r.get("artworkUrl100")) if r else None
+
+    def lookup(self, title: str, author: str) -> Optional[dict]:
+        """Full Apple Books record as enrichment candidates (#158): cover, synopsis,
+        primary genre, release date, and the average user rating (0–5). None on miss.
+
+        iTunes ``description`` is HTML; callers strip it. ``averageUserRating`` is a
+        community rating on Apple's own 0–5 scale — kept separate from the user's
+        own ratings (books.public_rating)."""
+        r = self._search_one(title, author)
+        if not r:
             return None
-        return _upscale(results[0].get("artworkUrl100"))
+        rating = r.get("averageUserRating")
+        # ebook records carry a clean ``genres`` list (["Epic Fantasy","Books",
+        # "Sci-Fi & Fantasy","Fantasy"]); ``primaryGenreName`` is usually empty.
+        # Drop the umbrella "Books" store category.
+        genres = [g for g in (r.get("genres") or []) if isinstance(g, str) and g.strip()
+                  and g.strip().lower() != "books"]
+        return {
+            "cover_url": _upscale(r.get("artworkUrl100")),
+            "description": (r.get("description") or "").strip() or None,
+            "genres": genres,
+            "release_date": r.get("releaseDate"),  # ISO 8601, e.g. 2019-11-05T08:00:00Z
+            "public_rating": float(rating) if isinstance(rating, (int, float)) else None,
+        }

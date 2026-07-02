@@ -55,6 +55,25 @@ class OpenLibraryClient:
             return None
         return None
 
+    def subjects(self, title: str, author: str, limit: int = 8) -> list:
+        """Up to ``limit`` subject strings (genre candidates) for a work, or []. #158
+
+        OpenLibrary subjects are noisy and granular ("American fiction", "Fiction,
+        fantasy, epic") — callers de-noise/normalize against the local vocabulary."""
+        try:
+            r = self.session.get(_SEARCH, params={
+                "title": title, "author": author,
+                "fields": "subject", "limit": 1}, timeout=10)
+            r.raise_for_status()
+            docs = r.json().get("docs", [])
+            sleep(0.2)
+        except (requests.exceptions.RequestException, ValueError):
+            return []
+        if not docs:
+            return []
+        subs = docs[0].get("subject") or []
+        return [s for s in subs if isinstance(s, str)][:limit]
+
     def edition_by_isbn(self, isbn: str) -> dict:
         """{binding, pages, cover_url} for an ISBN. Empty dict on miss."""
         try:

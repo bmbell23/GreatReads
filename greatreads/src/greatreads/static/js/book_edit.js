@@ -458,6 +458,29 @@
                     <div class="fw-bold small mb-1">${esc(f.label)}</div>
                     <div class="bke-meta-covers">${cards.join('')}</div></div>`;
             }
+            // Genres (#158): multi-select. Genres already on the book are pre-checked;
+            // unchecking removes them, checking a suggestion adds it. Apply unions the
+            // checked set into the book's Genres (never called "tags" in the UI).
+            if (f.kind === 'genres') {
+                const curLower = new Set((f.current || []).map(x => x.toLowerCase()));
+                const seen = new Set();
+                const box = (name, checked, badge) => {
+                    seen.add(name.toLowerCase());
+                    return `<label class="bke-genre-opt${checked ? ' bke-genre-opt-sel' : ''}">
+                        <input class="form-check-input me-1" type="checkbox" value="${esc(name)}"${checked ? ' checked' : ''}>
+                        <span>${esc(name)}</span>${badge}</label>`;
+                };
+                const boxes = [];
+                // Current genres first (pre-checked), then suggestions not already shown.
+                (f.current || []).forEach(n => boxes.push(box(n, true, '')));
+                f.candidates.forEach(c => {
+                    if (!seen.has(String(c.value).toLowerCase())) boxes.push(box(c.value, c.on_book, srcBadge(c)));
+                });
+                return `<div class="bke-meta-field mb-3" data-field="genres" data-kind="genres"
+                        data-current="${esc((f.current || []).join('|'))}">
+                    <div class="fw-bold small mb-1">${esc(f.label)}</div>
+                    <div class="bke-genre-opts d-flex flex-wrap gap-2">${boxes.join('')}</div></div>`;
+            }
             // Default (checked) "keep current" row = reject.
             const cur = (f.current === null || f.current === undefined || f.current === '') ? '—' : esc(String(f.current));
             const curLabel = `Keep current <span class="bke-meta-cur">(${cur})</span>`;
@@ -482,6 +505,12 @@
                     opt.classList.toggle('bke-cover-opt-sel', opt.querySelector('input').checked));
             });
         });
+        body.querySelectorAll('.bke-genre-opts').forEach(group => {
+            group.addEventListener('change', () => {
+                group.querySelectorAll('.bke-genre-opt').forEach(opt =>
+                    opt.classList.toggle('bke-genre-opt-sel', opt.querySelector('input').checked));
+            });
+        });
     }
 
     async function bkeApplyMetadata() {
@@ -489,15 +518,31 @@
         if (!id) return;
         const data = {};          // book fields to PUT
         let coverUrl = null;
+        const norm = a => [...new Set(a.map(s => s.toLowerCase()))].sort().join('');
         document.querySelectorAll('#bkeMetaBody .bke-meta-field').forEach(group => {
+            // Genres (#158): multi-select checkboxes → union set. Apply only if the
+            // chosen set differs from what was already on the book.
+            if (group.dataset.kind === 'genres') {
+                const names = [...group.querySelectorAll('input[type=checkbox]:checked')]
+                    .map(x => x.value.trim()).filter(Boolean);
+                const cur = (group.dataset.current || '').split('|').filter(Boolean);
+                if (norm(names) !== norm(cur)) {
+                    data.tags = names;                         // PUT replaces the Genres set
+                    // Backfill the legacy single genre if the book has none yet (never clobber).
+                    const g = document.getElementById('bkeGenre');
+                    if (names.length && !((g && g.value.trim()) || (bkeBook && bkeBook.genre)))
+                        data.genre = names[0];
+                }
+                return;
+            }
             const sel = group.querySelector('input[type=radio]:checked');
             if (!sel || sel.id.endsWith('-keep')) return;   // "keep current" → reject
             if (group.dataset.cover === '1') coverUrl = sel.dataset.coverUrl || null;
             else {
                 const field = group.dataset.field, raw = sel.dataset.value;
                 if (field === 'page_count') data[field] = parseInt(raw, 10);
-                else if (field === 'series_number') data[field] = parseFloat(raw);
-                else data[field] = raw;   // date_published (ISO) / genre
+                else if (field === 'series_number' || field === 'public_rating') data[field] = parseFloat(raw);
+                else data[field] = raw;   // date_published (ISO) / description / genre
             }
         });
         if (!Object.keys(data).length && !coverUrl) {

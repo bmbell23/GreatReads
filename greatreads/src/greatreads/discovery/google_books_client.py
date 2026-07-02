@@ -165,6 +165,9 @@ class GoogleBooksClient:
                 'description': volume_info.get('description'),
                 'page_count': volume_info.get('pageCount'),
                 'categories': volume_info.get('categories', []),
+                # Community rating on Google's 0–5 scale (#158) — separate from the
+                # user's own rating; only present when Google has enough ratings.
+                'average_rating': volume_info.get('averageRating'),
                 'series_number': series_number,
                 'language': volume_info.get('language'),
                 'isbn_10': isbn_10,

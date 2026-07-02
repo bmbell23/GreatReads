@@ -17,6 +17,7 @@ briefly to protect Google's daily quota against repeat opens.
 """
 
 import os
+import re
 import time
 from typing import Optional
 
@@ -24,6 +25,7 @@ from sqlalchemy.orm import Session
 
 from ..models.book import Book
 from ..models.inventory import Inventory
+from ..models.tag import Tag
 from ..discovery.google_books_client import GoogleBooksClient
 from ..discovery.openlibrary_client import OpenLibraryClient
 from ..discovery.itunes_client import ITunesClient
@@ -63,6 +65,55 @@ def _date_display(iso: Optional[str]) -> Optional[str]:
     return iso[:4] if iso.endswith("-01-01") else iso
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _strip_html(text: Optional[str]) -> Optional[str]:
+    """Apple/Google synopses arrive as HTML. Flatten to plain text for storage."""
+    if not text:
+        return None
+    text = _TAG_RE.sub("", text)
+    text = (text.replace("&amp;", "&").replace("&lt;", "<").replace("&gt;", ">")
+                .replace("&quot;", '"').replace("&#39;", "'").replace("&nbsp;", " "))
+    text = re.sub(r"[ \t]+", " ", text).strip()
+    return text or None
+
+
+# Genres arrive noisy: Google "Fiction / Fantasy / Epic", OL "Fiction, fantasy",
+# Apple "Sci-Fi & Fantasy". Split on separators, drop noise, keep clean single
+# genre names so the vocabulary stays convergent (#158 — user wants clean genres).
+_GENRE_SPLIT = re.compile(r"\s*[/,;>]\s*|\s+&\s+|\s+--\s+")
+_GENRE_DROP = {"general", "fiction", "nonfiction", "non-fiction", "books"}
+
+
+def _clean_genre_names(raw_list, vocab: dict, vocab_only: bool = False) -> list:
+    """Normalize provider genre strings into clean, deduped names, snapping to the
+    library's existing casing when a name already exists (avoids 16 variants of one
+    genre). ``vocab`` maps lowercased name -> canonical stored name.
+
+    ``vocab_only=True`` (used for OpenLibrary, whose ``subject`` list is noisy LoC
+    headings like "Manuscripts" / "Kings and rulers") keeps ONLY names the library
+    already uses as a genre — so OL can corroborate existing genres but never
+    introduces junk into the vocabulary."""
+    out: list = []
+    seen: set = set()
+    for raw in raw_list or []:
+        if not isinstance(raw, str):
+            continue
+        for part in _GENRE_SPLIT.split(raw):
+            name = part.strip().strip(".").strip()
+            low = name.lower()
+            if not name or low in _GENRE_DROP or low in seen:
+                continue
+            if len(name) > 32 or any(ch.isdigit() for ch in name):
+                continue  # OL noise like "American fiction 20th century"
+            if vocab_only and low not in vocab:
+                continue
+            seen.add(low)
+            out.append(vocab.get(low, name))
+    return out
+
+
 def _google_fields(isbn: Optional[str], title: str, author: str, api_key: str) -> dict:
     """One Google Books lookup (ISBN if present, else title+author), merged across
     the returned editions into the best value per field."""
@@ -85,6 +136,8 @@ def _google_fields(isbn: Optional[str], title: str, author: str, api_key: str) -
     snum = _first(editions, lambda e: e.get("series_number") is not None)
     thumb = _first(editions, lambda e: e.get("thumbnail"))
     ref = _first(editions, lambda e: e.get("google_books_id"))
+    desc = _first(editions, lambda e: e.get("description"))
+    rating = _first(editions, lambda e: isinstance(e.get("average_rating"), (int, float)))
 
     # A single-edition ISBN hit can carry a full publish date; a title+author
     # sweep spans reprints, so take the earliest year (closest to original).
@@ -97,10 +150,12 @@ def _google_fields(isbn: Optional[str], title: str, author: str, api_key: str) -
     return {
         "date": date,
         "page_count": pages.get("page_count") if pages else None,
-        "genre": (cats.get("categories") or [None])[0] if cats else None,
+        "genres": cats.get("categories") if cats else None,   # list (#158)
         "series_number": snum.get("series_number") if snum else None,
         "cover_url": thumb.get("thumbnail") if thumb else None,
         "ref": ref.get("google_books_id") if ref else None,
+        "description": _strip_html(desc.get("description")) if desc else None,
+        "public_rating": rating.get("average_rating") if rating else None,
     }
 
 
@@ -114,10 +169,12 @@ def _openlibrary_fields(isbn: Optional[str], title: str, author: str, author_las
     house-style author normalization is #69; this is just a better query key.)"""
     olc = OpenLibraryClient()
     year = None
+    subjects: list = []
     edition: dict = {}
     try:
         if title:
             year = olc.first_publish_year(title, author_last or author)
+            subjects = olc.subjects(title, author_last or author)
         if isbn:
             edition = olc.edition_by_isbn(isbn) or {}
     except Exception:
@@ -126,10 +183,12 @@ def _openlibrary_fields(isbn: Optional[str], title: str, author: str, author_las
         "date": _iso_date(year),
         "page_count": edition.get("pages"),
         "cover_url": edition.get("cover_url"),
+        "genres": subjects,
     }
 
 
-def _build_field(field: str, label: str, current, raw_candidates, is_cover=False) -> Optional[dict]:
+def _build_field(field: str, label: str, current, raw_candidates, is_cover=False,
+                 kind: str = "scalar") -> Optional[dict]:
     """Dedupe candidates by their apply-value; when the same value comes from more
     than one source, collapse to one row badged as agreed ("confirmed by both")."""
     merged: list[dict] = []
@@ -157,8 +216,60 @@ def _build_field(field: str, label: str, current, raw_candidates, is_cover=False
         "label": label,
         "current": current,
         "is_cover": is_cover,
+        "kind": kind,
         "candidates": merged,
     }
+
+
+def _build_genres(current_names: list, sourced) -> Optional[dict]:
+    """Multi-select Genres row (#158). ``sourced`` = list of (names, source). One
+    candidate per distinct genre name (case-insensitive), badged with its source(s);
+    genres already on the book are pre-selected. Apply unions selected into the book."""
+    cur_lower = {n.lower() for n in current_names}
+    merged: list[dict] = []
+    index: dict[str, dict] = {}
+    for names, source in sourced:
+        for name in names or []:
+            low = name.lower()
+            existing = index.get(low)
+            if existing:
+                if source not in existing["sources"]:
+                    existing["sources"].append(source)
+                continue
+            row = {"value": name, "sources": [source], "on_book": low in cur_lower}
+            index[low] = row
+            merged.append(row)
+    if not merged:
+        return None
+    for m in merged:
+        m["source"] = " + ".join(m.pop("sources"))
+    return {
+        "field": "genres",
+        "label": "Genres",
+        "kind": "genres",
+        "current": current_names,
+        "candidates": merged,
+    }
+
+
+def _genre_vocabulary(db: Session) -> dict:
+    """lowercased genre name -> canonical stored name, drawn from existing Genres
+    (Tag names) + legacy single-genre strings, so provider names snap to what the
+    library already uses instead of spawning near-duplicates."""
+    vocab: dict[str, str] = {}
+    for (name,) in db.query(Tag.name).all():
+        if name:
+            vocab.setdefault(name.lower(), name)
+    for (g,) in db.query(Book.genre).filter(Book.genre.isnot(None)).distinct().all():
+        if g:
+            vocab.setdefault(g.lower(), g)
+    return vocab
+
+
+def _rating_display(v) -> Optional[str]:
+    if not isinstance(v, (int, float)):
+        return None
+    return f"★ {float(v):.1f} / 5"
 
 
 def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
@@ -187,11 +298,14 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
     api_key = os.environ.get("GOOGLE_BOOKS_API_KEY")
     g = _google_fields(isbn, title, author, api_key) if api_key else {}
     o = _openlibrary_fields(isbn, title, author, author_last)
-    # Apple Books — cover only, free/keyless, usually the highest-res candidate (#130).
+    # Apple Books — free/keyless full record: cover (usually the highest-res, #130),
+    # synopsis, primary genre and community rating (#158).
     try:
-        apple_cover = ITunesClient().cover_by_title_author(title, author) if title else None
+        a = ITunesClient().lookup(title, author) if title else None
     except Exception:
-        apple_cover = None
+        a = None
+    a = a or {}
+    apple_desc = _strip_html(a.get("description"))
 
     def cand(value, source, display=None, url=None):
         if value in (None, "") and not url:
@@ -199,11 +313,27 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
         return {"value": value, "display": (display if display is not None else value),
                 "source": source, "url": url}
 
+    def trunc(text, n=160):
+        text = text or ""
+        return text if len(text) <= n else text[:n].rstrip() + "…"
+
+    vocab = _genre_vocabulary(db)
+    current_genres = [t.name for t in book.tags] if book.tags else []
+    genre_candidates = [
+        (_clean_genre_names(a.get("genres"), vocab), _AP),
+        (_clean_genre_names(g.get("genres"), vocab), _GB),
+        # OL subjects are noisy LoC headings → corroborate known genres only.
+        (_clean_genre_names(o.get("genres"), vocab, vocab_only=True), _OL),
+    ]
+
     cur_date = book.date_published.isoformat() if book.date_published else None
+    cur_syn = _strip_html(book.description)
     fields = [
         _build_field(
             "date_published", "Published", _date_display(cur_date),
             [cand(o.get("date"), _OL, _date_display(o.get("date"))),
+             cand(_iso_date(None, a.get("release_date")), _AP,
+                  _date_display(_iso_date(None, a.get("release_date")))),
              cand(g.get("date"), _GB, _date_display(g.get("date")))],
         ),
         _build_field(
@@ -215,15 +345,23 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
             "series_number", "Series #", book.series_number,
             [cand(g.get("series_number"), _GB)],
         ),
+        _build_genres(current_genres, genre_candidates),
         _build_field(
-            "genre", "Genre", book.genre,
-            [cand(g.get("genre"), _GB)],
+            "public_rating", "Public rating", _rating_display(book.public_rating),
+            [cand(a.get("public_rating"), _AP, _rating_display(a.get("public_rating"))),
+             cand(g.get("public_rating"), _GB, _rating_display(g.get("public_rating")))],
+        ),
+        _build_field(
+            "description", "Synopsis", trunc(cur_syn),
+            [cand(apple_desc, _AP, trunc(apple_desc)),
+             cand(g.get("description"), _GB, trunc(g.get("description")))],
+            kind="text",
         ),
         _build_field(
             "cover", "Cover", bool(book.cover),
             # Google Books covers are dropped — they're frequently the 575×750 "image
             # not available" placeholder. Apple Books first, OpenLibrary fallback.
-            [cand(None, _AP, "Apple Books cover", url=apple_cover),
+            [cand(None, _AP, "Apple Books cover", url=a.get("cover_url")),
              cand(None, _OL, "OpenLibrary cover", url=o.get("cover_url"))],
             is_cover=True,
         ),
@@ -234,7 +372,7 @@ def suggest_metadata(db: Session, book_id: int) -> Optional[dict]:
         "query": {"mode": "isbn" if isbn else "title_author",
                   "isbn": isbn, "title": title, "author": author},
         "providers": {"google": bool(api_key and g), "openlibrary": bool(o),
-                      "apple": bool(apple_cover)},
+                      "apple": bool(a)},
         "fields": [f for f in fields if f],
     }
     _CACHE[book_id] = (time.time(), payload)
