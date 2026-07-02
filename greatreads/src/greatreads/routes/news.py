@@ -124,6 +124,12 @@ async def get_series_books(name: str, universe: Optional[str] = None,
     return news_service.series_books(db, series=name, universe=universe)
 
 
+@router.get("/author")
+async def get_author_books(name: str, db: Session = Depends(get_db)):
+    """All DB books by an author (any ownership) for the author view (#155)."""
+    return news_service.author_books(db, name)
+
+
 @router.post("/seen")
 async def post_seen(body: SeenBody, db: Session = Depends(get_db)):
     """Mark one item seen (with id) or all unseen items seen (no id) — clears the badge."""

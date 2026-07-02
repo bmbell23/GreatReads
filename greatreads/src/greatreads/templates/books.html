@@ -1690,6 +1690,12 @@ async function openNewlyImported() {
 function renderImportList(items) {
     const box = document.getElementById('newImportList');
     if (!items.length) { box.innerHTML = '<div class="text-muted small">No recent imports.</div>'; return; }
+    // Only show items not yet reviewed — otherwise dismissed rows reappear on reopen
+    // while the badge (which counts unseen) has already dropped, so you can't tell what
+    // you dismissed. Filtering here keeps the list in lockstep with the badge (#153).
+    const seen = _niSeen();
+    items = items.filter(i => !seen.has(i.import_id));
+    if (!items.length) { box.innerHTML = '<div class="text-muted small">Nothing left to review.</div>'; return; }
     const base = window.APP_BASE_PATH || '';
     box.innerHTML = items.map(i => {
         const cover = i.cover

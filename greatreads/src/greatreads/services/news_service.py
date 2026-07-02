@@ -1017,6 +1017,37 @@ def author_finished_books(db: Session, author_name: str) -> list[dict]:
     return books
 
 
+def author_books(db: Session, author_name: str) -> dict:
+    """ALL DB books by this author (any ownership), ordered by series then title — for the
+    author view opened by clicking the Author in the book popup (#155). Mirrors
+    series_books: normalized owned/unowned cards the shared details modal can open."""
+    first, second = _split_author(author_name or "")
+    if not (first or second):
+        return {"author": author_name, "cards": []}
+    q = db.query(Book)
+    if second:
+        q = q.filter(Book.author_name_second.ilike(second))
+    target = _word_tokens(author_name)
+    books = []
+    for b in q.all():
+        full = " ".join(p for p in (b.author_name_first, b.author_name_second) if p)
+        if target and _word_tokens(full) != target:   # exact author match (house-style tolerant)
+            continue
+        books.append(b)
+    owned = {bid for (bid,) in _owned_book_id_subq(db).all()}
+    ids = [b.id for b in books]
+    counts = {}
+    if ids:
+        for bid, c in (db.query(Reading.book_id, func.count(Reading.id))
+                       .filter(Reading.book_id.in_(ids), Reading.date_finished_actual.isnot(None))
+                       .group_by(Reading.book_id).all()):
+            counts[bid] = c
+    books.sort(key=lambda b: (b.series or "~", b.series_number or 0, b.title or ""))
+    cards = [_local_card(b, "owned" if b.id in owned else "unowned", counts.get(b.id, 0))
+             for b in books]
+    return {"author": author_name, "cards": cards}
+
+
 def dismiss(db: Session, item_id: int) -> bool:
     item = db.query(NewsItem).filter(NewsItem.id == item_id).first()
     if not item:

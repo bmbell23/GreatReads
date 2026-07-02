@@ -820,6 +820,21 @@ async function grOpenSeries() {
         ? list.map(c => grSeriesMini(c, b.id, true)).join('')
         : '<div class="col-12 text-muted text-center py-4">No books found in this series.</div>';
 }
+// Author view (#155): all DB books by this author, shown in the Series modal (reused).
+async function grOpenAuthor() {
+    const b = grActiveBook;
+    const author = b && b.author;
+    if (!author) return;
+    document.getElementById('grSeriesTitle').textContent = author;
+    document.getElementById('grSeriesGrid').innerHTML = '<div class="col-12 text-muted text-center py-4">Loading…</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('grSeriesModal')).show();
+    let cards;
+    try { const d = await GreatReads.apiCall('/news/author?name=' + encodeURIComponent(author)); cards = d.cards || []; }
+    catch (e) { cards = []; }
+    document.getElementById('grSeriesGrid').innerHTML = cards.length
+        ? cards.map(c => grSeriesMini(c, b && b.id, true)).join('')
+        : '<div class="col-12 text-muted text-center py-4">No books found by this author.</div>';
+}
 async function grInjectAuthorReads(author) {
     const el = document.getElementById('gbaAuthorReads');
     if (!el) return;
@@ -1004,7 +1019,9 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
 
     // Detail rows: author / series / words / pages, plus any caller extras (WPD…).
     const rows = [];
-    if (book.author) rows.push(['Author', book.author]);
+    // Author is a link → all books by this author (mirrors Series) (#155).
+    if (book.author) rows.push(['Author',
+        `<a href="#" class="gba-link" onclick="GreatReads.openAuthor();return false;">${grEsc(book.author)}</a>`]);
     if (book.series) {
         const num = (book.series_number != null) ? ' #' + book.series_number : '';
         rows.push(['Series', `${book.universe ? book.universe + ': ' : ''}${book.series}${num}`]);
@@ -2029,6 +2046,7 @@ window.GreatReads = {
     showEditModal,
     openBookActions: grOpenBookActions,
     openSeries: grOpenSeries,
+    openAuthor: grOpenAuthor,
     openBookById: grOpenBookById,
     openBookNav: grOpenBookNav,
     navStep: grNavStep,
