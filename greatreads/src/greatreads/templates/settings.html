@@ -362,15 +362,21 @@
                 <div class="d-flex justify-content-between border-bottom py-1">
                     <span class="text-muted">Books still missing fields</span>
                     <span class="font-monospace" id="mbf-candidates">…</span></div>
-                <div class="d-flex justify-content-between border-bottom py-1">
-                    <span class="text-muted">Cadence</span>
-                    <span class="font-monospace" id="mbf-cadence">…</span></div>
                 <div class="d-flex justify-content-between py-1">
                     <span class="text-muted">Google Books key</span>
                     <span class="font-monospace" id="mbf-key">…</span></div>
-                <button class="btn btn-sm btn-outline-primary mt-3" id="mbf-run" onclick="runBackfill()">
-                    <i class="fas fa-play me-1"></i>Run a batch now</button>
-                <span class="small text-muted ms-2" id="mbf-status"></span>
+                <div class="row g-2 align-items-end mt-1">
+                    <div class="col-auto"><label class="form-label small mb-0">Books per run</label>
+                        <input type="number" class="form-control form-control-sm" id="mbf-batch" min="1" max="200" style="width:100px;"></div>
+                    <div class="col-auto"><label class="form-label small mb-0">Every (minutes)</label>
+                        <input type="number" class="form-control form-control-sm" id="mbf-interval" min="5" max="1440" style="width:120px;"></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" id="mbf-save" onclick="saveBackfillConfig()">Save cadence</button></div>
+                </div>
+                <div class="mt-2">
+                    <button class="btn btn-sm btn-outline-primary" id="mbf-run" onclick="runBackfill()">
+                        <i class="fas fa-play me-1"></i>Run a batch now</button>
+                    <span class="small text-muted ms-2" id="mbf-status"></span>
+                </div>
             </div>
         </div>
 
@@ -670,11 +676,26 @@ document.addEventListener('DOMContentLoaded', function() {
 async function loadBackfillStatus() {
     try {
         const s = await GreatReads.apiCall('/books/backfill-status');
-        const set = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
-        set('mbf-candidates', s.candidates);
-        set('mbf-cadence', `${s.batch_size} book${s.batch_size === 1 ? '' : 's'} every ${s.interval_min} min`);
-        set('mbf-key', s.google_key ? 'configured' : 'missing (Google source disabled)');
+        const setTxt = (id, v) => { const el = document.getElementById(id); if (el) el.textContent = v; };
+        const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
+        setTxt('mbf-candidates', s.candidates);
+        setTxt('mbf-key', s.google_key ? 'configured' : 'missing (Google source disabled)');
+        setVal('mbf-batch', s.batch_size);
+        setVal('mbf-interval', s.interval_min);
     } catch (e) { /* leave placeholders */ }
+}
+async function saveBackfillConfig() {
+    const btn = document.getElementById('mbf-save'), st = document.getElementById('mbf-status');
+    const batch_size = parseInt(document.getElementById('mbf-batch').value, 10);
+    const interval_min = parseInt(document.getElementById('mbf-interval').value, 10);
+    if (!(batch_size >= 1) || !(interval_min >= 5)) { GreatReads.showToast('Enter a valid batch (≥1) and interval (≥5 min).', 'warning'); return; }
+    if (btn) btn.disabled = true;
+    try {
+        const r = await GreatReads.apiCall('/books/backfill-config', { method: 'POST', data: { batch_size, interval_min } });
+        GreatReads.showToast(`Sweep set to ${r.batch_size} books every ${r.interval_min} min${r.rescheduled ? '' : ' (applies on next restart)'}.`, 'success');
+        loadBackfillStatus();
+    } catch (e) { if (st) st.textContent = 'Save failed.'; }
+    if (btn) btn.disabled = false;
 }
 async function runBackfill() {
     const btn = document.getElementById('mbf-run'), st = document.getElementById('mbf-status');

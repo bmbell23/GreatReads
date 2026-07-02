@@ -230,9 +230,18 @@ async def lifespan(app: FastAPI):
         )
         # Metadata backfill sweep (#159) — keeps the daily Google quota busy filling
         # empty synopsis/genre/rating/date/pages on library books, a small batch each run.
+        # Interval is UI-configurable (#166), persisted in user_settings.
+        _bf_db = SessionLocal()
+        try:
+            from .services.metadata_backfill_service import effective_interval
+            _bf_interval = effective_interval(_bf_db)
+        except Exception:
+            _bf_interval = int(os.environ.get("METADATA_BACKFILL_INTERVAL_MIN", "60"))
+        finally:
+            _bf_db.close()
         scheduler.add_job(
             _metadata_backfill,
-            IntervalTrigger(minutes=int(os.environ.get("METADATA_BACKFILL_INTERVAL_MIN", "60"))),
+            IntervalTrigger(minutes=_bf_interval),
             id="metadata_backfill",
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=3),
@@ -240,6 +249,7 @@ async def lifespan(app: FastAPI):
             max_instances=1,
         )
         scheduler.start()
+        app.state.scheduler = scheduler   # so /books/backfill-config can reschedule live (#166)
         logger.info(
             "Schedulers started: midnight chain-recalc + auto-sync safety net every %d min + daily news poll.",
             AUTO_SYNC_INTERVAL_MINUTES,

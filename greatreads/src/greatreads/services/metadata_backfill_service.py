@@ -32,8 +32,41 @@ from .metadata_enrichment_service import (
 logger = logging.getLogger(__name__)
 
 # Default sweep size per scheduled run (env-overridable). Kept modest so the news poll
-# + interactive use still have Google quota headroom.
+# + interactive use still have Google quota headroom. The UI (#166) can override both
+# batch + interval, persisted in user_settings.
 BATCH_SIZE = int(os.environ.get("METADATA_BACKFILL_BATCH", "10"))
+SETTING_BATCH = "metadata_backfill_batch"
+SETTING_INTERVAL = "metadata_backfill_interval_min"
+
+
+def _get_setting_int(db: Session, key: str, default: int) -> int:
+    from ..models.user_settings import UserSettings
+    s = db.query(UserSettings).filter(UserSettings.setting_key == key).first()
+    if s and s.setting_value:
+        try:
+            return int(s.setting_value)
+        except (ValueError, TypeError):
+            pass
+    return default
+
+
+def set_setting(db: Session, key: str, value) -> None:
+    from ..models.user_settings import UserSettings
+    s = db.query(UserSettings).filter(UserSettings.setting_key == key).first()
+    if s:
+        s.setting_value = str(value)
+    else:
+        db.add(UserSettings(setting_key=key, setting_value=str(value)))
+    db.commit()
+
+
+def effective_batch(db: Session) -> int:
+    return _get_setting_int(db, SETTING_BATCH, BATCH_SIZE)
+
+
+def effective_interval(db: Session) -> int:
+    return _get_setting_int(db, SETTING_INTERVAL,
+                            int(os.environ.get("METADATA_BACKFILL_INTERVAL_MIN", "60")))
 
 
 def _needs_fields_filter():
@@ -173,8 +206,11 @@ def backfill_ids(db: Session, ids: list) -> dict:
     return {"processed": len(books), "updated": updated, "fields_filled": fields_total}
 
 
-def backfill_batch(db: Session, limit: int = BATCH_SIZE) -> dict:
-    """Scheduled sweep: enrich the next ``limit`` books still missing fields."""
+def backfill_batch(db: Session, limit: Optional[int] = None) -> dict:
+    """Scheduled sweep: enrich the next ``limit`` books still missing fields (defaults to
+    the UI-configured batch size)."""
+    if limit is None:
+        limit = effective_batch(db)
     books = candidate_query(db).limit(limit).all()
     if not books:
         return {"processed": 0, "updated": 0, "fields_filled": 0}

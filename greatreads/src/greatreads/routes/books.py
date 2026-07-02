@@ -105,15 +105,45 @@ async def backfill_status(
     current_user: User = Depends(get_current_user)
 ):
     """Metadata backfill sweep status for Settings (#166): how many library books still
-    need fields, plus the current cadence/batch config."""
+    need fields, plus the current (UI-configurable) cadence/batch config."""
     import os
-    from ..services.metadata_backfill_service import candidate_query, BATCH_SIZE
+    from ..services.metadata_backfill_service import candidate_query, effective_batch, effective_interval
     return {
         "candidates": candidate_query(db).count(),
-        "batch_size": BATCH_SIZE,
-        "interval_min": int(os.environ.get("METADATA_BACKFILL_INTERVAL_MIN", "60")),
+        "batch_size": effective_batch(db),
+        "interval_min": effective_interval(db),
         "google_key": bool(os.environ.get("GOOGLE_BOOKS_API_KEY")),
     }
+
+
+class BackfillConfig(BaseModel):
+    batch_size: int
+    interval_min: int
+
+
+@router.post("/backfill-config")
+async def backfill_config(
+    request: Request,
+    payload: BackfillConfig,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Persist the backfill batch size + interval and reschedule the live sweep (#166)."""
+    from ..services.metadata_backfill_service import set_setting, SETTING_BATCH, SETTING_INTERVAL
+    b = max(1, min(200, int(payload.batch_size)))
+    iv = max(5, min(1440, int(payload.interval_min)))
+    set_setting(db, SETTING_BATCH, b)
+    set_setting(db, SETTING_INTERVAL, iv)
+    rescheduled = False
+    sched = getattr(request.app.state, "scheduler", None)
+    if sched is not None:
+        try:
+            from apscheduler.triggers.interval import IntervalTrigger
+            sched.reschedule_job("metadata_backfill", trigger=IntervalTrigger(minutes=iv))
+            rescheduled = True
+        except Exception:
+            pass
+    return {"batch_size": b, "interval_min": iv, "rescheduled": rescheduled}
 
 
 @router.post("/backfill-run")
