@@ -409,6 +409,75 @@ def get_calibre_candidates(db: Session) -> list[dict[str, Any]]:
     return results
 
 
+def refresh_calibre_metadata(db: Session) -> dict[str, Any]:
+    """Backfill EMPTY GreatReads fields from Calibre for already-linked books (#147).
+
+    GreatReads snapshots Calibre metadata once at import and never refreshes, so a book
+    auto-imported with sparse epub metadata (before the user completed it in Calibre)
+    stays sparse. This re-reads Calibre for every calibre-linked book and fills ONLY
+    fields that are currently blank — date_published, word_count, series, series_number,
+    universe — never clobbering values the user may have edited (the override layer).
+    """
+    conn = _ro_connect(settings.calibre_db_path)
+    if conn is None:
+        return {"updated": 0, "book_ids": []}
+
+    rows = {str(r[0]): r for r in conn.execute(CALIBRE_QUERY).fetchall()}
+    links = db.query(ExternalImport).filter_by(source="calibre").all()
+
+    updated = 0
+    changed: list[int] = []
+    for link in links:
+        row = rows.get(str(link.external_id))
+        if row is None:
+            continue
+        book = db.query(Book).filter_by(id=link.book_id).first()
+        if book is None:
+            continue
+
+        cal_id = int(link.external_id)
+        pub_date = None
+        if row[2] and not str(row[2]).startswith("0101-01-01"):
+            try:
+                _d = datetime.fromisoformat(row[2][:10]).date()
+                if _d.year > 101:
+                    pub_date = _d
+            except ValueError:
+                pass
+
+        fills: dict[str, Any] = {}
+        # A missing date OR a previously-imported 0101 sentinel (year <= 101) is fixable:
+        # fill the real Calibre date, or clear the junk sentinel if Calibre has none.
+        date_bad = (book.date_published is None) or (book.date_published.year <= 101)
+        if date_bad and pub_date:
+            fills["date_published"] = pub_date
+        elif date_bad and book.date_published is not None:
+            fills["date_published"] = None   # drop the 0101 junk
+        if not book.word_count:
+            wc = _get_calibre_word_count(conn, cal_id)
+            if wc:
+                fills["word_count"] = wc
+        if not book.series and row[6]:
+            fills["series"] = row[6]
+        if book.series_number is None and row[5] is not None:
+            fills["series_number"] = float(row[5])
+        if not book.universe:
+            uni = _get_calibre_universe(conn, cal_id)
+            if uni:
+                fills["universe"] = uni
+
+        if fills:
+            for k, v in fills.items():
+                setattr(book, k, v)
+            updated += 1
+            changed.append(book.id)
+
+    conn.close()
+    if updated:
+        db.commit()
+    return {"updated": updated, "book_ids": changed}
+
+
 def import_calibre_book(
     db: Session,
     cal_id: str,

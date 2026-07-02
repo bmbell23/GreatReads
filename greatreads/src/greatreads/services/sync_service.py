@@ -22,6 +22,7 @@ from .import_service import (
     get_abs_candidates,
     import_calibre_book,
     import_abs_book,
+    refresh_calibre_metadata,
 )
 
 logger = logging.getLogger(__name__)
@@ -75,8 +76,19 @@ def sync_all(db: Session) -> dict[str, Any]:
             summary["abs_failed"] += 1
             logger.warning("Auto-sync: ABS %s failed: %s", abs_id, exc)
 
+    # --- Backfill empty metadata from Calibre for already-linked books (#147) —
+    #     self-heals sparse snapshots (missing word count / series / date) when
+    #     Calibre's metadata is completed after the initial import.
+    try:
+        refreshed = refresh_calibre_metadata(db)
+        summary["calibre_refreshed"] = refreshed.get("updated", 0)
+    except Exception as exc:
+        db.rollback()
+        summary["calibre_refreshed"] = 0
+        logger.warning("Auto-sync: Calibre metadata refresh failed: %s", exc)
+
     total = (summary["calibre_created"] + summary["calibre_linked"]
              + summary["abs_created"] + summary["abs_linked"])
-    if total or summary["calibre_failed"] or summary["abs_failed"]:
+    if total or summary["calibre_failed"] or summary["abs_failed"] or summary.get("calibre_refreshed"):
         logger.info("Auto-sync complete: %s", summary)
     return summary

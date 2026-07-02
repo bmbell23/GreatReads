@@ -21,6 +21,7 @@ from ..services.import_service import (
     get_abs_cover_path,
     backfill_calibre_word_counts,
     backfill_abs_word_counts,
+    refresh_calibre_metadata,
 )
 from ..services.sync_service import sync_all
 
@@ -61,6 +62,14 @@ async def trigger_sync(db: Session = Depends(get_db)):
     of how many books were created vs linked per source.
     """
     return sync_all(db)
+
+
+@router.post("/refresh-calibre")
+async def trigger_calibre_refresh(db: Session = Depends(get_db)):
+    """Backfill empty GreatReads fields (date/word count/series/universe) from Calibre
+    for already-linked books (#147) — fixes books imported with sparse metadata that
+    Calibre has since completed. Never overwrites non-empty (user-edited) values."""
+    return refresh_calibre_metadata(db)
 
 
 @router.get("/recent")
