@@ -167,7 +167,9 @@ async def create_book(
     db.add(db_book)
     db.commit()
     db.refresh(db_book)
-    return db_book
+    # Serialize via to_dict so tags render as names — returning the ORM object would
+    # make BookResponse's List[str] tags validation choke on Tag objects (500).
+    return db_book.to_dict()
 
 
 @router.put("/{book_id}", response_model=BookResponse)
@@ -193,7 +195,7 @@ async def update_book(
 
     db.commit()
     db.refresh(db_book)
-    return db_book
+    return db_book.to_dict()   # tags as names → avoids BookResponse List[str] 500
 
 
 @router.delete("/{book_id}")
