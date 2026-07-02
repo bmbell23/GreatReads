@@ -203,19 +203,18 @@ async function apiCall(endpoint, options = {}) {
         return response.data;
     } catch (error) {
         console.error('API call failed:', error);
-        
-        if (error.response) {
-            // Server responded with error status
-            const message = error.response.data?.detail || error.response.data?.message || 'Server error';
-            showToast(message, 'danger');
-        } else if (error.request) {
-            // Request made but no response
-            showToast('Network error - please check your connection', 'danger');
-        } else {
-            // Something else happened
-            showToast('An unexpected error occurred', 'danger');
+        // Callers that render their own status-aware message pass { silent: true } so we
+        // don't also flash a generic "Server error" (e.g. Libby borrow → 409/403/502).
+        if (!options.silent) {
+            if (error.response) {
+                const message = error.response.data?.detail || error.response.data?.message || 'Server error';
+                showToast(message, 'danger');
+            } else if (error.request) {
+                showToast('Network error - please check your connection', 'danger');
+            } else {
+                showToast('An unexpected error occurred', 'danger');
+            }
         }
-        
         throw error;
     }
 }
@@ -888,13 +887,19 @@ async function grFetchAndOpen(id, extraOpts, keepNav) {
     const editReadingHtml = relevant
         ? `<button type="button" class="btn btn-sm btn-outline-secondary" onclick="GreatReads.editReadingById(${relevant.id})"><i class="fas fa-edit me-2 text-primary"></i>Edit Reading</button>`
         : '';
+    // A page can supply per-book popup opts (e.g. Library's "Add to TBR") so prev/next
+    // nav keeps that page's custom actions on every step (#2).
+    const pageOpts = (typeof grNavOptsBuilder === 'function') ? (grNavOptsBuilder(book) || {}) : {};
     grOpenBookActions(book, Object.assign({
         reading: relevant,
         extraInfoHtml: (typeof GreatReads.readingExtraInfoHtml === 'function')
             ? GreatReads.readingExtraInfoHtml(relevant) : '',
         editReadingHtml,
-    }, extraOpts || {}), keepNav);
+    }, pageOpts, extraOpts || {}), keepNav);
 }
+// Optional per-page builder: (book) => opts merged into the nav popup (#2).
+let grNavOptsBuilder = null;
+function grSetNavOptsBuilder(fn) { grNavOptsBuilder = fn; }
 async function grOpenBookById(id) {
     if (id == null) return;
     bootstrap.Modal.getInstance(document.getElementById('grSeriesModal'))?.hide();  // came from grid
@@ -2078,6 +2083,7 @@ window.GreatReads = {
     openGenre: grOpenGenre,
     openBookById: grOpenBookById,
     openBookNav: grOpenBookNav,
+    setNavOptsBuilder: grSetNavOptsBuilder,
     navStep: grNavStep,
     editReadingById: grEditReadingById,
     editSelectRead: grEditSelectRead,

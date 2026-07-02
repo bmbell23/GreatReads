@@ -807,6 +807,8 @@ function libCardToggle(id) {
 }
 // Wire the shared bulk controller to Library's data + grid once GreatReads is ready.
 function libInitBulk() {
+    // Popup prev/next nav keeps Library's custom actions (#2).
+    if (GreatReads.setNavOptsBuilder) GreatReads.setNavOptsBuilder(libNavOpts);
     if (typeof grBulkInit !== 'function') return;
     grBulkInit({
         loadedIds: () => filteredBooks.map(b => b.id),
@@ -837,34 +839,25 @@ function libInitBulk() {
 // Read/Listen button(s) up top, then library-specific secondary actions (View
 // Details / Add to TBR / Mark Finished / Clear Progress) plus a Highlights link
 // whose count is filled async. Extra-info shows progress / planned reading.
-function openBookActions(bookId) {
-    const book = allBooks.find(b => b.id === bookId);
-    if (!book) return;
-
-    // Pick the most relevant reading for the extra-info section: an in-progress
-    // one if any, else a scheduled (not-yet-started) one.
+// Library's per-book popup actions (Add to TBR / Edit Reading). Used as the shared
+// popup's nav-opts builder so swipe/arrow prev-next keeps these on every book (#2).
+function libNavOpts(book) {
     const readings = book.readings || [];
     const relevant = readings.find(r => r.date_started && !r.date_finished_actual)
         || readings.find(r => !r.date_started && !r.date_finished_actual);
-
-    // Unified popup buttons (#111): variable action is Add to TBR, or "Add reread to
-    // TBR" if the book already has a finished reading. Library now shares the Edit
-    // Reading modal, so Delete + Clear Progress live in there (not on the popup).
     const readBefore = readings.some(r => r.date_finished_actual);
     const primaryActionHtml = `<button type="button" class="btn btn-sm btn-outline-secondary" onclick="libAddToTBR(${book.id})">
                     <i class="fas fa-plus me-2 text-success"></i>${readBefore ? 'Add reread to TBR' : 'Add to TBR'}</button>`;
-    // Edit Reading opens the shared modal for the most relevant reading (in-progress,
-    // else not-started, else the most recent finished) — when the book has one.
     const editable = relevant || readings[readings.length - 1] || null;
     const editReadingHtml = editable ? `<button type="button" class="btn btn-sm btn-outline-secondary" onclick="libEditReading(${editable.id})">
                     <i class="fas fa-edit me-2 text-primary"></i>Edit Reading</button>` : '';
-
-    GreatReads.openBookActions(book, {
-        reading: relevant,
-        extraInfoHtml: GreatReads.readingExtraInfoHtml(relevant),
-        primaryActionHtml,
-        editReadingHtml,
-    });
+    return { reading: relevant, primaryActionHtml, editReadingHtml };
+}
+// Open the popup with prev/next nav across the current filtered/sorted Library view (#2).
+function openBookActions(bookId) {
+    const idx = filteredBooks.findIndex(b => b.id === bookId);
+    if (idx >= 0) GreatReads.openBookNav(filteredBooks.map(b => b.id), idx);
+    else GreatReads.openBookNav([bookId], 0);
 }
 
 // Open the shared Edit Reading modal for a Library reading (#111). Finds the

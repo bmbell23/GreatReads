@@ -665,6 +665,9 @@
         bkeUploadFile, bkeCoverFromUrl, bkeRemoveCover, bkeLoadLists, wireBookEdit: wireAutocomplete,
         bkeRequestMetadata, bkeApplyMetadata,
         bkeGenreKey, bkeAddGenre, bkeRemoveGenre,
+        // Shared so the bulk-edit modals reuse the same WebView-safe autocomplete + the
+        // genre vocabulary (tags + genres), instead of a native <datalist> (#1/#3).
+        grAttachAutocomplete: attachAutocomplete,
     });
 
     document.addEventListener('DOMContentLoaded', () => { wireAutocomplete(); bkeLoadLists(); });

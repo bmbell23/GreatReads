@@ -87,29 +87,30 @@
         else if (e.key === 'Backspace' && !input.value && genres.length) { genres.pop(); renderGenres(); e.preventDefault(); }
     };
 
+    function wireAutocomplete() {
+        // Reuse Edit Book's WebView-safe autocomplete + shared genre/series/… vocab
+        // (fixes the native-datalist quirk where Enter didn't compile a pill, #1/#3).
+        if (typeof grAttachAutocomplete !== 'function') return;
+        if (window.bkeLoadLists) window.bkeLoadLists();   // ensure the vocab is loaded
+        grAttachAutocomplete('grBulkGenreInput', 'genre', addGenre);
+        grAttachAutocomplete('grBulkAuthorLast', 'last');
+        grAttachAutocomplete('grBulkSeries', 'series');
+        grAttachAutocomplete('grBulkUniverse', 'universe');
+    }
+
     window.grBulkOpen = async function () {
         if (!sel.size) return;
         const ids = [...sel];
         ['grBulkAuthorFirst', 'grBulkAuthorLast', 'grBulkSeries', 'grBulkSeriesNum', 'grBulkUniverse', 'grBulkGenreInput']
             .forEach(id => { const el = $(id); if (el) el.value = ''; });
         genres = []; renderGenres();
+        wireAutocomplete();
         const addR = $('grBulkModeAdd'); if (addR) addR.checked = true;
         $('grBulkModalCount').textContent = `(${ids.length} book${ids.length > 1 ? 's' : ''})`;
         $('grBulkGenreCommon').textContent = '';
         bootstrap.Modal.getOrCreateInstance($('grBulkModal')).show();
         try {
-            const [tags, gvocab, series, authors, universes, summary] = await Promise.all([
-                api('/books/search/tags'), api('/books/search/genres'),
-                api('/books/search/series'), api('/books/search/author-last-names'),
-                api('/books/search/universes'),
-                api('/books/genres-summary', { method: 'POST', data: { ids } }),
-            ]);
-            const opts = arr => (arr || []).map(n => `<option value="${esc(n)}">`).join('');
-            const gnames = [...new Set([].concat(tags || [], gvocab || []).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-            $('grBulkGenreList').innerHTML = opts(gnames);
-            const sl = $('grBulkSeriesList'); if (sl) sl.innerHTML = opts(series);
-            const al = $('grBulkAuthorLastList'); if (al) al.innerHTML = opts(authors);
-            const ul = $('grBulkUniverseList'); if (ul) ul.innerHTML = opts(universes);
+            const summary = await api('/books/genres-summary', { method: 'POST', data: { ids } });
             const common = summary.common || [], partial = summary.partial || [];
             const parts = [];
             if (common.length) parts.push('Shared by all: ' + common.map(esc).join(', '));

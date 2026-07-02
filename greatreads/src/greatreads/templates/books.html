@@ -1052,7 +1052,7 @@ async function libbyBorrow() {
     const hold = document.getElementById('libbyHoldBtn'); if (hold) hold.disabled = true;
     showToast('Borrowing & downloading from Libby — this can take up to a minute…', 'info');
     try {
-        const r = await GreatReads.apiCall('/libby/download', { method: 'POST', data: { title_id: c.title_id, card_id: cardId, title: c.title } });
+        const r = await GreatReads.apiCall('/libby/download', { method: 'POST', data: { title_id: c.title_id, card_id: cardId, title: c.title }, silent: true });
         if (r && (r.success || r.downloaded)) {
             showToast(`“${c.title}” downloaded — importing into GreatReads shortly.`, 'success');
             if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded — importing…';
@@ -1064,10 +1064,24 @@ async function libbyBorrow() {
             if (hold) hold.disabled = false;
         }
     } catch (e) {
-        // apiCall already toasted the server detail (dead token / bad creds / Kindle-only).
+        showToast(libbyErrMsg(e, 'borrow'), 'danger');
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-arrow-down me-2"></i>Borrow & Download'; }
         if (hold) hold.disabled = false;
     }
+}
+
+// Human-readable Libby error from a failed borrow/hold (#4): OverDrive/engine statuses
+// aren't always JSON, so map by status when there's no useful detail.
+function libbyErrMsg(e, action) {
+    const st = e && e.response && e.response.status;
+    const data = e && e.response && e.response.data;
+    const detail = data && (data.detail || data.error || data.message);
+    if (typeof detail === 'string' && detail.trim()) return detail;
+    if (st === 409) return `Already borrowed on this card (or a loan/hold conflict) — check your Libby loans.`;
+    if (st === 403) return `The library rejected this ${action}. The card may need website credentials in the Libby panel, or the title isn’t lendable to it.`;
+    if (st === 404) return `That title isn’t available at the selected library right now.`;
+    if (st >= 502 && st <= 504) return `The Libby engine is unavailable right now — try again in a moment.`;
+    return `Couldn’t complete the ${action}. Please try again.`;
 }
 
 async function libbyPlaceHold() {
@@ -1077,10 +1091,11 @@ async function libbyPlaceHold() {
     const btn = document.getElementById('libbyHoldBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Placing hold…'; }
     try {
-        await GreatReads.apiCall('/libby/holds/place', { method: 'POST', data: { title_id: c.title_id, card_id: cardId } });
+        await GreatReads.apiCall('/libby/holds/place', { method: 'POST', data: { title_id: c.title_id, card_id: cardId }, silent: true });
         showToast('Hold placed.', 'success');
         if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>On hold';
     } catch (e) {
+        showToast(libbyErrMsg(e, 'hold'), 'danger');
         if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-clock me-2"></i>Place hold'; }
     }
 }
@@ -1163,23 +1178,25 @@ function blkGenreKey(e) {
 
 async function bulkOpen() {
     if (!selected.size) return;
-    bkeLoadLists();   // shared typeahead datalists
+    bkeLoadLists();   // shared typeahead vocab (genres + tags, series, authors, …)
     ['blkAuthorFirst', 'blkAuthorLast', 'blkSeries', 'blkSeriesNum', 'blkUniverse', 'blkGenreInput']
         .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
     blkGenres = []; blkRenderGenres();
+    // Same WebView-safe autocomplete as Edit Book (Enter compiles a pill; #1/#3).
+    if (typeof grAttachAutocomplete === 'function') {
+        grAttachAutocomplete('blkGenreInput', 'genre', blkAddGenre);
+        grAttachAutocomplete('blkAuthorLast', 'last');
+        grAttachAutocomplete('blkSeries', 'series');
+        grAttachAutocomplete('blkUniverse', 'universe');
+    }
     document.getElementById('blkGenreAdd').checked = true;
     document.getElementById('blkGenreCommon').textContent = '';
     document.getElementById('bulkModalCount').textContent = `(${selected.size} book${selected.size > 1 ? 's' : ''})`;
     bootstrap.Modal.getOrCreateInstance(document.getElementById('bulkEditModal')).show();
-    // Populate the genre autocomplete + show the genres shared across the selection.
+    // Show the genres shared across the selection.
     const ids = [...selected].map(k => cardReg[k]).filter(c => c && c.kind === 'local').map(c => c.book_id);
     try {
-        const [vocab, summary] = await Promise.all([
-            Promise.all([GreatReads.apiCall('/books/search/tags'), GreatReads.apiCall('/books/search/genres')]),
-            GreatReads.apiCall('/books/genres-summary', { method: 'POST', data: { ids } }),
-        ]);
-        const names = [...new Set([].concat(vocab[0] || [], vocab[1] || []).filter(Boolean))].sort((a, b) => a.localeCompare(b));
-        document.getElementById('blkGenreList').innerHTML = names.map(n => `<option value="${esc(n)}">`).join('');
+        const summary = await GreatReads.apiCall('/books/genres-summary', { method: 'POST', data: { ids } });
         const common = summary.common || [], partial = summary.partial || [];
         const parts = [];
         if (common.length) parts.push('Shared by all: ' + common.map(esc).join(', '));
