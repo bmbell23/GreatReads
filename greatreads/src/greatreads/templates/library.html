@@ -35,6 +35,20 @@
         </button>
         <ul class="dropdown-menu dropdown-menu-end" id="sortMenu"></ul>
     </div>
+    <!-- Multi-select for bulk edit/delete (#162). -->
+    <button class="btn btn-outline-secondary flex-shrink-0" id="grBulkModeBtn" type="button"
+            onclick="grBulkToggleMode()" title="Select multiple books"><i class="fas fa-check-square me-1"></i>Select</button>
+</div>
+
+<!-- Bulk action bar (#162): shown only in select mode. -->
+<div id="grBulkBar" class="d-none align-items-center flex-wrap gap-2 mb-2 p-2 border rounded bg-light">
+    <span class="fw-medium small"><span id="grBulkCount">0</span> selected</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="grBulkSelectAllLoaded()">Select all loaded</button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="grBulkClearSel()">Clear</button>
+    <button class="btn btn-sm btn-primary ms-auto" id="grBulkEditBtn" onclick="grBulkOpen()" disabled>
+        <i class="fas fa-pen-to-square me-1"></i>Edit selected</button>
+    <button class="btn btn-sm btn-outline-danger" id="grBulkDeleteBtn" onclick="grBulkDelete()" disabled>
+        <i class="fas fa-trash me-1"></i>Delete selected</button>
 </div>
 
 <!-- Stat / format filter chips (one tight row) -->
@@ -499,6 +513,13 @@
     transition: box-shadow 0.15s, transform 0.15s;
 }
 .lib-card:hover { box-shadow: 0 6px 18px rgba(0,0,0,0.12); transform: translateY(-2px); }
+/* Bulk-select (#162): checkbox overlay + selected highlight. */
+.lib-card-selected { border-color: #0d6efd; box-shadow: 0 0 0 2px #0d6efd inset; }
+.lib-select-check {
+    position: absolute; top: 6px; left: 6px; z-index: 3;
+    background: rgba(255,255,255,0.9); border-radius: 4px; padding: 1px 3px; line-height: 1;
+}
+.lib-select-check input { width: 18px; height: 18px; cursor: pointer; vertical-align: middle; }
 .lib-cover-wrap {
     position: relative;
     cursor: pointer;
@@ -623,6 +644,7 @@ document.addEventListener('DOMContentLoaded', function() {
         console.log('GreatReads is now available, loading library data...');
         loadLibraryData();
         setupEventListeners();
+        libInitBulk();   // #162: wire the shared bulk-select controller
         // Deep-link from Settings → open the import modal directly.
         const imp = new URLSearchParams(location.search).get('import');
         if (imp === 'calibre' || imp === 'abs') openImportModal(imp);
@@ -740,12 +762,22 @@ function createBookCard(book) {
            <i class="fas fa-book book-cover-fallback" style="display:none;"></i>`
         : `<i class="fas fa-book book-cover-fallback"></i>`;
 
+    // Bulk select mode (#162): the cover toggles selection instead of opening, and a
+    // checkbox overlays the card.
+    const selecting = (typeof grBulkActive === 'function') && grBulkActive();
+    const isSel = selecting && grBulkHas(book.id);
+    const checkOverlay = selecting
+        ? `<span class="lib-select-check"><input type="checkbox" ${isSel ? 'checked' : ''}
+               onclick="event.stopPropagation();libCardToggle(${book.id})"></span>`
+        : '';
+    const clickAttr = selecting
+        ? `onclick="libCardToggle(${book.id})"`
+        : `onclick="openBookActions(${book.id})" oncontextmenu="openBookActions(${book.id}); return false;"`;
     return `
         <div class="col-4 col-sm-3 col-md-3 col-lg-2 mb-3">
-            <div class="card h-100 book-card lib-card ${book.is_read ? 'is-read' : 'is-unread'}">
-                <div class="lib-cover-wrap"
-                     onclick="openBookActions(${book.id})"
-                     oncontextmenu="openBookActions(${book.id}); return false;">
+            <div class="card h-100 book-card lib-card ${book.is_read ? 'is-read' : 'is-unread'}${isSel ? ' lib-card-selected' : ''}" data-bid="${book.id}">
+                <div class="lib-cover-wrap" ${clickAttr}>
+                    ${checkOverlay}
                     ${coverInner}
                     ${(book.read_count || 0) >= 2
                         ? `<span class="read-count-badge read-count-${Math.min(book.read_count, 15)} lib-readcount" title="Read ${book.read_count}×">×${book.read_count}</span>`
@@ -757,6 +789,40 @@ function createBookCard(book) {
             </div>
         </div>
     `;
+}
+
+// Bulk-select (#162): toggle one card in place (preserves scroll — no full re-render).
+function libCardToggle(id) {
+    grBulkToggle(id);
+    const on = grBulkHas(id);
+    const card = document.querySelector(`.lib-card[data-bid="${id}"]`);
+    if (card) {
+        card.classList.toggle('lib-card-selected', on);
+        const cb = card.querySelector('.lib-select-check input');
+        if (cb) cb.checked = on;
+    }
+}
+// Wire the shared bulk controller to Library's data + grid once GreatReads is ready.
+function libInitBulk() {
+    if (typeof grBulkInit !== 'function') return;
+    grBulkInit({
+        loadedIds: () => filteredBooks.map(b => b.id),
+        reRender: () => displayBooks(filteredBooks),
+        afterEdit: (ids, patch) => {
+            const set = new Set(ids);
+            allBooks.forEach(b => { if (set.has(b.id)) Object.assign(b, patch); });
+            displayBooks(filteredBooks);
+        },
+        afterDelete: (ids) => {
+            // Optimistic removal for instant feedback, then refetch so the stat counts
+            // (read/unread/format) stay authoritative.
+            const set = new Set(ids);
+            allBooks = allBooks.filter(b => !set.has(b.id));
+            filteredBooks = filteredBooks.filter(b => !set.has(b.id));
+            displayBooks(filteredBooks);
+            if (typeof loadLibraryData === 'function') loadLibraryData();
+        },
+    });
 }
 
 // Click a cover → the shared cover-tap popup (GreatReads.openBookActions): big

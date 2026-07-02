@@ -321,6 +321,7 @@
 
     <!-- Shared Edit Book modal (#110): available on every page via bkeOpen(bookId) -->
     {% include "_book_edit_modal.html" %}
+    {% if current_user %}{% include "_bulk_edit_modal.html" %}{% endif %}
     <!-- Shared Edit Reading modal (#111): every page (incl. Library) via showEditModal(reading) -->
     {% include "_edit_reading_modal.html" %}
     {% endif %}
@@ -403,6 +404,7 @@
     <script src="{{ url_for('static', path='/js/app.js') }}?v={{ asset_ver }}"></script>
     <!-- Shared Edit Book modal behavior (#110); needs GreatReads.* from app.js above -->
     {% if current_user %}<script src="{{ url_for('static', path='/js/book_edit.js') }}?v={{ asset_ver }}"></script>{% endif %}
+    {% if current_user %}<script src="{{ url_for('static', path='/js/bulk_edit.js') }}?v={{ asset_ver }}"></script>{% endif %}
 
     <!-- Loading screen (#55/#114): the shared quotes.js on ONE host — same as the
          ereader (web/index.html), which works great. The doubling was base.html
