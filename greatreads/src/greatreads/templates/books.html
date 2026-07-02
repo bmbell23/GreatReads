@@ -1,2255 +1,1193 @@
 {% extends "base.html" %}
-
-{% block title %}Books - GreatReads{% endblock %}
+{% block title %}GreatReads - Books{% endblock %}
 
 {% block content %}
-<div class="row">
-    <div class="col-12">
-        <div class="d-flex justify-content-between align-items-start mb-4 flex-wrap">
-            <div class="page-header-bookish mb-2 mb-md-0">
-                <div class="page-header-icon">
-                    <i class="fas fa-book-open"></i>
-                </div>
-                <div class="page-header-content">
-                    <h1 class="page-header-title mb-0">All Books</h1>
-                </div>
-            </div>
-            <div class="d-flex flex-column flex-sm-row gap-2">
-                <button class="btn btn-primary" onclick="addNewBook()">
-                    <i class="fas fa-plus me-1"></i>Add Book
-                </button>
-                <button class="btn btn-outline-primary" onclick="addNewSeries()">
-                    <i class="fas fa-layer-group me-1"></i>Add Series
-                </button>
-            </div>
-        </div>
-    </div>
-</div>
+<style>
+    /* Unified cover grid for every status; status = card border color (#88). */
+    .books-card { border-width: 3px; border-style: solid; border-radius: 12px; overflow: hidden;
+        transition: transform .1s, box-shadow .1s; }
+    .books-card:hover { transform: translateY(-2px); box-shadow: 0 4px 14px rgba(0,0,0,.12); }
+    .status-owned    { border-color: #198754; }
+    .status-unowned  { border-color: #0d6efd; }
+    .status-upcoming { border-color: #e0a800; }
+    .status-new      { border-color: #6f42c1; }
+    .books-cover { position: relative; aspect-ratio: 2/3; background: #e9ecef;
+        display: flex; align-items: center; justify-content: center; overflow: hidden; }
+    .books-cover img { width: 100%; height: 100%; object-fit: cover; }
+    .books-cover .book-cover-fallback { font-size: 1.8rem; color: #adb5bd; }
+    /* Boilerplate cover for books with no image (#88; art refresh #105). The book
+       is still treated as "no cover" — this parchment is purely placeholder art,
+       not a real cover. Title + series top, author bottom, in a bookish serif (#116). */
+    .books-ph { width: 100%; height: 100%; display: flex; flex-direction: column;
+        justify-content: space-between; padding: 14px 9px; text-align: center; color: #463a28;
+        background: #e4d9c2 url("{{ url_for('static', path='/img/placeholder-cover.webp') }}") center/cover no-repeat;
+        font-family: 'Iowan Old Style', 'Palatino Linotype', Palatino, 'Book Antiqua', Georgia, serif; }
+    .books-ph-title { font-size: .92rem; font-weight: 800; line-height: 1.1; letter-spacing: .01em;
+        overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical;
+        text-shadow: 0 1px 1px rgba(255,250,240,.6); }
+    .books-ph-series { font-size: .68rem; font-weight: 600; color: #6b5a3d; margin-top: 3px;
+        overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+        text-shadow: 0 1px 1px rgba(255,250,240,.55); }
+    .books-ph-author { font-size: .7rem; font-style: italic; color: #6b5a3d; overflow: hidden;
+        display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+        text-shadow: 0 1px 1px rgba(255,250,240,.55); }
+    .books-badge-tl { position: absolute; top: 4px; left: 4px; display: flex; gap: 3px; }
+    .books-badge-tr { position: absolute; top: 4px; right: 4px; display: flex; gap: 3px; }
+    .books-readcount { background: #198754; color: #fff; border-radius: 999px; font-size: .7rem;
+        font-weight: 700; padding: 1px 6px; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+    .books-badge { font-size: .68rem; padding: 2px 5px; }
+    #manageAuthors { max-height: 320px; overflow-y: auto; }
+    .manage-author-row { display: flex; align-items: center; justify-content: space-between;
+        gap: 8px; padding: 2px 0; font-size: 0.85rem; }
+    .bd-cover { aspect-ratio: 2/3; background: #e9ecef; border-radius: 6px; overflow: hidden;
+        display: flex; align-items: center; justify-content: center; }
+    .bd-cover img { width: 100%; height: 100%; object-fit: cover; }
+    /* Smooth book-to-book swipe in the details modal (#100): fade the new cover
+       in once it's decoded so there's no grey flash between books. */
+    .bd-fade-in { animation: bdFade .18s ease; }
+    @keyframes bdFade { from { opacity: 0; } to { opacity: 1; } }
+    /* Custom autocomplete (#107) — replaces native <datalist> (broken in Android
+       WebView). Fixed-positioned on <body> so a scrollable modal can't clip it. */
+    .ac-menu { position: fixed; z-index: 2000; background: #fff; border: 1px solid #ced4da;
+        border-radius: .35rem; max-height: 200px; overflow-y: auto; box-shadow: 0 6px 16px rgba(0,0,0,.15); }
+    .ac-item { padding: .4rem .65rem; font-size: .85rem; cursor: pointer;
+        white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .ac-item:hover, .ac-item.ac-active { background: #e9f2ff; }
+    /* Bulk-select (#93) */
+    .sel-check { width: 22px; height: 22px; border-radius: 50%; background: #fff;
+        border: 2px solid #0d6efd; display: flex; align-items: center; justify-content: center;
+        color: transparent; font-size: .7rem; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
+    .sel-check.on { background: #0d6efd; color: #fff; }
+    .books-card.sel-on { box-shadow: 0 0 0 3px rgba(13,110,253,.45); }
+</style>
 
-<!-- Search and Filters -->
-<div class="row mb-4">
-    <div class="col-12 col-md-4 mb-2 mb-md-0">
-        <div class="input-group">
-            <span class="input-group-text">
-                <i class="fas fa-search"></i>
-            </span>
-            <input type="text" class="form-control" id="searchInput" placeholder="Search by title, author, universe, or series..." onkeyup="applyFilters()">
-        </div>
+<!-- Header -->
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-2">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-book-bookmark"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Books</h1></div>
     </div>
-    <div class="col-6 col-md-2 mb-2 mb-md-0">
-        <select class="form-select" id="genreFilter" onchange="applyFilters()">
-            <option value="">All Genres</option>
-        </select>
-    </div>
-    <div class="col-6 col-md-2 mb-2 mb-md-0">
-        <select class="form-select" id="tagFilter" onchange="applyFilters()">
-            <option value="">All Tags</option>
-        </select>
-    </div>
-    <div class="col-6 col-md-2 mb-2 mb-md-0">
-        <button type="button" class="btn btn-outline-success w-100" onclick="toggleReadFilter()" id="readFilterBtn">
-            <i class="fas fa-book-reader me-1 d-none d-lg-inline"></i><span class="d-none d-md-inline">Read Books</span><span class="d-md-none">Read</span>
+    <div class="d-flex gap-2">
+        <button class="btn btn-success" id="addBookBtn" type="button" onclick="bkeOpenNew()">
+            <i class="fas fa-plus me-1"></i>Add
+        </button>
+        <button class="btn btn-outline-secondary" id="selectBtn" type="button" onclick="toggleSelectMode()">
+            <i class="fas fa-check-double me-1"></i>Select
+        </button>
+        <button class="btn btn-outline-secondary" type="button" onclick="openMergeDuplicates()">
+            <i class="fas fa-code-branch me-1"></i>Merge Duplicates
+        </button>
+        <button class="btn btn-outline-secondary position-relative" type="button" onclick="openNewlyImported()" title="Recently auto-imported ebooks & audiobooks">
+            <i class="fas fa-inbox me-1"></i>Newly Imported
+            <span id="newImportBadge" class="badge rounded-pill bg-danger position-absolute top-0 start-100 translate-middle" style="display:none;font-size:.6rem;">0</span>
+        </button>
+        <button class="btn btn-outline-secondary" type="button" data-bs-toggle="collapse" data-bs-target="#settingsPanel">
+            <i class="fas fa-gear me-1"></i>Settings
+        </button>
+        <button class="btn btn-outline-primary" id="recleanBtn" onclick="reclean()"
+                title="Re-run filters on cached releases (no Google quota)">
+            <i class="fas fa-broom me-1"></i>Re-clean
+        </button>
+        <button class="btn btn-primary" id="checkNowBtn" onclick="checkNow()">
+            <i class="fas fa-rotate me-1"></i>Check now
         </button>
     </div>
-    <div class="col-6 col-md-2">
-        <div class="d-flex gap-1">
-            <button type="button" class="btn btn-outline-danger flex-fill" onclick="toggleMissingDataFilter()" id="missingDataBtn" title="Show books with missing data">
-                <i class="fas fa-exclamation"></i>
-            </button>
-            <button type="button" class="btn btn-outline-primary flex-fill" onclick="toggleBulkEdit()" id="bulkEditToggle" title="Bulk Edit">
-                <i class="fas fa-check-square"></i>
-            </button>
-            <button type="button" class="btn btn-outline-primary flex-fill d-none" onclick="openBulkEditModal()" id="bulkEditActionsBtn" title="Edit Selected">
-                <i class="fas fa-edit"></i>
-            </button>
-        </div>
+</div>
+
+<!-- Search + Sort (matches Library/TBR) -->
+<div class="d-flex gap-2 align-items-center mb-2">
+    <div class="position-relative flex-grow-1">
+        <input type="text" class="form-control" id="searchInput" autocomplete="off"
+               placeholder="Search by title, author, or series…" oninput="onSearch()">
+        <button type="button" class="lib-search-clear" id="searchClear" onclick="clearSearch()"
+                title="Clear" aria-label="Clear" style="display:none;"><i class="fas fa-times"></i></button>
+    </div>
+    <div class="dropdown flex-shrink-0">
+        <button class="btn btn-outline-secondary dropdown-toggle" type="button" data-bs-toggle="dropdown" title="Sort">
+            <i class="fas fa-sort-amount-down-alt me-1" id="sortDirIcon"></i><span id="sortLabel">Author</span>
+        </button>
+        <ul class="dropdown-menu dropdown-menu-end">
+            <li><a class="dropdown-item" href="#" onclick="setSort('author');return false;">Author</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('title');return false;">Title</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('series');return false;">Series</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('date');return false;">Release date</a></li>
+            <li><a class="dropdown-item" href="#" onclick="setSort('words');return false;">Word count</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><a class="dropdown-item" href="#" onclick="toggleSortDir();return false;"><i class="fas fa-exchange-alt me-2"></i>Reverse order</a></li>
+            <li><hr class="dropdown-divider"></li>
+            <li><h6 class="dropdown-header">Cover</h6></li>
+            <li><a class="dropdown-item" href="#" id="covAll" onclick="setCoverFilter('all');return false;"><i class="fas fa-check me-2"></i>All</a></li>
+            <li><a class="dropdown-item" href="#" id="covYes" onclick="setCoverFilter('yes');return false;"><i class="fas fa-check me-2 invisible"></i>Has cover</a></li>
+            <li><a class="dropdown-item" href="#" id="covNo" onclick="setCoverFilter('no');return false;"><i class="fas fa-check me-2 invisible"></i>Missing cover</a></li>
+        </ul>
     </div>
 </div>
 
-<!-- Books Table -->
-<div class="row">
-    <div class="col-12">
-        <!-- Loading State -->
-        <div id="loading-state" class="text-center py-5">
-            <i class="fas fa-spinner fa-spin fa-2x text-primary"></i>
-            <p class="mt-3 text-muted">Loading books...</p>
-        </div>
-        
-        <!-- Books Table -->
-        <div id="books-container" class="d-none">
-            <div class="table-responsive">
-                <table class="table table-hover">
-                    <thead>
-                        <tr>
-                            <th style="width: 50px;" class="bulk-edit-column d-none">
-                                <input type="checkbox" id="selectAll" onchange="toggleSelectAll()">
-                            </th>
-                            <th style="width: 80px; cursor: pointer;" onclick="sortByColumn('cover')" id="header-cover" class="d-none d-md-table-cell">
-                                Cover
-                            </th>
-                            <th style="cursor: pointer;" onclick="sortByColumn('title')" id="header-title">
-                                Title
-                            </th>
-                            <th style="cursor: pointer;" onclick="sortByColumn('author')" id="header-author" class="d-none d-lg-table-cell">
-                                Author
-                            </th>
-                            <th style="cursor: pointer;" onclick="sortByColumn('series')" id="header-series" class="d-none d-xl-table-cell">
-                                Series
-                            </th>
-                            <th style="cursor: pointer;" onclick="sortByColumn('genre')" id="header-genre" class="d-none d-xl-table-cell">
-                                Genre
-                            </th>
-                            <th style="cursor: pointer;" onclick="sortByColumn('page_count')" id="header-page_count" class="d-none d-xl-table-cell">
-                                Pages
-                            </th>
-                            <th style="cursor: pointer;" onclick="sortByColumn('word_count')" id="header-word_count" class="d-none d-xl-table-cell">
-                                Words
-                            </th>
-                            <th style="cursor: pointer;" onclick="sortByColumn('date_published')" id="header-date_published" class="d-none d-xl-table-cell">
-                                Published
-                            </th>
-                            <th>Actions</th>
-                        </tr>
-                    </thead>
-                    <tbody id="books-table-body">
-                        <!-- Book rows will be inserted here -->
-                    </tbody>
-                </table>
-            </div>
-        </div>
-        
-        <!-- Empty State -->
-        <div id="empty-state" class="text-center py-5 d-none">
-            <i class="fas fa-search fa-3x text-muted mb-3"></i>
-            <h3 class="text-muted">No books found</h3>
-            <p class="text-muted">Try adjusting your search criteria or add some books.</p>
-        </div>
+<!-- Status (exclusive) + Comics/Reprints (additive show-toggles, hidden by default, releases only) -->
+<div class="d-flex justify-content-center align-items-center flex-wrap gap-4 mb-3">
+    <div class="stat-chips d-flex">
+        <div class="stat-chip active" id="stOwned"    style="color:#198754;" onclick="setStatus('owned')"><i class="fas fa-circle-check"></i><span>Owned</span></div>
+        <div class="stat-chip"        id="stUnowned"  style="color:#0d6efd;" onclick="setStatus('unowned')"><i class="fas fa-bookmark"></i><span>Unowned</span></div>
+        <div class="stat-chip"        id="stUpcoming" style="color:#e0a800;" onclick="setStatus('upcoming')"><i class="fas fa-calendar-day"></i><span>Upcoming</span></div>
+        <div class="stat-chip"        id="stNew"      style="color:#6f42c1;" onclick="setStatus('new')"><i class="fas fa-star"></i><span>New</span></div>
+    </div>
+    <div class="stat-chips d-flex" id="subToggles" style="display:none !important;">
+        <div class="stat-chip" id="chipComics"   style="color:#fd7e14;" title="Hidden by default — click to show comics" onclick="toggleCat('comics')"><i class="fas fa-book-open"></i><span>Comics</span></div>
+        <div class="stat-chip" id="chipReprints" style="color:#6c757d;" title="Hidden by default — click to show reprints" onclick="toggleCat('reprints')"><i class="fas fa-clock-rotate-left"></i><span>Reprints</span></div>
     </div>
 </div>
 
-<!-- Add New Book Modal -->
-<div class="modal fade" id="addBookModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-fullscreen-sm-down">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-plus me-2"></i>Add New Book
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="addBookForm">
-                    <!-- Book Cover Section -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <label class="form-label">Book Cover</label>
-                            <div class="row">
-                                <div class="col-12 col-md-auto mb-3 mb-md-0 text-center text-md-start">
-                                    <div id="addBookCover" class="book-cover-container mx-auto mx-md-0" style="width: 120px; height: 180px; position: relative; border: 2px dashed #dee2e6; border-radius: 8px; overflow: hidden; background: #f8f9fa;">
-                                        <img id="addBookCoverImg" src="" alt="Book Cover" style="width: 100%; height: 100%; object-fit: cover; display: none;">
-                                        <div class="book-cover-fallback text-center" style="display: flex; align-items: center; justify-content: center; height: 100%; color: #adb5bd;">
-                                            <i class="fas fa-book fa-3x"></i>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-12 col-md">
-                                    <input type="file" class="form-control mb-2" id="addCoverUpload" accept="image/*" onchange="handleAddCoverUpload(event)">
-                                    <small class="text-muted d-block mb-2">Upload a cover image (JPG, PNG, etc.)</small>
-                                    <div class="input-group input-group-sm">
-                                        <input type="url" class="form-control" id="addCoverUrl" placeholder="Or paste image URL: https://example.com/cover.jpg">
-                                        <button class="btn btn-outline-primary" type="button" onclick="downloadCoverFromUrl('add')" title="Download from URL">
-                                            <i class="fas fa-download"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 mb-3">
-                            <label for="bookTitle" class="form-label">Title <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="bookTitle" name="title" required>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 col-md-6 mb-3">
-                            <label for="authorFirst" class="form-label">Author First Name</label>
-                            <input type="text" class="form-control" id="authorFirst" name="author_name_first">
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label for="authorLast" class="form-label">Author Last Name</label>
-                            <input type="text" class="form-control" id="authorLast" name="author_name_second">
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 col-md-4 mb-3">
-                            <label for="wordCount" class="form-label">Word Count</label>
-                            <input type="number" class="form-control" id="wordCount" name="word_count" min="0">
-                        </div>
-                        <div class="col-12 col-md-4 mb-3">
-                            <label for="pageCount" class="form-label">Page Count</label>
-                            <input type="number" class="form-control" id="pageCount" name="page_count" min="0">
-                        </div>
-                        <div class="col-12 col-md-4 mb-3">
-                            <label for="datePublished" class="form-label">Date Published</label>
-                            <input type="date" class="form-control" id="datePublished" name="date_published">
-                        </div>
-                    </div>
-                    
-                    <div class="row">
-                        <div class="col-md-12 mb-3">
-                            <label for="universe" class="form-label">Universe</label>
-                            <input type="text" class="form-control" id="universe" name="universe" placeholder="e.g., Cosmere, Maasverse, Discworld">
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-8 mb-3">
-                            <label for="series" class="form-label">Series</label>
-                            <input type="text" class="form-control" id="series" name="series">
-                        </div>
-                        <div class="col-md-4 mb-3">
-                            <label for="seriesNumber" class="form-label">Series Number</label>
-                            <input type="number" class="form-control" id="seriesNumber" name="series_number" step="0.1" min="0">
-                        </div>
-                    </div>
-                    
-                    <div class="row">
-                        <div class="col-md-6 mb-3">
-                            <label for="genre" class="form-label">Genre</label>
-                            <input type="text" class="form-control" id="genre" name="genre">
-                        </div>
-                        <div class="col-md-6 mb-3">
-                            <label for="authorGender" class="form-label">Author Gender</label>
-                            <select class="form-select" id="authorGender" name="author_gender">
-                                <option value="">Select...</option>
-                                <option value="M">Male</option>
-                                <option value="F">Female</option>
-                                <option value="NB">Non-binary</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                    </div>
-                    
-                    <div class="row">
-                        <div class="col-md-12 mb-3">
-                            <label for="isbnId" class="form-label">ISBN</label>
-                            <input type="number" class="form-control" id="isbnId" name="isbn_id">
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="submitNewBook()">Add Book</button>
+<!-- Settings (followed authors + about) -->
+<div class="collapse mb-3" id="settingsPanel">
+    <div class="card"><div class="card-body">
+        <h6 class="mb-1"><i class="fas fa-circle-info me-1 text-primary"></i>About</h6>
+        <p class="text-muted small mb-3">
+            Your whole book lifecycle on one page: <span style="color:#198754;">Owned</span> /
+            <span style="color:#0d6efd;">Unowned</span> books in your library, plus
+            <span style="color:#e0a800;">Upcoming</span> / <span style="color:#6f42c1;">New</span>
+            releases from authors you follow (Google Books + OpenLibrary). Word counts are estimates —
+            Calibre provides real counts once a book is owned.
+        </p>
+        <h6 class="mb-1"><i class="fas fa-user-pen me-1 text-primary"></i>Followed authors
+            <span id="watchCount" class="text-muted small fw-normal"></span></h6>
+        <div class="mb-2">
+            <label class="form-label small mb-1">Follow an author you haven't read</label>
+            <div class="input-group input-group-sm">
+                <input type="text" class="form-control" id="extraAuthorInput" placeholder="e.g. Rebecca Yarros">
+                <button class="btn btn-outline-primary" onclick="addExtra()">Add</button>
             </div>
         </div>
-    </div>
+        <div class="small text-muted mb-1">Toggle an author off to mute their releases.</div>
+        <div id="manageAuthors" class="border rounded p-2"><div class="text-muted small">Loading…</div></div>
+    </div></div>
 </div>
 
-<!-- Add Series Modal -->
-<div class="modal fade" id="addSeriesModal" tabindex="-1">
-    <div class="modal-dialog modal-xl modal-fullscreen-sm-down">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-layer-group me-2"></i>Add Series
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="addSeriesForm">
-                    <!-- Series-wide fields -->
-                    <div class="card mb-4">
-                        <div class="card-header bg-light">
-                            <h6 class="mb-0">Series Information</h6>
-                        </div>
-                        <div class="card-body">
-                            <div class="row">
-                                <div class="col-md-12 mb-3">
-                                    <label for="seriesName" class="form-label">Series Name <span class="text-danger">*</span></label>
-                                    <div class="position-relative">
-                                        <input type="text" class="form-control" id="seriesName" placeholder="Type to search or add new..." autocomplete="off" required>
-                                        <div id="seriesNameDropdown" class="list-group position-absolute w-100" style="max-height: 200px; overflow-y: auto; z-index: 1000; display: none; border: 1px solid #dee2e6; border-radius: 0.25rem; box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);"></div>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <div class="row">
-                                <div class="col-md-6 mb-3">
-                                    <label for="seriesAuthorFirst" class="form-label">Author First Name</label>
-                                    <input type="text" class="form-control" id="seriesAuthorFirst">
-                                </div>
-                                <div class="col-md-6 mb-3">
-                                    <label for="seriesAuthorLast" class="form-label">Author Last Name</label>
-                                    <input type="text" class="form-control" id="seriesAuthorLast">
-                                </div>
-                            </div>
-
-                            <div class="row">
-                                <div class="col-md-4 mb-3">
-                                    <label for="seriesGenre" class="form-label">Genre</label>
-                                    <div class="position-relative">
-                                        <input type="text" class="form-control" id="seriesGenre" placeholder="Type to search or add new..." autocomplete="off">
-                                        <div id="seriesGenreDropdown" class="list-group position-absolute w-100" style="max-height: 200px; overflow-y: auto; z-index: 1000; display: none; border: 1px solid #dee2e6; border-radius: 0.25rem; box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);"></div>
-                                    </div>
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <label for="seriesAuthorGender" class="form-label">Author Gender</label>
-                                    <select class="form-select" id="seriesAuthorGender">
-                                        <option value="">Select...</option>
-                                        <option value="M">Male</option>
-                                        <option value="F">Female</option>
-                                        <option value="NB">Non-binary</option>
-                                        <option value="Other">Other</option>
-                                    </select>
-                                </div>
-                                <div class="col-md-4 mb-3">
-                                    <label for="seriesUniverse" class="form-label">Universe</label>
-                                    <div class="position-relative">
-                                        <input type="text" class="form-control" id="seriesUniverse" placeholder="Type to search or add new..." autocomplete="off">
-                                        <div id="seriesUniverseDropdown" class="list-group position-absolute w-100" style="max-height: 200px; overflow-y: auto; z-index: 1000; display: none; border: 1px solid #dee2e6; border-radius: 0.25rem; box-shadow: 0 0.5rem 1rem rgba(0, 0, 0, 0.15);"></div>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <!-- Books in series -->
-                    <div class="card">
-                        <div class="card-header bg-light d-flex justify-content-between align-items-center">
-                            <h6 class="mb-0">Books in Series</h6>
-                            <button type="button" class="btn btn-sm btn-primary" onclick="addSeriesBookRow()">
-                                <i class="fas fa-plus me-1"></i>Add Book
-                            </button>
-                        </div>
-                        <div class="card-body">
-                            <div id="seriesBooksList">
-                                <!-- Book rows will be added here dynamically -->
-                            </div>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="submitNewSeries()">Add Series</button>
-            </div>
-        </div>
-    </div>
+<!-- Bulk-select action bar (#93) -->
+<div id="bulkBar" class="d-none align-items-center flex-wrap gap-2 mb-2 p-2 border rounded bg-light">
+    <span class="fw-medium small"><span id="bulkCount">0</span> selected</span>
+    <button class="btn btn-sm btn-outline-secondary" onclick="selectAllLoaded()">Select all loaded</button>
+    <button class="btn btn-sm btn-outline-secondary" onclick="clearSelection()">Clear</button>
+    <button class="btn btn-sm btn-primary ms-auto" id="bulkEditBtn" onclick="bulkOpen()" disabled>
+        <i class="fas fa-pen-to-square me-1"></i>Edit selected</button>
+    <button class="btn btn-sm btn-outline-danger" id="bulkDeleteBtn" onclick="bulkDelete()" disabled>
+        <i class="fas fa-trash me-1"></i>Delete selected</button>
 </div>
 
-<!-- Edit Book Modal -->
-<div class="modal fade" id="editBookModal" tabindex="-1">
-    <div class="modal-dialog modal-lg modal-fullscreen-sm-down">
-        <div class="modal-content">
-            <div class="modal-header">
-                <h5 class="modal-title">
-                    <i class="fas fa-edit me-2"></i>Edit Book
-                </h5>
-                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-            </div>
-            <div class="modal-body">
-                <form id="editBookForm">
-                    <input type="hidden" id="editBookId" name="book_id">
+<div class="text-muted small mb-2" id="shelfCount"></div>
+<div class="row" id="booksGrid"><div class="col-12 text-muted text-center py-5">Loading…</div></div>
+<div id="scrollSentinel" style="height:1px;"></div>
 
-                    <!-- Book Cover Section -->
-                    <div class="row mb-4">
-                        <div class="col-12">
-                            <label class="form-label">Book Cover</label>
-                            <div class="row">
-                                <div class="col-12 col-md-auto mb-3 mb-md-0 text-center text-md-start">
-                                    <div id="editBookCover" class="book-cover-container mx-auto mx-md-0" style="width: 120px; height: 180px; position: relative; border: 2px dashed #dee2e6; border-radius: 8px; overflow: hidden; background: #f8f9fa;">
-                                        <img id="editBookCoverImg" src="" alt="Book Cover" style="width: 100%; height: 100%; object-fit: cover; display: none;">
-                                        <div class="book-cover-fallback text-center" style="display: flex; align-items: center; justify-content: center; height: 100%; color: #adb5bd;">
-                                            <i class="fas fa-book fa-3x"></i>
-                                        </div>
-                                    </div>
-                                </div>
-                                <div class="col-12 col-md">
-                                    <input type="file" class="form-control mb-2" id="editCoverUpload" accept="image/*" onchange="handleEditCoverUpload(event)">
-                                    <small class="text-muted d-block mb-2">Upload a new cover image (JPG, PNG, etc.)</small>
-                                    <div class="input-group input-group-sm">
-                                        <input type="url" class="form-control" id="editCoverUrl" placeholder="Or paste image URL: https://example.com/cover.jpg">
-                                        <button class="btn btn-outline-primary" type="button" onclick="downloadCoverFromUrl('edit')" title="Download from URL">
-                                            <i class="fas fa-download"></i>
-                                        </button>
-                                    </div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
 
-                    <!-- Reading sessions (#57): read-only stats from the ereader
-                         session log; populated by loadBookSessionStats(). -->
-                    <div class="row mb-4" id="editBookSessionStatsRow" style="display:none;">
-                        <div class="col-12">
-                            <div class="card bg-light border-0">
-                                <div class="card-body py-3">
-                                    <h6 class="mb-2"><i class="fas fa-chart-line me-2"></i>Reading sessions</h6>
-                                    <div id="editBookSessionStats" class="small text-muted">Loading…</div>
-                                </div>
-                            </div>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 mb-3">
-                            <label for="editBookTitle" class="form-label">Title <span class="text-danger">*</span></label>
-                            <input type="text" class="form-control" id="editBookTitle" name="title" required>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 col-md-6 mb-3">
-                            <label for="editAuthorFirst" class="form-label">Author First Name</label>
-                            <input type="text" class="form-control" id="editAuthorFirst" name="author_name_first">
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label for="editAuthorLast" class="form-label">Author Last Name</label>
-                            <input type="text" class="form-control" id="editAuthorLast" name="author_name_second">
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 col-md-4 mb-3">
-                            <label for="editWordCount" class="form-label">Word Count</label>
-                            <input type="number" class="form-control" id="editWordCount" name="word_count" min="0">
-                        </div>
-                        <div class="col-12 col-md-4 mb-3">
-                            <label for="editPageCount" class="form-label">Page Count</label>
-                            <input type="number" class="form-control" id="editPageCount" name="page_count" min="0">
-                        </div>
-                        <div class="col-12 col-md-4 mb-3">
-                            <label for="editDatePublished" class="form-label">Date Published</label>
-                            <input type="date" class="form-control" id="editDatePublished" name="date_published">
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 mb-3">
-                            <label for="editUniverse" class="form-label">Universe</label>
-                            <input type="text" class="form-control" id="editUniverse" name="universe" placeholder="e.g., Cosmere, Maasverse, Discworld">
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 col-md-8 mb-3">
-                            <label for="editSeries" class="form-label">Series</label>
-                            <input type="text" class="form-control" id="editSeries" name="series">
-                        </div>
-                        <div class="col-12 col-md-4 mb-3">
-                            <label for="editSeriesNumber" class="form-label">Series Number</label>
-                            <input type="number" class="form-control" id="editSeriesNumber" name="series_number" step="0.1" min="0">
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-12 col-md-6 mb-3">
-                            <label for="editGenre" class="form-label">Genre</label>
-                            <div class="position-relative">
-                                <input type="text" class="form-control" id="editGenre" name="genre" placeholder="Select or type genre" autocomplete="off">
-                                <div id="editGenreDropdown" class="genre-dropdown list-group position-absolute w-100" style="display: none;"></div>
-                            </div>
-                        </div>
-                        <div class="col-12 col-md-6 mb-3">
-                            <label for="editAuthorGender" class="form-label">Author Gender</label>
-                            <select class="form-select" id="editAuthorGender" name="author_gender">
-                                <option value="">Select...</option>
-                                <option value="M">Male</option>
-                                <option value="F">Female</option>
-                                <option value="NB">Non-binary</option>
-                                <option value="Other">Other</option>
-                            </select>
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-12 mb-3">
-                            <label for="editIsbnId" class="form-label">ISBN</label>
-                            <input type="number" class="form-control" id="editIsbnId" name="isbn_id">
-                        </div>
-                    </div>
-
-                    <div class="row">
-                        <div class="col-md-12 mb-3">
-                            <label for="editTags" class="form-label">Tags</label>
-                            <div class="position-relative">
-                                <input type="text" class="form-control" id="editTags" placeholder="Type to search or add tags..." autocomplete="off">
-                                <div id="editTagsDropdown" class="tag-dropdown list-group position-absolute w-100" style="display: none; z-index: 1050; max-height: 200px; overflow-y: auto;"></div>
-                            </div>
-                            <div id="selectedTags" class="mt-2 d-flex flex-wrap gap-2"></div>
-                            <small class="text-muted">Press Enter or click to add tags. Click × to remove.</small>
-                        </div>
-                    </div>
-                </form>
-            </div>
-            <div class="modal-footer">
-                <button type="button" class="btn btn-danger me-auto" onclick="deleteBook()">
-                    <i class="fas fa-trash me-1"></i>Delete
-                </button>
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="submitEditBook()">Save Changes</button>
-            </div>
-        </div>
-    </div>
-</div>
-
-<!-- Bulk Edit Modal -->
+<!-- Bulk-edit modal (#93) -->
 <div class="modal fade" id="bulkEditModal" tabindex="-1">
-    <div class="modal-dialog modal-fullscreen-sm-down">
+    <div class="modal-dialog modal-dialog-centered">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title">Bulk Edit <span id="bulkEditCount"></span> Books</h5>
+                <h5 class="modal-title">Bulk edit <span id="bulkModalCount" class="text-muted small fw-normal"></span></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body">
-                <p class="text-muted mb-4">Select which properties to update for the selected books. Leave fields blank to keep existing values.</p>
-
-                <div class="mb-3">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="bulkEditGenreCheck" onchange="toggleBulkEditField('Genre')">
-                        <label class="form-check-label" for="bulkEditGenreCheck">
-                            Update Genre
-                        </label>
-                    </div>
-                    <div class="position-relative">
-                        <input type="text" class="form-control mt-2" id="bulkEditGenre" placeholder="Select or type genre" autocomplete="off" disabled>
-                        <div id="bulkGenreDropdown" class="genre-dropdown list-group position-absolute w-100" style="display: none;"></div>
-                    </div>
-                </div>
-
-                <div class="mb-3">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="bulkEditAuthorGenderCheck" onchange="toggleBulkEditField('AuthorGender')">
-                        <label class="form-check-label" for="bulkEditAuthorGenderCheck">
-                            Update Author Gender
-                        </label>
-                    </div>
-                    <select class="form-select mt-2" id="bulkEditAuthorGender" disabled>
-                        <option value="">Select...</option>
-                        <option value="M">Male</option>
-                        <option value="F">Female</option>
-                        <option value="NB">Non-binary</option>
-                        <option value="Other">Other</option>
-                    </select>
-                </div>
-
-                <hr>
-
-                <div class="mb-0">
-                    <div class="form-check">
-                        <input class="form-check-input" type="checkbox" id="bulkEditDeleteCheck">
-                        <label class="form-check-label text-danger" for="bulkEditDeleteCheck">
-                            <strong>Delete selected books</strong>
-                        </label>
-                    </div>
-                    <small class="text-muted">This action cannot be undone.</small>
+                <p class="text-muted small">Only the fields you fill in are applied to every selected book.
+                    Leave a field blank to keep each book's existing value.</p>
+                <div class="row g-2">
+                    <div class="col-6"><label class="form-label small mb-0">Author first name</label>
+                        <input class="form-control form-control-sm" id="blkAuthorFirst" list="bkeAuthorFirstList" autocomplete="off"></div>
+                    <div class="col-6"><label class="form-label small mb-0">Author last name</label>
+                        <input class="form-control form-control-sm" id="blkAuthorLast" list="bkeAuthorLastList" autocomplete="off"></div>
+                    <div class="col-8"><label class="form-label small mb-0">Series</label>
+                        <input class="form-control form-control-sm" id="blkSeries" list="bkeSeriesList" autocomplete="off"></div>
+                    <div class="col-4"><label class="form-label small mb-0">Series #</label>
+                        <input class="form-control form-control-sm" id="blkSeriesNum" type="number" step="0.1"></div>
+                    <div class="col-6"><label class="form-label small mb-0">Universe</label>
+                        <input class="form-control form-control-sm" id="blkUniverse" list="bkeUniverseList" autocomplete="off"></div>
+                    <div class="col-6"><label class="form-label small mb-0">Genre</label>
+                        <input class="form-control form-control-sm" id="blkGenre" list="bkeGenreList" autocomplete="off"></div>
                 </div>
             </div>
             <div class="modal-footer">
-                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal" title="Cancel">
-                    <i class="fas fa-times"></i>
-                </button>
-                <button type="button" class="btn btn-primary" onclick="submitBulkEdit()">Apply Changes</button>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-primary" onclick="bulkApply()">Apply to selected</button>
             </div>
         </div>
     </div>
 </div>
-{% endblock %}
 
-{% block extra_scripts %}
+<!-- Dedicated Book-details modal (modal-lg) — used by every status -->
+<div class="modal fade" id="bookDetailsModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title text-truncate me-2" id="bdTitle"></h5>
+                <div class="ms-auto d-flex align-items-center gap-1">
+                    <button type="button" class="btn btn-sm btn-outline-secondary border-0 px-2" id="bdPrev" onclick="bdNavTo(-1)" title="Previous (←)" aria-label="Previous"><i class="fas fa-chevron-left"></i></button>
+                    <button type="button" class="btn btn-sm btn-outline-secondary border-0 px-2" id="bdNext" onclick="bdNavTo(1)" title="Next (→)" aria-label="Next"><i class="fas fa-chevron-right"></i></button>
+                    <button type="button" class="btn-close ms-1" data-bs-dismiss="modal"></button>
+                </div>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3">
+                    <div class="col-4 col-sm-3"><div class="bd-cover" id="bdCover"></div></div>
+                    <div class="col-8 col-sm-9">
+                        <div id="bdFields"></div>
+                        <div id="bdActions" class="d-flex flex-wrap gap-2 mt-3"></div>
+                    </div>
+                </div>
+                <div id="bdSeries" class="mt-3"></div>
+                <hr>
+                <div id="bdAuthorReads" class="text-muted small">Loading your reads…</div>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<!-- Series view (#96) — every book in a series, click any to open its details -->
+<div class="modal fade" id="seriesModal" tabindex="-1">
+    <div class="modal-dialog modal-lg modal-dialog-centered modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="srTitle"></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body">
+                <div class="row g-3" id="srGrid"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Merge Duplicates Modal (#131): two-slot search → compare → merge -->
+<div class="modal fade" id="mergeDupModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-code-branch me-2"></i>Merge Duplicates</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small">Pick two records for the <em>same</em> book. <strong>Keep</strong> is the record that survives; <strong>Remove</strong> is merged into it and deleted. Search each slot separately — they needn't share a title.</p>
+        <div class="row g-3">
+          <div class="col-md-6">
+            <label class="form-label fw-bold small text-success"><i class="fas fa-check-circle me-1"></i>Keep (survivor)</label>
+            <input type="text" class="form-control form-control-sm mb-1" id="mergeSearchA" placeholder="Search a book…" oninput="mergeSearch('A')" autocomplete="off">
+            <div id="mergeResultsA" class="list-group small" style="max-height:180px;overflow:auto;"></div>
+            <div id="mergeSelA" class="mt-2"></div>
+          </div>
+          <div class="col-md-6">
+            <label class="form-label fw-bold small text-danger"><i class="fas fa-minus-circle me-1"></i>Remove (merged in)</label>
+            <input type="text" class="form-control form-control-sm mb-1" id="mergeSearchB" placeholder="Search a book…" oninput="mergeSearch('B')" autocomplete="off">
+            <div id="mergeResultsB" class="list-group small" style="max-height:180px;overflow:auto;"></div>
+            <div id="mergeSelB" class="mt-2"></div>
+          </div>
+        </div>
+        <div class="text-center my-2">
+          <button type="button" class="btn btn-sm btn-outline-secondary" id="mergeSwapBtn" onclick="mergeSwap()" style="display:none;"><i class="fas fa-right-left me-1"></i>Swap keep/remove</button>
+        </div>
+        <div id="mergeCompare" class="mt-2"></div>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+        <button type="button" class="btn btn-danger" id="mergeSubmitBtn" onclick="submitMerge()" disabled><i class="fas fa-code-branch me-1"></i>Merge</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Newly Imported tray (#137): recent Calibre/ABS imports, created-vs-linked + dup flag -->
+<div class="modal fade" id="newImportModal" tabindex="-1">
+  <div class="modal-dialog modal-lg modal-dialog-scrollable modal-fullscreen-sm-down">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title"><i class="fas fa-inbox me-2"></i>Newly Imported</h5>
+        <button type="button" class="btn btn-sm btn-outline-secondary ms-auto me-2" onclick="dismissAllImports()">Mark all reviewed</button>
+        <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+      </div>
+      <div class="modal-body">
+        <p class="text-muted small mb-2">Ebooks &amp; audiobooks the sync brought in. <span class="badge bg-success">Created</span> made a new book; <span class="badge bg-info text-dark">Linked</span> merged into an existing one. A <span class="badge bg-warning text-dark">possible duplicate</span> flag means another record shares the title &amp; author — use Merge to combine.</p>
+        <div id="newImportList"><div class="text-muted small">Loading…</div></div>
+      </div>
+    </div>
+  </div>
+</div>
+
 <script>
-let allBooks = [];
-let filteredBooks = [];
-let filterOptions = {};
-let showReadBooksOnly = false;
-let showMissingDataOnly = false;
+let shelfStatus = 'owned';
+let showComics = false, showReprints = false;
+let cardReg = {};   // cardKey → card, persists across shelves so siblings stay openable
+let cards = [], shelfTotal = 0, shelfSkip = 0, shelfLoading = false, _searchTimer = null, shelfGen = 0;
+let sortBy = 'author', sortDir = 'asc', coverFilter = 'all';
+const SORT_LABELS = { author: 'Author', title: 'Title', series: 'Series', date: 'Release date', words: 'Word count' };
+const PAGE = 60;
 
-// Toggle read books filter
-function toggleReadFilter() {
-    showReadBooksOnly = !showReadBooksOnly;
-    updateFilterButtonStates();
-    applyFilters();
+function setCoverFilter(v) {
+    coverFilter = v;
+    ['All', 'Yes', 'No'].forEach(x => document.getElementById('cov' + x)
+        .querySelector('i').classList.toggle('invisible', x.toLowerCase() !== ({ all: 'all', yes: 'yes', no: 'no' }[v])));
+    loadShelf(true);
 }
 
-// Toggle missing data filter
-function toggleMissingDataFilter() {
-    showMissingDataOnly = !showMissingDataOnly;
-    console.log('Missing data filter toggled:', showMissingDataOnly);
-    updateFilterButtonStates();
-    applyFilters();
+function setSort(by) {
+    if (sortBy === by) sortDir = (sortDir === 'asc' ? 'desc' : 'asc');
+    else { sortBy = by; sortDir = 'asc'; }
+    updateSortUI(); loadShelf(true);
+}
+function toggleSortDir() { sortDir = (sortDir === 'asc' ? 'desc' : 'asc'); updateSortUI(); loadShelf(true); }
+function updateSortUI() {
+    document.getElementById('sortLabel').textContent = SORT_LABELS[sortBy] || 'Author';
+    document.getElementById('sortDirIcon').className =
+        (sortDir === 'asc' ? 'fas fa-sort-amount-down-alt' : 'fas fa-sort-amount-up') + ' me-1';
 }
 
-// Check if book has missing data
-function hasMissingData(book) {
-    // Returns true if ANY of these fields are missing
-    const missing = !book.cover ||
-           !book.genre ||
-           !book.word_count ||
-           !book.page_count ||
-           !book.author_name_first ||
-           !book.author_name_second ||
-           !book.date_published ||
-           !book.author_gender;
-    return missing;
+const isRemote = () => shelfStatus === 'upcoming' || shelfStatus === 'new';
+const cardKey = c => (c.kind === 'local' ? 'L' + c.book_id : 'R' + c.news_id);
+
+function esc(s) { return (s || '').replace(/[&<>"]/g, m => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[m])); }
+// Display-only title fallback for books with a blank title — shown in the UI but
+// never written back to the field (#106).
+const dispTitle = t => (t && String(t).trim()) ? t : 'Untitled';
+// Cover URL for a card: local file (cache-busted by mtime) or the remote thumbnail.
+function coverSrc(c) {
+    const base = window.APP_BASE_PATH || '';
+    if (c.kind === 'local') return c.has_cover ? `${base}/static/covers/${c.book_id}.jpg?v=${c.cover_version || 0}` : '';
+    return c.cover_url || '';
+}
+function phCover(c, disp) {
+    const num = c.series_number != null ? ` #${c.series_number}` : '';
+    const seriesHtml = c.series
+        ? `<div class="books-ph-series">${esc(c.series)}${num}</div>` : '';
+    return `<div class="books-ph" style="display:${disp};">
+        <div class="books-ph-head">
+            <div class="books-ph-title">${esc(dispTitle(c.title))}</div>
+            ${seriesHtml}
+        </div>
+        <div class="books-ph-author">${esc(c.author)}</div></div>`;
 }
 
-// Wait for GreatReads to be available
-function waitForGreatReads(callback, maxAttempts = 50) {
-    let attempts = 0;
-    const checkInterval = setInterval(() => {
-        attempts++;
-        if (typeof GreatReads !== 'undefined' && GreatReads.apiCall) {
-            clearInterval(checkInterval);
-            callback();
-        } else if (attempts >= maxAttempts) {
-            clearInterval(checkInterval);
-            console.error('GreatReads not available after maximum attempts');
-            showErrorState();
-        }
-    }, 100);
-}
-
-// Initialize when page loads
-waitForGreatReads(() => {
-    loadBooksData();
+document.addEventListener('DOMContentLoaded', async () => {
+    await loadShelf(true);
+    setupInfiniteScroll();
+    setupDetailSwipe();
+    refreshImportBadge();          // #137 Newly-Imported badge
+    _maybeOpenMergeFromUrl();      // #131 deep-link: /books?merge=a,b
+    // the shared Edit Book module (book_edit.js) wires autocomplete + preloads lists
 });
 
-async function loadBooksData() {
-    try {
-        const books = await GreatReads.apiCall('/books/?limit=10000');
-        allBooks = books;
-
-        // Extract unique genres for filter
-        const genres = [...new Set(books.map(b => b.genre).filter(g => g))];
-        populateGenreFilter(genres);
-
-        // Populate tag filter
-        populateTagFilter();
-
-        applyFilters();
-
-        // Hide loading, show content
-        document.getElementById('loading-state').classList.add('d-none');
-        document.getElementById('books-container').classList.remove('d-none');
-    } catch (error) {
-        console.error('Failed to load books:', error);
-        showErrorState();
-    }
-}
-
-// Reload books data while preserving current filters
-async function reloadBooksData() {
-    try {
-        const books = await GreatReads.apiCall('/books/?limit=10000');
-        allBooks = books;
-
-        // Extract unique genres for filter
-        const genres = [...new Set(books.map(b => b.genre).filter(g => g))];
-        populateGenreFilter(genres);
-
-        // Populate tag filter
-        populateTagFilter();
-
-        // Restore button states based on current filter variables
-        updateFilterButtonStates();
-
-        // Reapply existing filters (this will filter out books that no longer match)
-        applyFilters();
-    } catch (error) {
-        console.error('Failed to reload books:', error);
-        GreatReads.showToast('Failed to reload books', 'error');
-    }
-}
-
-// Update filter button visual states to match current filter variables
-function updateFilterButtonStates() {
-    const readBtn = document.getElementById('readFilterBtn');
-    const missingDataBtn = document.getElementById('missingDataBtn');
-
-    // Update Read Books button - remove all possible classes first
-    readBtn.classList.remove('btn-success', 'btn-outline-success');
-    if (showReadBooksOnly) {
-        readBtn.classList.add('btn-success');
-    } else {
-        readBtn.classList.add('btn-outline-success');
-    }
-    // Force reflow
-    void readBtn.offsetWidth;
-
-    // Update Missing Data button - remove all possible classes first
-    missingDataBtn.classList.remove('btn-danger', 'btn-outline-danger');
-    if (showMissingDataOnly) {
-        missingDataBtn.classList.add('btn-danger');
-    } else {
-        missingDataBtn.classList.add('btn-outline-danger');
-    }
-    // Force reflow
-    void missingDataBtn.offsetWidth;
-}
-
-function populateGenreFilter(genres) {
-    const genreFilter = document.getElementById('genreFilter');
-    genres.sort().forEach(genre => {
-        const option = document.createElement('option');
-        option.value = genre;
-        option.textContent = genre;
-        genreFilter.appendChild(option);
-    });
-}
-
-function populateTagFilter() {
-    const tagFilter = document.getElementById('tagFilter');
-    // Clear existing options except the first one
-    tagFilter.innerHTML = '<option value="">All Tags</option>';
-
-    // Get unique tags from all books
-    const uniqueTags = new Set();
-    allBooks.forEach(book => {
-        if (book.tags && book.tags.length > 0) {
-            book.tags.forEach(tag => uniqueTags.add(tag));
-        }
-    });
-
-    // Sort and add to dropdown
-    Array.from(uniqueTags).sort().forEach(tag => {
-        const option = document.createElement('option');
-        option.value = tag;
-        option.textContent = tag;
-        tagFilter.appendChild(option);
-    });
-}
-
-function applyFilters() {
-    const searchTerm = document.getElementById('searchInput').value.toLowerCase();
-    const genreFilter = document.getElementById('genreFilter').value;
-    const tagFilter = document.getElementById('tagFilter').value;
-
-    // Filter books
-    filteredBooks = allBooks.filter(book => {
-        const matchesSearch = !searchTerm ||
-            book.title.toLowerCase().includes(searchTerm) ||
-            (book.author && book.author.toLowerCase().includes(searchTerm)) ||
-            (book.universe && book.universe.toLowerCase().includes(searchTerm)) ||
-            (book.series && book.series.toLowerCase().includes(searchTerm));
-
-        const matchesGenre = !genreFilter || book.genre === genreFilter;
-
-        const matchesTag = !tagFilter || (book.tags && book.tags.includes(tagFilter));
-
-        const matchesReadFilter = !showReadBooksOnly || book.is_read;
-
-        const matchesMissingDataFilter = !showMissingDataOnly || hasMissingData(book);
-
-        return matchesSearch && matchesGenre && matchesTag && matchesReadFilter && matchesMissingDataFilter;
-    });
-
-    console.log(`Filtered ${filteredBooks.length} books from ${allBooks.length} total`);
-    if (showMissingDataOnly) {
-        const booksWithMissingData = allBooks.filter(b => hasMissingData(b));
-        console.log(`Books with missing data: ${booksWithMissingData.length}`);
-        console.log('Sample book with missing data:', booksWithMissingData[0]);
-        console.log('showMissingDataOnly:', showMissingDataOnly);
-        console.log('showReadBooksOnly:', showReadBooksOnly);
-    }
-
-    // Apply current sort if one is active
-    if (currentSortColumn) {
-        sortByColumn(currentSortColumn, true);
-    } else {
-        displayBooks();
-    }
-}
-
-function displayBooks() {
-    const tbody = document.getElementById('books-table-body');
-    tbody.innerHTML = '';
-
-    if (filteredBooks.length === 0) {
-        document.getElementById('books-container').classList.add('d-none');
-        document.getElementById('empty-state').classList.remove('d-none');
-        return;
-    }
-
-    document.getElementById('books-container').classList.remove('d-none');
-    document.getElementById('empty-state').classList.add('d-none');
-
-    filteredBooks.forEach(book => {
-        const row = createBookRow(book);
-        tbody.appendChild(row);
-    });
-}
-
-function createBookRow(book) {
-    const row = document.createElement('tr');
-
-    // Build series info with universe if present
-    let seriesInfo = '-';
-    if (book.series) {
-        if (book.universe) {
-            seriesInfo = `${book.universe}: ${book.series}${book.series_number !== null && book.series_number !== undefined ? ` #${book.series_number}` : ''}`;
-        } else {
-            seriesInfo = `${book.series}${book.series_number !== null && book.series_number !== undefined ? ` #${book.series_number}` : ''}`;
-        }
-    }
-
-    const publishedYear = book.year_published || '-';
-
-    const authorName = [book.author_name_first, book.author_name_second].filter(Boolean).join(' ') || '-';
-
-    // Format tags
-    const tagsHtml = book.tags && book.tags.length > 0
-        ? `<div class="mt-1">${book.tags.map(tag => `<span class="badge bg-gradient text-white me-1" style="font-size: 0.7rem;">${tag}</span>`).join('')}</div>`
-        : '';
-
-    // Check if bulk edit mode is active
-    const bulkEditClass = bulkEditMode ? '' : 'd-none';
-
-    const coverPath = book.cover ? `${book.id}.jpg` : '0.jpg';
-    const coverVersion = book.cover_version || 0;
-    const coverUrl = `${window.APP_BASE_PATH}/static/covers/${coverPath}${coverVersion ? `?v=${coverVersion}` : ''}`;
-
-    row.innerHTML = `
-        <td class="bulk-edit-column ${bulkEditClass}">
-            <input type="checkbox" class="book-checkbox" data-book-id="${book.id}">
-        </td>
-        <td class="d-none d-md-table-cell">
-            <div class="book-cover-container" style="width: 60px; height: 90px; position: relative; border: 1px solid #dee2e6; border-radius: 4px; overflow: hidden; background: #f8f9fa;">
-                <img src="${coverUrl}" alt="${book.title}"
-                     style="width: 100%; height: 100%; object-fit: cover;"
-                     onerror="if(!this.dataset.errorHandled){this.dataset.errorHandled='true';this.src='${window.APP_BASE_PATH}/static/covers/0.jpg';}">
-            </div>
-        </td>
-        <td>
-            <strong>${book.title}</strong>
-            <div class="d-md-none text-muted small mt-1">${authorName}</div>
-        </td>
-        <td class="d-none d-lg-table-cell">${authorName}</td>
-        <td class="d-none d-xl-table-cell">${seriesInfo}</td>
-        <td class="d-none d-xl-table-cell">${book.genre || '-'}${tagsHtml}</td>
-        <td class="d-none d-xl-table-cell">${book.page_count ? book.page_count.toLocaleString() : '-'}</td>
-        <td class="d-none d-xl-table-cell">${book.word_count ? book.word_count.toLocaleString() : '-'}</td>
-        <td class="d-none d-xl-table-cell">${publishedYear}</td>
-        <td>
-            <button class="btn btn-sm btn-outline-primary" onclick="editBook(${book.id})" title="Edit" tabindex="-1">
-                <i class="fas fa-edit"></i>
-            </button>
-        </td>
-    `;
-
-    return row;
-}
-
-async function editBook(bookId) {
-    try {
-        const book = await GreatReads.apiCall(`/books/${bookId}`);
-        showEditBookModal(book);
-    } catch (error) {
-        console.error('Failed to load book details:', error);
-    }
-}
-
-// Global variables
-let newBookCoverFile = null;
-let editBookCoverFile = null;
-let currentSortColumn = 'title';
-let currentSortDirection = 'asc';
-let bulkEditMode = false;
-let selectedEditTags = [];
-let allTags = [];
-
-function handleAddCoverUpload(event) {
-    const file = event.target.files[0];
-    if (file) {
-        newBookCoverFile = file;
-
-        // Preview the image
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const img = document.getElementById('addBookCoverImg');
-            const fallback = document.querySelector('#addBookCover .book-cover-fallback');
-
-            img.src = e.target.result;
-            img.style.display = 'block';
-            fallback.style.display = 'none';
-        };
-        reader.readAsDataURL(file);
-    }
-}
-
-function handleEditCoverUpload(event) {
-    const file = event.target.files[0];
-    if (file) {
-        editBookCoverFile = file;
-
-        // Preview the image
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const img = document.getElementById('editBookCoverImg');
-            const fallback = document.querySelector('#editBookCover .book-cover-fallback');
-
-            img.src = e.target.result;
-            img.style.display = 'block';
-            fallback.style.display = 'none';
-        };
-        reader.readAsDataURL(file);
-    }
-}
-
-function addNewBook() {
-    // Clear the form
-    document.getElementById('addBookForm').reset();
-    newBookCoverFile = null;
-
-    // Reset cover preview
-    const img = document.getElementById('addBookCoverImg');
-    const fallback = document.querySelector('#addBookCover .book-cover-fallback');
-    img.style.display = 'none';
-    fallback.style.display = 'flex';
-
-    // Show the modal
-    const modal = new bootstrap.Modal(document.getElementById('addBookModal'));
-    modal.show();
-}
-
-async function submitNewBook() {
-    const form = document.getElementById('addBookForm');
-
-    if (!form.checkValidity()) {
-        form.reportValidity();
-        return;
-    }
-
-    const formData = new FormData(form);
-    const bookData = {
-        title: formData.get('title'),
-        author_name_first: formData.get('author_name_first') || null,
-        author_name_second: formData.get('author_name_second') || null,
-        author_gender: formData.get('author_gender') || null,
-        word_count: formData.get('word_count') ? parseInt(formData.get('word_count')) : null,
-        page_count: formData.get('page_count') ? parseInt(formData.get('page_count')) : null,
-        date_published: formData.get('date_published') || null,
-        universe: formData.get('universe') || null,
-        series: formData.get('series') || null,
-        series_number: formData.get('series_number') !== null && formData.get('series_number') !== '' ? parseFloat(formData.get('series_number')) : null,
-        genre: formData.get('genre') || null,
-        isbn_id: formData.get('isbn_id') ? parseInt(formData.get('isbn_id')) : null,
-        cover: newBookCoverFile !== null
-    };
-
-    try {
-        const newBook = await GreatReads.apiCall('/books/', {
-            method: 'POST',
-            data: bookData
-        });
-
-        // Upload cover image if provided
-        if (newBookCoverFile) {
-            try {
-                await uploadCoverImage(newBook.id, newBookCoverFile);
-                GreatReads.showToast('Book and cover added successfully!', 'success');
-            } catch (coverError) {
-                console.error('Cover upload failed:', coverError);
-                GreatReads.showToast('Book added, but cover upload failed', 'warning');
-            }
-        } else {
-            GreatReads.showToast('Book added successfully!', 'success');
-        }
-
-        // Close modal
-        const modal = bootstrap.Modal.getInstance(document.getElementById('addBookModal'));
-        modal.hide();
-
-        // Reload books data while preserving filters
-        await reloadBooksData();
-    } catch (error) {
-        console.error('Failed to add book:', error);
-        GreatReads.showToast('Failed to add book', 'error');
-    }
-}
-
-// Series management
-let seriesBookCounter = 0;
-let seriesBookCovers = {}; // Store cover files for each book row
-
-function addNewSeries() {
-    // Clear the form
-    document.getElementById('addSeriesForm').reset();
-    document.getElementById('seriesBooksList').innerHTML = '';
-    seriesBookCounter = 0;
-    seriesBookCovers = {};
-
-    // Add initial book row
-    addSeriesBookRow();
-
-    // Setup autocomplete dropdowns
-    setupSeriesAutocomplete();
-
-    // Show the modal
-    const modal = new bootstrap.Modal(document.getElementById('addSeriesModal'));
-    modal.show();
-}
-
-function setupSeriesAutocomplete() {
-    // Get unique series names, genres, and universes from existing books
-    const seriesNames = [...new Set(allBooks.map(b => b.series).filter(s => s))].sort();
-    const genres = [...new Set(allBooks.map(b => b.genre).filter(g => g))].sort();
-    const universes = [...new Set(allBooks.map(b => b.universe).filter(u => u))].sort();
-
-    // Setup series name autocomplete
-    setupDropdownAutocomplete('seriesName', 'seriesNameDropdown', seriesNames, true);
-
-    // Setup genre autocomplete
-    setupDropdownAutocomplete('seriesGenre', 'seriesGenreDropdown', genres, true);
-
-    // Setup universe autocomplete
-    setupDropdownAutocomplete('seriesUniverse', 'seriesUniverseDropdown', universes, true);
-}
-
-function setupDropdownAutocomplete(inputId, dropdownId, options, allowNew = false) {
-    const input = document.getElementById(inputId);
-    const dropdown = document.getElementById(dropdownId);
-
-    if (!input || !dropdown) return;
-
-    // Remove existing listeners by cloning
-    const newInput = input.cloneNode(true);
-    input.parentNode.replaceChild(newInput, input);
-    const inputElement = document.getElementById(inputId);
-
-    // Show dropdown on focus
-    inputElement.addEventListener('focus', () => {
-        showDropdownOptions(inputId, dropdownId, options, '', allowNew);
-    });
-
-    // Filter dropdown as user types
-    inputElement.addEventListener('input', (e) => {
-        showDropdownOptions(inputId, dropdownId, options, e.target.value, allowNew);
-    });
-
-    // Handle selection
-    dropdown.addEventListener('click', (e) => {
-        e.preventDefault();
-        const item = e.target.closest('.list-group-item');
-        if (!item) return;
-
-        const value = item.dataset.value;
-        inputElement.value = value;
-        dropdown.style.display = 'none';
-    });
-
-    // Hide dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!inputElement.contains(e.target) && !dropdown.contains(e.target)) {
-            dropdown.style.display = 'none';
-        }
-    });
-}
-
-function showDropdownOptions(inputId, dropdownId, options, searchTerm, allowNew) {
-    const dropdown = document.getElementById(dropdownId);
-    const input = document.getElementById(inputId);
-
-    if (!dropdown || !input) return;
-
-    const filtered = options.filter(opt =>
-        opt.toLowerCase().includes(searchTerm.toLowerCase())
-    );
-
-    dropdown.innerHTML = '';
-
-    // Show existing options
-    filtered.forEach(opt => {
-        const item = document.createElement('a');
-        item.href = '#';
-        item.className = 'list-group-item list-group-item-action';
-        item.textContent = opt;
-        item.dataset.value = opt;
-        dropdown.appendChild(item);
-    });
-
-    // Show "Add new" option if enabled and search term doesn't match exactly
-    if (allowNew && searchTerm && !options.some(opt => opt.toLowerCase() === searchTerm.toLowerCase())) {
-        const createItem = document.createElement('a');
-        createItem.href = '#';
-        createItem.className = 'list-group-item list-group-item-action text-primary';
-        createItem.innerHTML = `<i class="fas fa-plus me-2"></i>Add "${searchTerm}"`;
-        createItem.dataset.value = searchTerm;
-        dropdown.appendChild(createItem);
-    }
-
-    dropdown.style.display = (filtered.length > 0 || (allowNew && searchTerm)) ? 'block' : 'none';
-}
-
-function addSeriesBookRow() {
-    seriesBookCounter++;
-    const rowId = `seriesBook${seriesBookCounter}`;
-
-    const bookRow = document.createElement('div');
-    bookRow.className = 'card mb-3';
-    bookRow.id = rowId;
-    bookRow.innerHTML = `
-        <div class="card-header bg-light d-flex justify-content-between align-items-center">
-            <h6 class="mb-0">Book</h6>
-            <button type="button" class="btn btn-sm btn-outline-danger" onclick="removeSeriesBookRow('${rowId}')">
-                <i class="fas fa-trash"></i>
-            </button>
-        </div>
-        <div class="card-body">
-            <div class="row mb-3">
-                <div class="col-md-12">
-                    <label class="form-label">Book Cover</label>
-                    <div class="d-flex align-items-start gap-3">
-                        <div id="${rowId}Cover" class="book-cover-container" style="width: 80px; height: 120px; position: relative; border: 2px dashed #dee2e6; border-radius: 8px; overflow: hidden; background: #f8f9fa;">
-                            <img id="${rowId}CoverImg" src="" alt="Book Cover" style="width: 100%; height: 100%; object-fit: cover; display: none;">
-                            <div class="book-cover-fallback text-center" style="display: flex; align-items: center; justify-content: center; height: 100%; color: #adb5bd;">
-                                <i class="fas fa-book fa-2x"></i>
-                            </div>
-                        </div>
-                        <div class="flex-grow-1">
-                            <input type="file" class="form-control form-control-sm mb-2" id="${rowId}CoverUpload" accept="image/*" onchange="handleSeriesBookCoverUpload(event, '${rowId}')">
-                            <div class="input-group input-group-sm">
-                                <input type="url" class="form-control" id="${rowId}CoverUrl" placeholder="Or paste image URL">
-                                <button class="btn btn-outline-primary" type="button" onclick="downloadSeriesBookCoverFromUrl('${rowId}')" title="Download from URL">
-                                    <i class="fas fa-download"></i>
-                                </button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-            </div>
-
-            <div class="row">
-                <div class="col-md-10 mb-3">
-                    <label for="${rowId}Title" class="form-label">Title <span class="text-danger">*</span></label>
-                    <input type="text" class="form-control" id="${rowId}Title" required>
-                </div>
-                <div class="col-md-2 mb-3">
-                    <label for="${rowId}SeriesNumber" class="form-label">Series #</label>
-                    <input type="number" class="form-control" id="${rowId}SeriesNumber" min="0" step="0.1" placeholder="1">
-                </div>
-            </div>
-
-            <div class="row">
-                <div class="col-md-4 mb-3">
-                    <label for="${rowId}WordCount" class="form-label">Word Count</label>
-                    <input type="number" class="form-control" id="${rowId}WordCount" min="0">
-                </div>
-                <div class="col-md-4 mb-3">
-                    <label for="${rowId}PageCount" class="form-label">Page Count</label>
-                    <input type="number" class="form-control" id="${rowId}PageCount" min="0">
-                </div>
-                <div class="col-md-4 mb-3">
-                    <label for="${rowId}DatePublished" class="form-label">Date Published</label>
-                    <input type="date" class="form-control" id="${rowId}DatePublished">
-                </div>
-            </div>
-        </div>
-    `;
-
-    document.getElementById('seriesBooksList').appendChild(bookRow);
-}
-
-function removeSeriesBookRow(rowId) {
-    const row = document.getElementById(rowId);
-    if (row) {
-        row.remove();
-        delete seriesBookCovers[rowId];
-    }
-}
-
-function handleSeriesBookCoverUpload(event, rowId) {
-    const file = event.target.files[0];
-    if (file) {
-        seriesBookCovers[rowId] = file;
-
-        // Preview the image
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const img = document.getElementById(`${rowId}CoverImg`);
-            const fallback = document.querySelector(`#${rowId}Cover .book-cover-fallback`);
-
-            img.src = e.target.result;
-            img.style.display = 'block';
-            fallback.style.display = 'none';
-        };
-        reader.readAsDataURL(file);
-    }
-}
-
-async function downloadSeriesBookCoverFromUrl(rowId) {
-    const urlInput = document.getElementById(`${rowId}CoverUrl`);
-    const url = urlInput.value.trim();
-
-    if (!url) {
-        GreatReads.showToast('Please enter an image URL', 'warning');
-        return;
-    }
-
-    const img = document.getElementById(`${rowId}CoverImg`);
-    const fallback = document.querySelector(`#${rowId}Cover .book-cover-fallback`);
-
-    try {
-        // Try to fetch the image
-        let blob;
-        try {
-            const response = await fetch(url);
-            if (!response.ok) {
-                throw new Error('Failed to fetch image from URL');
-            }
-            blob = await response.blob();
-        } catch (corsError) {
-            // If CORS fails, try loading the image directly and converting via canvas
-            console.log('CORS fetch failed, trying canvas approach:', corsError);
-
-            return new Promise((resolve, reject) => {
-                const tempImg = new Image();
-                tempImg.crossOrigin = 'anonymous';
-
-                tempImg.onload = function() {
-                    try {
-                        // Create canvas to convert image to blob
-                        const canvas = document.createElement('canvas');
-                        canvas.width = tempImg.width;
-                        canvas.height = tempImg.height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(tempImg, 0, 0);
-
-                        canvas.toBlob(function(canvasBlob) {
-                            if (!canvasBlob) {
-                                reject(new Error('Failed to convert image to blob'));
-                                return;
-                            }
-
-                            const file = new File([canvasBlob], 'cover.jpg', { type: 'image/jpeg' });
-                            seriesBookCovers[rowId] = file;
-
-                            // Preview the image
-                            img.src = url;
-                            img.style.display = 'block';
-                            fallback.style.display = 'none';
-
-                            // Clear the URL input
-                            urlInput.value = '';
-
-                            GreatReads.showToast('Cover downloaded successfully', 'success');
-                            resolve();
-                        }, 'image/jpeg', 0.95);
-                    } catch (canvasError) {
-                        console.error('Canvas conversion failed:', canvasError);
-                        reject(canvasError);
-                    }
-                };
-
-                tempImg.onerror = function() {
-                    reject(new Error('Failed to load image. The URL may be invalid or the server may not allow cross-origin requests.'));
-                };
-
-                tempImg.src = url;
-            });
-        }
-
-        // If we got here, fetch worked
-        const file = new File([blob], 'cover.jpg', { type: blob.type || 'image/jpeg' });
-        seriesBookCovers[rowId] = file;
-
-        // Preview the image
-        img.src = url;
-        img.style.display = 'block';
-        fallback.style.display = 'none';
-
-        // Clear the URL input
-        urlInput.value = '';
-
-        GreatReads.showToast('Cover downloaded successfully', 'success');
-    } catch (error) {
-        console.error('Failed to download cover:', error);
-        GreatReads.showToast('Failed to download cover from URL. The URL may be invalid or the server may not allow cross-origin requests.', 'error');
-    }
-}
-
-async function submitNewSeries() {
-    const form = document.getElementById('addSeriesForm');
-
-    if (!form.checkValidity()) {
-        form.reportValidity();
-        return;
-    }
-
-    // Get series-wide data
-    const seriesData = {
-        series: document.getElementById('seriesName').value,
-        author_name_first: document.getElementById('seriesAuthorFirst').value || null,
-        author_name_second: document.getElementById('seriesAuthorLast').value || null,
-        genre: document.getElementById('seriesGenre').value || null,
-        author_gender: document.getElementById('seriesAuthorGender').value || null,
-        universe: document.getElementById('seriesUniverse').value || null
-    };
-
-    // Get all book rows
-    const bookCards = document.querySelectorAll('#seriesBooksList .card');
-
-    if (bookCards.length === 0) {
-        GreatReads.showToast('Please add at least one book', 'warning');
-        return;
-    }
-
-    const books = [];
-    for (let i = 0; i < bookCards.length; i++) {
-        const card = bookCards[i];
-        const rowId = card.id;
-
-        const title = document.getElementById(`${rowId}Title`).value;
-        if (!title) {
-            GreatReads.showToast(`Please enter a title for book #${i + 1}`, 'warning');
-            return;
-        }
-
-        const wordCount = document.getElementById(`${rowId}WordCount`).value;
-        const pageCount = document.getElementById(`${rowId}PageCount`).value;
-        const datePublished = document.getElementById(`${rowId}DatePublished`).value;
-        const seriesNumber = document.getElementById(`${rowId}SeriesNumber`).value;
-
-        books.push({
-            rowId: rowId,
-            title: title,
-            word_count: wordCount ? parseInt(wordCount) : null,
-            page_count: pageCount ? parseInt(pageCount) : null,
-            date_published: datePublished || null,
-            series_number: seriesNumber !== null && seriesNumber !== '' ? parseFloat(seriesNumber) : null
-        });
-    }
-
-    try {
-        // Create each book
-        let successCount = 0;
-        for (const bookData of books) {
-            const fullBookData = {
-                ...seriesData,
-                title: bookData.title,
-                word_count: bookData.word_count,
-                page_count: bookData.page_count,
-                date_published: bookData.date_published,
-                series_number: bookData.series_number,
-                cover: seriesBookCovers[bookData.rowId] !== undefined
-            };
-
-            const newBook = await GreatReads.apiCall('/books/', {
-                method: 'POST',
-                data: fullBookData
-            });
-
-            // Upload cover if provided
-            if (seriesBookCovers[bookData.rowId]) {
-                try {
-                    await uploadCoverImage(newBook.id, seriesBookCovers[bookData.rowId]);
-                } catch (coverError) {
-                    console.error('Cover upload failed for book:', bookData.title, coverError);
-                }
-            }
-
-            successCount++;
-        }
-
-        GreatReads.showToast(`Successfully added ${successCount} book(s) to the series!`, 'success');
-
-        // Close modal
-        const modal = bootstrap.Modal.getInstance(document.getElementById('addSeriesModal'));
-        modal.hide();
-
-        // Reload books data while preserving filters
-        await reloadBooksData();
-    } catch (error) {
-        console.error('Failed to add series:', error);
-        GreatReads.showToast('Failed to add series', 'error');
-    }
-}
-
-// Per-book reading-session stats (#57). Pulls from the ereader session log
-// (GR_EREADER_API) by GreatReads book id and renders a compact read-only card.
-async function loadBookSessionStats(bookId) {
-    const row = document.getElementById('editBookSessionStatsRow');
-    const el = document.getElementById('editBookSessionStats');
-    if (!row || !el) return;
-    row.style.display = 'none';
-    el.innerHTML = 'Loading…';
-    try {
-        const base = (typeof GR_EREADER_API !== 'undefined') ? GR_EREADER_API : '/api';
-        const res = await fetch(`${base}/sessions-summary-gr/${encodeURIComponent(bookId)}`);
-        if (!res.ok) return;
-        const d = await res.json();
-        if (!d || !d.sessions) {
-            el.innerHTML = '<span class="text-muted">No reading sessions logged yet.</span>';
-            row.style.display = '';
-            return;
-        }
-        const plural = (n) => n === 1 ? '' : 's';
-        const fmtRows = Object.entries(d.byFormat || {}).map(([fmt, s]) => {
-            const pct = (s.percentOfBook != null) ? ` &middot; ${s.percentOfBook}% of book` : '';
-            return `<div class="d-flex justify-content-between flex-wrap">`
-                 + `<span><strong>${fmt}</strong> — ${s.sessions} session${plural(s.sessions)}</span>`
-                 + `<span>${Math.round(s.minutes)} min &middot; ${s.words.toLocaleString()} words${pct}</span></div>`;
-        }).join('');
-        const totalPct = (d.percentOfBook != null) ? ` &middot; ${d.percentOfBook}% of book` : '';
-        el.innerHTML =
-            `<div class="mb-1"><strong>${d.sessions}</strong> session${plural(d.sessions)} &middot; `
-          + `${Math.round(d.minutes)} min &middot; ${d.words.toLocaleString()} words${totalPct}</div>`
-          + fmtRows;
-        row.style.display = '';
-    } catch (e) { /* non-fatal */ }
-}
-
-function showEditBookModal(book) {
-    // Reset cover file
-    editBookCoverFile = null;
-    // Reading-session stats (#57) — async; hidden until it resolves.
-    loadBookSessionStats(book.id);
-
-    // Populate form fields
-    document.getElementById('editBookId').value = book.id;
-    document.getElementById('editBookTitle').value = book.title || '';
-    document.getElementById('editAuthorFirst').value = book.author_name_first || '';
-    document.getElementById('editAuthorLast').value = book.author_name_second || '';
-    document.getElementById('editWordCount').value = book.word_count || '';
-    document.getElementById('editPageCount').value = book.page_count || '';
-    document.getElementById('editDatePublished').value = book.date_published || '';
-    document.getElementById('editUniverse').value = book.universe || '';
-    document.getElementById('editSeries').value = book.series || '';
-    document.getElementById('editSeriesNumber').value = book.series_number !== null && book.series_number !== undefined ? book.series_number : '';
-    document.getElementById('editGenre').value = book.genre || '';
-    document.getElementById('editAuthorGender').value = book.author_gender || '';
-    document.getElementById('editIsbnId').value = book.isbn_id || '';
-
-    // Populate tags
-    selectedEditTags = book.tags || [];
-    renderSelectedTags();
-
-    // Set book cover image
-    const coverImg = document.getElementById('editBookCoverImg');
-    const fallbackIcon = document.querySelector('#editBookCover .book-cover-fallback');
-
-    // Use book's cover if it has one, otherwise use default cover (0.jpg)
-    const coverPath = book.cover ? `${book.id}.jpg` : '0.jpg';
-    const coverVersion = book.cover_version || 0;
-    coverImg.src = `${window.APP_BASE_PATH}/static/covers/${coverPath}${coverVersion ? `?v=${coverVersion}` : ''}`;
-    coverImg.style.display = 'block';
-    fallbackIcon.style.display = 'none';
-
-    // Handle image load error - fall back to default cover
-    coverImg.onerror = function() {
-        if (!this.src.includes('/0.jpg')) {
-            this.src = `${window.APP_BASE_PATH}/static/covers/0.jpg`;
-        } else {
-            this.style.display = 'none';
-            fallbackIcon.style.display = 'flex';
-        }
-    };
-
-    // Show the modal
-    const modal = new bootstrap.Modal(document.getElementById('editBookModal'));
-    modal.show();
-}
-
-async function submitEditBook() {
-    const form = document.getElementById('editBookForm');
-
-    if (!form.checkValidity()) {
-        form.reportValidity();
-        return;
-    }
-
-    const formData = new FormData(form);
-    const bookId = formData.get('book_id');
-
-    // Check if we have a cover (either existing or new upload)
-    const currentCoverImg = document.getElementById('editBookCoverImg');
-    const hasCover = editBookCoverFile !== null || currentCoverImg.style.display !== 'none';
-
-    const bookData = {
-        title: formData.get('title'),
-        author_name_first: formData.get('author_name_first') || null,
-        author_name_second: formData.get('author_name_second') || null,
-        author_gender: formData.get('author_gender') || null,
-        word_count: formData.get('word_count') ? parseInt(formData.get('word_count')) : null,
-        page_count: formData.get('page_count') ? parseInt(formData.get('page_count')) : null,
-        date_published: formData.get('date_published') || null,
-        universe: formData.get('universe') || null,
-        series: formData.get('series') || null,
-        series_number: formData.get('series_number') !== null && formData.get('series_number') !== '' ? parseFloat(formData.get('series_number')) : null,
-        genre: formData.get('genre') || null,
-        isbn_id: formData.get('isbn_id') ? parseInt(formData.get('isbn_id')) : null,
-        cover: hasCover,
-        tags: selectedEditTags
-    };
-
-    try {
-        await GreatReads.apiCall(`/books/${bookId}`, {
-            method: 'PUT',
-            data: bookData
-        });
-
-        // Upload cover image if a new one was provided
-        if (editBookCoverFile) {
-            try {
-                await uploadCoverImage(bookId, editBookCoverFile);
-                // Reset the cover file
-                editBookCoverFile = null;
-                GreatReads.showToast('Book and cover updated successfully!', 'success');
-            } catch (coverError) {
-                console.error('Cover upload failed:', coverError);
-                GreatReads.showToast('Book updated, but cover upload failed', 'warning');
-            }
-        } else {
-            GreatReads.showToast('Book updated successfully!', 'success');
-        }
-
-        // Close modal
-        const modal = bootstrap.Modal.getInstance(document.getElementById('editBookModal'));
-        modal.hide();
-
-        // Reload books data to show updated cover
-        await reloadBooksData();
-    } catch (error) {
-        console.error('Failed to update book:', error);
-        GreatReads.showToast('Failed to update book', 'error');
-    }
-}
-
-async function deleteBook() {
-    const bookId = document.getElementById('editBookId').value;
-
-    if (!confirm('Are you sure you want to delete this book? This action cannot be undone.')) {
-        return;
-    }
-
-    try {
-        await GreatReads.apiCall(`/books/${bookId}`, {
-            method: 'DELETE'
-        });
-
-        GreatReads.showToast('Book deleted successfully!', 'success');
-
-        // Close modal
-        const modal = bootstrap.Modal.getInstance(document.getElementById('editBookModal'));
-        modal.hide();
-
-        // Reload books data while preserving filters
-        await reloadBooksData();
-    } catch (error) {
-        console.error('Failed to delete book:', error);
-    }
-}
-
-// Tag Management Functions
-async function loadTags() {
-    try {
-        allTags = await GreatReads.apiCall('/books/search/tags');
-    } catch (error) {
-        console.error('Failed to load tags:', error);
-        allTags = [];
-    }
-}
-
-function renderSelectedTags() {
-    const container = document.getElementById('selectedTags');
-    container.innerHTML = '';
-
-    selectedEditTags.forEach(tag => {
-        const badge = document.createElement('span');
-        badge.className = 'tag-badge';
-        badge.innerHTML = `
-            ${tag}
-            <span class="remove-tag" onclick="removeTag('${tag.replace(/'/g, "\\'")}')">×</span>
-        `;
-        container.appendChild(badge);
-    });
-}
-
-function addTag(tagName) {
-    tagName = tagName.trim();
-    if (!tagName) return;
-
-    // Don't add duplicates
-    if (selectedEditTags.includes(tagName)) {
-        return;
-    }
-
-    selectedEditTags.push(tagName);
-    renderSelectedTags();
-
-    // Clear input
-    document.getElementById('editTags').value = '';
-
-    // Hide dropdown
-    document.getElementById('editTagsDropdown').style.display = 'none';
-}
-
-function removeTag(tagName) {
-    selectedEditTags = selectedEditTags.filter(t => t !== tagName);
-    renderSelectedTags();
-}
-
-function filterTags(searchTerm) {
-    if (!searchTerm) {
-        return allTags;
-    }
-
-    searchTerm = searchTerm.toLowerCase();
-    return allTags.filter(tag => tag.toLowerCase().includes(searchTerm));
-}
-
-function showTagDropdown(searchTerm) {
-    const dropdown = document.getElementById('editTagsDropdown');
-    const filteredTags = filterTags(searchTerm);
-
-    // Filter out already selected tags
-    const availableTags = filteredTags.filter(tag => !selectedEditTags.includes(tag));
-
-    dropdown.innerHTML = '';
-
-    // Show existing tags
-    availableTags.forEach(tag => {
-        const item = document.createElement('div');
-        item.className = 'list-group-item';
-        item.textContent = tag;
-        item.onclick = () => addTag(tag);
-        dropdown.appendChild(item);
-    });
-
-    // Show "Create new tag" option if search term doesn't match any existing tag
-    if (searchTerm && !allTags.some(tag => tag.toLowerCase() === searchTerm.toLowerCase())) {
-        const createItem = document.createElement('div');
-        createItem.className = 'list-group-item create-new';
-        createItem.innerHTML = `<i class="fas fa-plus me-2"></i>Create "${searchTerm}"`;
-        createItem.onclick = () => addTag(searchTerm);
-        dropdown.appendChild(createItem);
-    }
-
-    dropdown.style.display = availableTags.length > 0 || searchTerm ? 'block' : 'none';
-}
-
-async function uploadCoverImage(bookId, file) {
-    const formData = new FormData();
-    formData.append('file', file);
-
-    try {
-        const response = await fetch(`${window.APP_BASE_PATH}/api/books/${bookId}/cover`, {
-            method: 'POST',
-            body: formData
-        });
-
-        if (!response.ok) {
-            const errorData = await response.json().catch(() => ({}));
-            throw new Error(errorData.detail || 'Failed to upload cover image');
-        }
-
-        const result = await response.json();
-        console.log('Cover uploaded successfully:', result);
-        return result;
-    } catch (error) {
-        console.error('Error uploading cover:', error);
-        GreatReads.showToast(`Failed to upload cover: ${error.message}`, 'error');
-        throw error;
-    }
-}
-
-async function downloadCoverFromUrl(modalType) {
-    const urlInputId = modalType === 'add' ? 'addCoverUrl' : 'editCoverUrl';
-    const urlInput = document.getElementById(urlInputId);
-    const imageUrl = urlInput.value.trim();
-
-    if (!imageUrl) {
-        GreatReads.showToast('Please enter an image URL', 'warning');
-        return;
-    }
-
-    const imgId = modalType === 'add' ? 'addBookCoverImg' : 'editBookCoverImg';
-    const fallbackSelector = modalType === 'add' ? '#addBookCover .book-cover-fallback' : '#editBookCover .book-cover-fallback';
-    const img = document.getElementById(imgId);
-    const fallback = document.querySelector(fallbackSelector);
-
-    try {
-        // Try to fetch the image with no-cors mode first (won't work for blob conversion but will test if image loads)
-        // Then try with cors mode
-        let blob;
-        try {
-            const response = await fetch(imageUrl);
-            if (!response.ok) {
-                throw new Error('Failed to fetch image from URL');
-            }
-            blob = await response.blob();
-        } catch (corsError) {
-            // If CORS fails, try loading the image directly and converting via canvas
-            console.log('CORS fetch failed, trying canvas approach:', corsError);
-
-            return new Promise((resolve, reject) => {
-                const tempImg = new Image();
-                tempImg.crossOrigin = 'anonymous';
-
-                tempImg.onload = function() {
-                    try {
-                        // Create canvas to convert image to blob
-                        const canvas = document.createElement('canvas');
-                        canvas.width = tempImg.width;
-                        canvas.height = tempImg.height;
-                        const ctx = canvas.getContext('2d');
-                        ctx.drawImage(tempImg, 0, 0);
-
-                        canvas.toBlob(function(canvasBlob) {
-                            if (!canvasBlob) {
-                                reject(new Error('Failed to convert image to blob'));
-                                return;
-                            }
-
-                            const file = new File([canvasBlob], 'cover.jpg', { type: 'image/jpeg' });
-
-                            // Store the file for upload
-                            if (modalType === 'add') {
-                                newBookCoverFile = file;
-                            } else {
-                                editBookCoverFile = file;
-                            }
-
-                            // Preview the image
-                            img.src = imageUrl;
-                            img.style.display = 'block';
-                            fallback.style.display = 'none';
-
-                            // Clear the URL input
-                            urlInput.value = '';
-
-                            GreatReads.showToast('Cover image loaded successfully', 'success');
-                            resolve();
-                        }, 'image/jpeg', 0.95);
-                    } catch (canvasError) {
-                        console.error('Canvas conversion failed:', canvasError);
-                        reject(canvasError);
-                    }
-                };
-
-                tempImg.onerror = function() {
-                    reject(new Error('Failed to load image. The URL may be invalid or the server may not allow cross-origin requests.'));
-                };
-
-                tempImg.src = imageUrl;
-            });
-        }
-
-        // If we got here, fetch worked
-        const filename = imageUrl.split('/').pop().split('?')[0] || 'cover.jpg';
-        const file = new File([blob], filename, { type: blob.type || 'image/jpeg' });
-
-        // Preview the image
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            img.src = e.target.result;
-            img.style.display = 'block';
-            fallback.style.display = 'none';
-        };
-        reader.readAsDataURL(file);
-
-        // Store the file for upload
-        if (modalType === 'add') {
-            newBookCoverFile = file;
-        } else {
-            editBookCoverFile = file;
-        }
-
-        // Clear the URL input
-        urlInput.value = '';
-
-        GreatReads.showToast('Cover image loaded successfully', 'success');
-    } catch (error) {
-        console.error('Error downloading cover from URL:', error);
-        GreatReads.showToast('Failed to download image from URL. The URL may be invalid or the server may not allow cross-origin requests.', 'error');
-    }
-}
-
-function showErrorState() {
-    document.getElementById('loading-state').classList.add('d-none');
-    document.getElementById('books-container').classList.add('d-none');
-    document.getElementById('empty-state').classList.remove('d-none');
-}
-
-// Column sorting
-function sortByColumn(column, keepDirection = false) {
-    // Toggle direction if clicking the same column (unless keepDirection is true)
-    if (!keepDirection) {
-        if (currentSortColumn === column) {
-            currentSortDirection = currentSortDirection === 'asc' ? 'desc' : 'asc';
-        } else {
-            currentSortColumn = column;
-            currentSortDirection = 'asc';
-        }
-    }
-
-    // Update header highlighting
-    document.querySelectorAll('[id^="header-"]').forEach(header => {
-        header.style.backgroundColor = '';
-    });
-
-    const header = document.getElementById(`header-${column}`);
-    if (header) {
-        // Use purple/blue gradient colors for highlighting
-        if (currentSortDirection === 'asc') {
-            header.style.backgroundColor = '#b8c5f2'; // Light blue (from gradient)
-        } else {
-            header.style.backgroundColor = '#d4b5e8'; // Light purple (from gradient)
-        }
-    }
-
-    // Sort the filtered books
-    filteredBooks.sort((a, b) => {
-        let aVal = a[column];
-        let bVal = b[column];
-
-        // Handle cover sorting specially (books with covers first)
-        if (column === 'cover') {
-            aVal = a.cover ? 1 : 0;
-            bVal = b.cover ? 1 : 0;
-        }
-        // Handle author sorting specially
-        else if (column === 'author') {
-            aVal = [a.author_name_first, a.author_name_second].filter(Boolean).join(' ');
-            bVal = [b.author_name_first, b.author_name_second].filter(Boolean).join(' ');
-        }
-        // Handle series sorting specially - sort by universe, then series, then series_number
-        else if (column === 'series') {
-            // First compare universe
-            const aUniverse = (a.universe || '').toLowerCase();
-            const bUniverse = (b.universe || '').toLowerCase();
-            if (aUniverse !== bUniverse) {
-                if (!aUniverse) return 1; // Books without universe go last
-                if (!bUniverse) return -1;
-                return currentSortDirection === 'asc' ?
-                    aUniverse.localeCompare(bUniverse) :
-                    bUniverse.localeCompare(aUniverse);
-            }
-
-            // Then compare series
-            const aSeries = (a.series || '').toLowerCase();
-            const bSeries = (b.series || '').toLowerCase();
-            if (aSeries !== bSeries) {
-                if (!aSeries) return 1; // Books without series go last
-                if (!bSeries) return -1;
-                return currentSortDirection === 'asc' ?
-                    aSeries.localeCompare(bSeries) :
-                    bSeries.localeCompare(aSeries);
-            }
-
-            // Finally compare series_number
-            const aNum = a.series_number || 0;
-            const bNum = b.series_number || 0;
-            return currentSortDirection === 'asc' ? aNum - bNum : bNum - aNum;
-        }
-
-        // Handle null/undefined values
-        if (aVal == null) aVal = '';
-        if (bVal == null) bVal = '';
-
-        // Convert to lowercase for string comparison
-        if (typeof aVal === 'string') aVal = aVal.toLowerCase();
-        if (typeof bVal === 'string') bVal = bVal.toLowerCase();
-
-        let comparison = 0;
-        if (aVal < bVal) comparison = -1;
-        if (aVal > bVal) comparison = 1;
-
-        return currentSortDirection === 'asc' ? comparison : -comparison;
-    });
-
-    displayBooks();
-}
-
-// Bulk edit functions
-function toggleBulkEdit() {
-    bulkEditMode = !bulkEditMode;
-
-    const bulkEditColumns = document.querySelectorAll('.bulk-edit-column');
-    const bulkEditActionsBtn = document.getElementById('bulkEditActionsBtn');
-    const bulkEditToggle = document.getElementById('bulkEditToggle');
-
-    if (bulkEditMode) {
-        bulkEditColumns.forEach(col => col.classList.remove('d-none'));
-        bulkEditActionsBtn.classList.remove('d-none');
-        bulkEditToggle.classList.add('active');
-        bulkEditToggle.innerHTML = '<i class="fas fa-times"></i>';
-        bulkEditToggle.title = 'Cancel';
-    } else {
-        bulkEditColumns.forEach(col => col.classList.add('d-none'));
-        bulkEditActionsBtn.classList.add('d-none');
-        bulkEditToggle.classList.remove('active');
-        bulkEditToggle.innerHTML = '<i class="fas fa-check-square"></i>';
-        bulkEditToggle.title = 'Bulk Edit';
-        document.getElementById('selectAll').checked = false;
-    }
-}
-
-function toggleSelectAll() {
-    const selectAll = document.getElementById('selectAll');
-    const checkboxes = document.querySelectorAll('.book-checkbox');
-
-    checkboxes.forEach(checkbox => {
-        checkbox.checked = selectAll.checked;
-    });
-}
-
-function openBulkEditModal() {
-    const selectedCheckboxes = document.querySelectorAll('.book-checkbox:checked');
-
-    if (selectedCheckboxes.length === 0) {
-        GreatReads.showToast('Please select books to edit', 'warning');
-        return;
-    }
-
-    // Update count in modal
-    document.getElementById('bulkEditCount').textContent = `(${selectedCheckboxes.length})`;
-
-    // Reset form
-    document.getElementById('bulkEditGenreCheck').checked = false;
-    document.getElementById('bulkEditAuthorGenderCheck').checked = false;
-    document.getElementById('bulkEditDeleteCheck').checked = false;
-    document.getElementById('bulkEditGenre').value = '';
-    document.getElementById('bulkEditGenre').disabled = true;
-    document.getElementById('bulkEditAuthorGender').value = '';
-    document.getElementById('bulkEditAuthorGender').disabled = true;
-
-    // Show modal
-    const modal = new bootstrap.Modal(document.getElementById('bulkEditModal'));
-    modal.show();
-}
-
-function toggleBulkEditField(fieldName) {
-    const checkbox = document.getElementById(`bulkEdit${fieldName}Check`);
-    const input = document.getElementById(`bulkEdit${fieldName}`);
-    input.disabled = !checkbox.checked;
-    if (!checkbox.checked) {
-        input.value = '';
-    }
-}
-
-async function submitBulkEdit() {
-    const selectedCheckboxes = document.querySelectorAll('.book-checkbox:checked');
-    const selectedBookIds = Array.from(selectedCheckboxes).map(cb => cb.dataset.bookId);
-
-    const updateGenre = document.getElementById('bulkEditGenreCheck').checked;
-    const updateAuthorGender = document.getElementById('bulkEditAuthorGenderCheck').checked;
-    const deleteBooks = document.getElementById('bulkEditDeleteCheck').checked;
-
-    // Validate that at least one action is selected
-    if (!updateGenre && !updateAuthorGender && !deleteBooks) {
-        GreatReads.showToast('Please select at least one action to perform', 'warning');
-        return;
-    }
-
-    // If deleting, confirm
-    if (deleteBooks) {
-        if (!confirm(`Are you sure you want to DELETE ${selectedBookIds.length} book(s)? This cannot be undone.`)) {
-            return;
-        }
-    }
-
-    try {
-        let successCount = 0;
-        let failCount = 0;
-
-        // If deleting, just delete and skip updates
-        if (deleteBooks) {
-            const deletePromises = selectedBookIds.map(bookId =>
-                GreatReads.apiCall(`/books/${bookId}`, { method: 'DELETE' })
-                    .then(() => successCount++)
-                    .catch(() => failCount++)
-            );
-            await Promise.all(deletePromises);
-
-            GreatReads.showToast(`Successfully deleted ${successCount} book(s)`, 'success');
-        } else {
-            // Update books
-            const updates = {};
-            if (updateGenre) {
-                const genre = document.getElementById('bulkEditGenre').value.trim();
-                if (genre) updates.genre = genre;
-            }
-            if (updateAuthorGender) {
-                const authorGender = document.getElementById('bulkEditAuthorGender').value;
-                if (authorGender) updates.author_gender = authorGender;
-            }
-
-            // Validate we have something to update
-            if (Object.keys(updates).length === 0) {
-                GreatReads.showToast('Please enter values for the selected fields', 'warning');
+// Books-page behavior for the shared Edit Book modal (#110): patch cards in place
+// (keep scroll #99) after save/delete, and supply the Save & Next order from the grid.
+window.bkeHooks = {
+    afterSave(id, data, book) {
+        // Ownership edits can move a book between the Owned/Unowned shelves. If it no
+        // longer belongs on the shelf we're viewing, drop it from the grid; else patch.
+        if (book && typeof book.is_owned === 'boolean'
+            && (shelfStatus === 'owned' || shelfStatus === 'unowned')) {
+            const belongs = shelfStatus === 'owned' ? book.is_owned : !book.is_owned;
+            if (!belongs) {
+                cards = cards.filter(c => !(c.kind === 'local' && c.book_id === id));
+                delete cardReg['L' + id];
+                shelfTotal = Math.max(0, shelfTotal - 1);
+                renderKeepScroll();
                 return;
             }
-
-            const updatePromises = selectedBookIds.map(bookId =>
-                GreatReads.apiCall(`/books/${bookId}`, {
-                    method: 'PUT',
-                    data: updates
-                })
-                    .then(() => successCount++)
-                    .catch(() => failCount++)
-            );
-            await Promise.all(updatePromises);
-
-            GreatReads.showToast(`Successfully updated ${successCount} book(s)`, 'success');
         }
-
-        if (failCount > 0) {
-            GreatReads.showToast(`Failed to process ${failCount} book(s)`, 'error');
+        patchLocalCard(id, {
+            title: data.title,
+            author: [data.author_name_first, data.author_name_second].filter(Boolean).join(' '),
+            series: data.series, series_number: data.series_number,
+            universe: data.universe, genre: data.genre,
+            word_count: data.word_count, page_count: data.page_count,
+            date: data.date_published,
+            has_cover: !!(book && book.cover),
+            cover_version: Math.floor(Date.now() / 1000),
+        });
+        renderKeepScroll();
+    },
+    afterCreate(id, data, book) {
+        // Came from "Save locally" on a detected release (#68): drop that release from
+        // the feed now it's in the library, and clear the unread badge for it.
+        if (_saveLocallyNewsId != null) {
+            const nid = _saveLocallyNewsId; _saveLocallyNewsId = null;
+            GreatReads.apiCall(`/news/${nid}/dismiss`, { method: 'POST' }).catch(() => {});
+            cards = cards.filter(c => c.news_id !== nid);
+            if (typeof loadNewsBadge === 'function') loadNewsBadge();
         }
+        // A new book lands on Owned or Unowned depending on whether the user
+        // ticked any Formats-owned box (#117). Switch to that tab so they see it.
+        const tab = (book && book.is_owned) ? 'owned' : 'unowned';
+        if (shelfStatus !== tab) setStatus(tab);
+        else loadShelf(true);
+    },
+    afterDelete(id) {
+        cards = cards.filter(c => !(c.kind === 'local' && c.book_id === id));
+        delete cardReg['L' + id];
+        shelfTotal = Math.max(0, shelfTotal - 1);
+        renderKeepScroll();
+    },
+    nextId(afterId) {
+        const list = visibleCards();
+        const i = list.findIndex(c => c.kind === 'local' && c.book_id === afterId);
+        if (i < 0) return null;
+        for (let j = i + 1; j < list.length; j++)
+            if (list[j].kind === 'local') return list[j].book_id;
+        return null;
+    },
+};
 
-        // Close modal
-        const modal = bootstrap.Modal.getInstance(document.getElementById('bulkEditModal'));
-        modal.hide();
+function setStatus(s) {
+    if (s === shelfStatus) return;
+    shelfStatus = s;
+    selected.clear();   // selection is per-shelf; don't carry across statuses
+    ['Owned', 'Unowned', 'Upcoming', 'New'].forEach(x =>
+        document.getElementById('st' + x).classList.toggle('active', x.toLowerCase() === s));
+    document.getElementById('subToggles').style.display = isRemote() ? 'flex' : 'none';
+    // Mark seen + refresh nav badge when viewing releases.
+    if (isRemote()) { GreatReads.apiCall('/news/seen', { method: 'POST', data: {} }).then(() => {
+        if (typeof loadNewsBadge === 'function') loadNewsBadge(); }).catch(() => {}); }
+    loadShelf(true);
+}
 
-        // Reload books while preserving filters
-        await reloadBooksData();
+function toggleCat(c) {
+    if (c === 'comics') { showComics = !showComics; document.getElementById('chipComics').classList.toggle('active', showComics); }
+    else { showReprints = !showReprints; document.getElementById('chipReprints').classList.toggle('active', showReprints); }
+    renderAll();
+}
 
-        // Exit bulk edit mode
-        toggleBulkEdit();
-    } catch (error) {
-        console.error('Failed to process bulk edit:', error);
-        GreatReads.showToast('Failed to process bulk edit', 'error');
+function onSearch() {
+    document.getElementById('searchClear').style.display =
+        document.getElementById('searchInput').value ? 'flex' : 'none';
+    clearTimeout(_searchTimer);
+    _searchTimer = setTimeout(() => loadShelf(true), 250);
+}
+function clearSearch() { document.getElementById('searchInput').value = ''; onSearch(); }
+
+async function loadShelf(reset) {
+    // Appends wait for an in-flight load; resets always supersede (bump generation).
+    if (!reset && shelfLoading) return;
+    if (reset) {
+        shelfGen++; cards = []; shelfSkip = 0;
+        document.getElementById('booksGrid').innerHTML =
+            '<div class="col-12 text-muted text-center py-5">Loading…</div>';
     }
+    const myGen = shelfGen, myStatus = shelfStatus;
+    shelfLoading = true;
+    const limit = (myStatus === 'upcoming' || myStatus === 'new') ? 1000 : PAGE;
+    const q = encodeURIComponent(document.getElementById('searchInput').value.trim());
+    let r = null;
+    try { r = await GreatReads.apiCall(`/news/shelf?status=${myStatus}&skip=${shelfSkip}&limit=${limit}&search=${q}&sort_by=${sortBy}&sort_order=${sortDir}&cover=${coverFilter}`); }
+    catch (e) {}
+    if (myGen !== shelfGen) return;   // a newer reset replaced us — discard these results
+    shelfLoading = false;
+    if (r) { shelfTotal = r.total; cards = reset ? r.cards : cards.concat(r.cards); shelfSkip += r.cards.length; registerCards(r.cards); }
+    else if (reset) { cards = []; }
+    renderAll();
 }
 
-// Genre dropdown autocomplete
-const genreOptions = [
-    'Adventure',
-    'Biography',
-    'Children\'s',
-    'Comedy',
-    'Drama',
-    'Dystopian',
-    'Fantasy',
-    'Fiction',
-    'High Fantasy',
-    'Historical',
-    'Historical Fiction',
-    'Horror',
-    'LitRPG',
-    'Literary',
-    'Magical Realism',
-    'Memoir',
-    'Mystery',
-    'Mythology',
-    'Non-Fiction',
-    'Philosophy',
-    'Poetry',
-    'Politics',
-    'Post-Apocalyptic',
-    'Romance',
-    'Romantic Fantasy',
-    'Satire',
-    'Science',
-    'Sci-Fi',
-    'Self-Help',
-    'Supernatural',
-    'Thriller',
-    'Urban Fantasy',
-    'War',
-    'Western',
-    'Young Adult'
-];
+function registerCards(list) { (list || []).forEach(c => { cardReg[cardKey(c)] = c; }); }
 
-function setupGenreDropdown(inputId, dropdownId) {
-    const genreInput = document.getElementById(inputId);
-    const dropdown = document.getElementById(dropdownId);
+// Re-render the grid without losing the user's scroll position (used after an
+// edit/delete/bulk so we don't snap back to the top + drop loaded cards). (#99)
+function renderKeepScroll() {
+    const y = window.scrollY;
+    renderAll();
+    window.scrollTo(0, y);
+}
 
-    if (!genreInput || !dropdown) return;
+// Patch a local card's data in place (same object lives in both cards[] and
+// cardReg) so the grid + details popup reflect an edit without a full reload.
+function patchLocalCard(bookId, patch) {
+    const apply = c => { if (c && c.kind === 'local' && c.book_id === bookId) Object.assign(c, patch); };
+    cards.forEach(apply);
+    Object.values(cardReg).forEach(apply);
+}
 
-    // Remove any existing listeners by cloning
-    const newInput = genreInput.cloneNode(true);
-    genreInput.parentNode.replaceChild(newInput, genreInput);
-    const input = document.getElementById(inputId);
-
-    // Show dropdown when input is focused and enabled
-    input.addEventListener('focus', () => {
-        if (!input.disabled) {
-            showGenreDropdown(dropdownId, '');
-        }
+// Swipe / arrow-key navigation between books in the details modal (#100).
+function bdNavTo(delta) {
+    if (!bdNav.length) return;
+    const i = bdIndex + delta;
+    if (i < 0 || i >= bdNav.length) return;          // clamp at the ends
+    openBookDetails(cardKey(bdNav[i]), bdNav);
+}
+function updateBdNavButtons() {
+    const pv = document.getElementById('bdPrev'), nx = document.getElementById('bdNext');
+    if (pv) pv.disabled = bdIndex <= 0;
+    if (nx) nx.disabled = bdIndex < 0 || bdIndex >= bdNav.length - 1;
+}
+function setupDetailSwipe() {
+    const dm = document.getElementById('bookDetailsModal');
+    if (!dm) return;
+    let sx = 0, sy = 0, tracking = false;
+    dm.addEventListener('touchstart', e => {
+        const t = e.changedTouches[0]; sx = t.clientX; sy = t.clientY; tracking = true;
+    }, { passive: true });
+    dm.addEventListener('touchend', e => {
+        if (!tracking) return; tracking = false;
+        const t = e.changedTouches[0], dx = t.clientX - sx, dy = t.clientY - sy;
+        if (Math.abs(dx) > 60 && Math.abs(dx) > Math.abs(dy) * 1.5) bdNavTo(dx < 0 ? 1 : -1);
+    }, { passive: true });
+    document.addEventListener('keydown', e => {
+        if (!dm.classList.contains('show')) return;
+        if (e.key === 'ArrowRight') bdNavTo(1);
+        else if (e.key === 'ArrowLeft') bdNavTo(-1);
     });
+    // Forget the cached series/author so a fresh open repaints from scratch
+    // (picks up any edits) — while swiping within an open modal reuses them.
+    dm.addEventListener('hidden.bs.modal', () => { bdSeriesKey = null; bdAuthorKey = null; });
+}
 
-    // Filter dropdown as user types
-    input.addEventListener('input', (e) => {
-        showGenreDropdown(dropdownId, e.target.value);
-    });
+// Preload the next cover and swap it in only once decoded, so swiping between
+// books doesn't flash the empty grey box. _bdCoverReq guards against a fast
+// swipe: if a newer cover request started, drop this (possibly out-of-order) one.
+let _bdCoverReq = 0;
+function setBdCover(c) {
+    const box = document.getElementById('bdCover');
+    const src = coverSrc(c);
+    const req = ++_bdCoverReq;
+    if (!src) { box.innerHTML = phCover(c, 'flex'); return; }
+    const img = new Image();
+    img.onload = () => {
+        if (req !== _bdCoverReq) return;
+        img.className = 'bd-fade-in';
+        box.replaceChildren(img);
+    };
+    img.onerror = () => { if (req === _bdCoverReq) box.innerHTML = phCover(c, 'flex'); };
+    img.src = src;
+}
 
-    // Handle selection
-    dropdown.addEventListener('click', (e) => {
-        e.preventDefault();
-        const item = e.target.closest('.list-group-item');
-        if (!item) return;
-
-        input.value = item.textContent.trim();
-        dropdown.style.display = 'none';
-    });
-
-    // Hide dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!input.contains(e.target) && !dropdown.contains(e.target)) {
-            dropdown.style.display = 'none';
-        }
+// Move the "current book" outline within an already-rendered series strip
+// instead of rebuilding it (no refetch, no flicker) when swiping in-series.
+function highlightBdSeries(bookId) {
+    document.querySelectorAll('#bdSeries .books-card[data-bid]').forEach(el => {
+        const on = parseInt(el.dataset.bid, 10) === bookId;
+        el.style.outline = on ? '2px solid var(--bs-primary)' : '';
+        el.style.outlineOffset = on ? '1px' : '';
+        el.style.borderRadius = on ? '4px' : '';
     });
 }
 
-function showGenreDropdown(dropdownId, searchTerm) {
-    const dropdown = document.getElementById(dropdownId);
-    const filtered = genreOptions.filter(genre =>
-        genre.toLowerCase().includes(searchTerm.toLowerCase())
-    );
+function visibleCards() {
+    let list = cards;
+    if (isRemote()) {
+        // Comics & reprints are HIDDEN by default; the chips are additive opt-ins —
+        // turning one "on" folds that category back into the feed. Regular releases
+        // (neither comic nor reprint) always show.
+        list = list.filter(c =>
+            (!c.is_comic && !c.is_reprint)
+            || (c.is_comic && showComics)
+            || (c.is_reprint && showReprints));
+    }
+    return list;
+}
 
-    if (filtered.length === 0) {
-        dropdown.style.display = 'none';
+function renderAll() {
+    updateBulkBar();
+    const list = visibleCards();
+    const grid = document.getElementById('booksGrid');
+    const label = { owned: 'owned', unowned: 'unowned', upcoming: 'upcoming', new: 'new' }[shelfStatus];
+    document.getElementById('shelfCount').textContent =
+        list.length ? `${list.length}${list.length < shelfTotal ? ' of ' + shelfTotal : ''} ${label}` : '';
+    if (!list.length) {
+        grid.innerHTML = `<div class="col-12 text-muted text-center py-5">No ${label} books${
+            document.getElementById('searchInput').value ? ' match your search' : ''}.</div>`;
         return;
     }
-
-    dropdown.innerHTML = filtered.map(genre => `
-        <a href="#" class="list-group-item list-group-item-action">
-            ${genre}
-        </a>
-    `).join('');
-
-    dropdown.style.display = 'block';
+    grid.innerHTML = list.map(cardHtml).join('');
 }
 
-// Initialize genre dropdowns when modals open
-document.getElementById('bulkEditModal')?.addEventListener('shown.bs.modal', () => {
-    setupGenreDropdown('bulkEditGenre', 'bulkGenreDropdown');
-});
+function cardHtml(c) {
+    const base = window.APP_BASE_PATH || '';
+    const src = coverSrc(c);
+    const cover = src
+        ? `<img src="${src}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${phCover(c, 'none')}`
+        : phCover(c, 'flex');
+    const key = cardKey(c);
+    const selectable = selectMode && c.kind === 'local';   // bulk edit is DB-books only
+    const isSel = selectable && selected.has(key);
+    const rc = (!selectMode && c.read_count && c.read_count >= 1)
+        ? `<span class="books-readcount" title="Read ${c.read_count}×">${c.read_count >= 2 ? '×' + c.read_count : '✓'}</span>` : '';
+    const badges = (c.is_comic ? '<span class="badge books-badge" style="background:#fd7e14;" title="Comic"><i class="fas fa-book-open"></i></span>' : '')
+                 + (c.is_reprint ? '<span class="badge books-badge bg-secondary" title="Reprint"><i class="fas fa-clock-rotate-left"></i></span>' : '');
+    const tl = selectable
+        ? `<div class="books-badge-tl"><span class="sel-check${isSel ? ' on' : ''}"><i class="fas fa-check"></i></span></div>`
+        : (rc ? `<div class="books-badge-tl">${rc}</div>` : '');
+    const click = selectable ? `toggleSelect('${key}')` : `openBookDetails('${key}')`;
+    return `<div class="col-4 col-sm-3 col-lg-2 mb-3">
+        <div class="card books-card status-${c.status}${isSel ? ' sel-on' : ''}" style="cursor:pointer;" onclick="${click}" title="${esc(dispTitle(c.title))}">
+            <div class="books-cover">${cover}
+                ${tl}
+                ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
+            </div>
+        </div>
+    </div>`;
+}
 
-document.getElementById('editBookModal')?.addEventListener('shown.bs.modal', () => {
-    setupGenreDropdown('editGenre', 'editGenreDropdown');
-});
+// ── Bulk select / edit (#93) ─────────────────────────────────────────────
+let selectMode = false;
+const selected = new Set();   // selected cardKeys (local cards only)
 
-// Tag input event listeners
-const tagInput = document.getElementById('editTags');
-if (tagInput) {
-    tagInput.addEventListener('input', (e) => {
-        showTagDropdown(e.target.value);
-    });
+function toggleSelectMode() {
+    selectMode = !selectMode;
+    if (!selectMode) selected.clear();
+    const btn = document.getElementById('selectBtn');
+    btn.classList.toggle('btn-primary', selectMode);
+    btn.classList.toggle('btn-outline-secondary', !selectMode);
+    document.getElementById('bulkBar').classList.toggle('d-none', !selectMode);
+    document.getElementById('bulkBar').classList.toggle('d-flex', selectMode);
+    if (selectMode && isRemote())
+        showToast('Bulk edit applies to your Owned/Unowned books.', 'info');
+    renderAll();
+}
 
-    tagInput.addEventListener('keydown', (e) => {
-        if (e.key === 'Enter') {
-            e.preventDefault();
-            const value = e.target.value.trim();
-            if (value) {
-                addTag(value);
-            }
+function toggleSelect(key) {
+    if (selected.has(key)) selected.delete(key); else selected.add(key);
+    renderAll();
+}
+
+function selectAllLoaded() {
+    visibleCards().filter(c => c.kind === 'local').forEach(c => selected.add(cardKey(c)));
+    renderAll();
+}
+
+function clearSelection() { selected.clear(); renderAll(); }
+
+function updateBulkBar() {
+    const n = selected.size;
+    document.getElementById('bulkCount').textContent = n;
+    document.getElementById('bulkEditBtn').disabled = n === 0;
+    document.getElementById('bulkDeleteBtn').disabled = n === 0;
+}
+
+function bulkOpen() {
+    if (!selected.size) return;
+    bkeLoadLists();   // shared typeahead datalists
+    ['blkAuthorFirst', 'blkAuthorLast', 'blkSeries', 'blkSeriesNum', 'blkUniverse', 'blkGenre']
+        .forEach(id => { document.getElementById(id).value = ''; });
+    document.getElementById('bulkModalCount').textContent = `(${selected.size} book${selected.size > 1 ? 's' : ''})`;
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('bulkEditModal')).show();
+}
+
+async function bulkApply() {
+    const ids = [...selected].map(k => cardReg[k]).filter(c => c && c.kind === 'local').map(c => c.book_id);
+    if (!ids.length) return;
+    const val = id => document.getElementById(id).value.trim();
+    const payload = { ids };
+    const f = val('blkAuthorFirst'); if (f) payload.author_name_first = f;
+    const l = val('blkAuthorLast'); if (l) payload.author_name_second = l;
+    const s = val('blkSeries'); if (s) payload.series = s;
+    const sn = document.getElementById('blkSeriesNum').value; if (sn !== '') payload.series_number = parseFloat(sn);
+    const u = val('blkUniverse'); if (u) payload.universe = u;
+    const g = val('blkGenre'); if (g) payload.genre = g;
+    if (Object.keys(payload).length === 1) { showToast('Fill in at least one field to apply.', 'info'); return; }
+    try {
+        const r = await GreatReads.apiCall('/books/bulk-update', { method: 'POST', data: payload });
+        showToast(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`, 'success');
+        bootstrap.Modal.getInstance(document.getElementById('bulkEditModal'))?.hide();
+        // patch the edited cards in place; keep scroll + filter (#99)
+        const cp = {};
+        if (payload.series !== undefined) cp.series = payload.series;
+        if (payload.series_number !== undefined) cp.series_number = payload.series_number;
+        if (payload.universe !== undefined) cp.universe = payload.universe;
+        if (payload.genre !== undefined) cp.genre = payload.genre;
+        if (payload.author_name_first && payload.author_name_second)
+            cp.author = payload.author_name_first + ' ' + payload.author_name_second;
+        selected.forEach(k => { const c = cardReg[k]; if (c) Object.assign(c, cp); });
+        selected.clear();
+        renderKeepScroll();
+    } catch (e) { showToast('Bulk update failed', 'danger'); }
+}
+
+async function bulkDelete() {
+    const ids = [...selected].map(k => cardReg[k]).filter(c => c && c.kind === 'local').map(c => c.book_id);
+    if (!ids.length) return;
+    if (!confirm(`Delete ${ids.length} book${ids.length === 1 ? '' : 's'}? This can't be undone.`)) return;
+    try {
+        const r = await GreatReads.apiCall('/books/bulk-delete', { method: 'POST', data: { ids } });
+        showToast(`Deleted ${r.deleted} book${r.deleted === 1 ? '' : 's'}`, 'success');
+        // drop the deleted cards in place; keep scroll + filter (#99)
+        const gone = new Set(ids);
+        cards = cards.filter(c => !(c.kind === 'local' && gone.has(c.book_id)));
+        ids.forEach(id => delete cardReg['L' + id]);
+        shelfTotal = Math.max(0, shelfTotal - r.deleted);
+        selected.clear();
+        renderKeepScroll();
+    } catch (e) { showToast('Bulk delete failed', 'danger'); }
+}
+
+function setupInfiniteScroll() {
+    const obs = new IntersectionObserver(entries => {
+        if (entries[0].isIntersecting && !isRemote() && !shelfLoading && cards.length < shelfTotal) {
+            loadShelf(false);
         }
-    });
+    }, { rootMargin: '600px' });
+    obs.observe(document.getElementById('scrollSentinel'));
+}
 
-    // Hide dropdown when clicking outside
-    document.addEventListener('click', (e) => {
-        if (!tagInput.contains(e.target) && !document.getElementById('editTagsDropdown').contains(e.target)) {
-            document.getElementById('editTagsDropdown').style.display = 'none';
-        }
+// ── Book details modal ───────────────────────────────────────────────────
+function fmtDate(iso, precision) {
+    if (!iso) return '';
+    const [y, m, d] = iso.split('-').map(Number);
+    const MON = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+    if (precision === 'year') return String(y);
+    if (precision === 'month') return `${MON[m-1]} ${y}`;
+    return `${MON[m-1]} ${d}, ${y}`;
+}
+
+let bdCurrent = null, bdNav = [], bdIndex = -1, bdSeriesKey = null, bdAuthorKey = null;
+// #120: the Books-page detail modal now routes to the shared popup (GreatReads popup),
+// which has the bigger layout, series/author sections, click-to-navigate, and swipe.
+// Local cards open by book id (rich); remote/news cards open with Preview/Save-locally/
+// Ignore. The list becomes the popup's prev/next nav. The legacy modal body below is
+// unreachable now — retire in #122.
+function grBooksOpenDetails(key, navList) {
+    const list = navList || visibleCards();
+    const toItem = x => (x.kind === 'local' && x.book_id != null) ? x.book_id : x;
+    const idx = list.findIndex(x => cardKey(x) === key);
+    if (idx >= 0) { GreatReads.openBookNav(list.map(toItem), idx); return; }
+    const only = cardReg[key] || cards.find(x => cardKey(x) === key);
+    if (only) GreatReads.openBookNav([toItem(only)], 0);
+}
+function openBookDetails(key, navList) {
+    return grBooksOpenDetails(key, navList);
+    const c = cardReg[key] || cards.find(x => cardKey(x) === key);
+    if (!c) return;
+    bdCurrent = c;
+    // navigation context for swipe / arrows (#100): the list we're browsing
+    bdNav = navList || visibleCards();
+    bdIndex = bdNav.findIndex(x => cardKey(x) === key);
+    if (bdIndex < 0) { bdNav = [c]; bdIndex = 0; }
+    updateBdNavButtons();
+    bootstrap.Modal.getInstance(document.getElementById('seriesModal'))?.hide();
+    const base = window.APP_BASE_PATH || '';
+    document.getElementById('bdTitle').textContent = dispTitle(c.title);
+
+    setBdCover(c);   // preload + fade swap, no grey flash between books (#100)
+
+    const statusLabel = { owned: 'Owned', unowned: 'Unowned (no copy yet)', upcoming: 'Upcoming', new: 'New' }[c.status];
+    const seriesTxt = c.series
+        ? `<a href="#" onclick="openSeries();return false;">${esc(c.series)}${c.series_number != null ? ` #${c.series_number}` : ''}</a>`
+        : '';
+    const rows = [];
+    rows.push(['Status', statusLabel]);
+    if (c.author) rows.push(['Author', c.author]);
+    if (seriesTxt) rows.push(['Series', seriesTxt]);
+    if (c.genre) rows.push(['Genre', c.genre]);
+    const dt = fmtDate(c.date, c.date_precision);
+    if (dt) rows.push([c.status === 'upcoming' ? 'Releases' : 'Published', dt]);
+    if (c.is_reprint && c.first_publish_year) rows.push(['First published', c.first_publish_year]);
+    if (c.binding) rows.push(['Binding', c.binding]);
+    if (c.word_count) rows.push(['Words', `${Math.round(c.word_count / 1000)}k (est.)`]);
+    if (c.page_count) rows.push(['Pages', c.page_count]);
+    document.getElementById('bdFields').innerHTML = rows.map(([k, v]) =>
+        `<div class="d-flex justify-content-between gap-3 border-bottom py-1">
+            <span class="text-muted">${k}</span><span class="fw-medium text-end">${v}</span></div>`).join('');
+
+    // Actions by status.
+    let actions = '';
+    if (c.kind === 'local') {
+        actions = `<button class="btn btn-sm btn-outline-primary" onclick="bkeOpen(${c.book_id})">
+            <i class="fas fa-pen-to-square me-1"></i>Edit book</button>`;
+    } else {
+        actions = `${c.preview_link ? `<a class="btn btn-sm btn-outline-secondary" href="${c.preview_link}" target="_blank" rel="noopener"><i class="fas fa-eye me-1"></i>Preview</a>` : ''}
+            <button class="btn btn-sm btn-outline-success" onclick="saveLocally(${c.news_id})"><i class="fas fa-download me-1"></i>Save locally</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="ignoreRelease(${c.news_id})"><i class="fas fa-ban me-1"></i>Ignore</button>`;
+    }
+    document.getElementById('bdActions').innerHTML = actions;
+
+    // Series strip: only rebuild when the series actually changes. Swiping
+    // within the same series just moves the highlight — no refetch, no flash. (#100)
+    const seriesKey = (c.series || '') + '|' + (c.universe || '');
+    if (seriesKey === bdSeriesKey) {
+        highlightBdSeries(c.book_id);
+    } else {
+        bdSeriesKey = seriesKey;
+        document.getElementById('bdSeries').innerHTML = '';
+        if (c.series) injectSeriesStrip(c);
+    }
+
+    // Author reads: only reload when the author changes (#100).
+    const authorKey = c.author || '';
+    if (authorKey !== bdAuthorKey) {
+        bdAuthorKey = authorKey;
+        const ar = document.getElementById('bdAuthorReads');
+        if (authorKey) { ar.innerHTML = '<span class="text-muted small">Loading your reads…</span>'; injectAuthorReads(authorKey); }
+        else ar.innerHTML = '';
+    }
+
+    const modalEl = document.getElementById('bookDetailsModal');
+    const inst = bootstrap.Modal.getOrCreateInstance(modalEl);
+    if (!modalEl.classList.contains('show')) inst.show();   // already open during swipe → don't re-show
+}
+
+// ── Series view (#96) ────────────────────────────────────────────────────
+async function fetchSeries(series, universe) {
+    const q = `name=${encodeURIComponent(series)}` + (universe ? `&universe=${encodeURIComponent(universe)}` : '');
+    const d = await GreatReads.apiCall('/news/series?' + q);
+    registerCards(d.cards || []);
+    return d.cards || [];
+}
+
+function seriesMiniHtml(c, currentId, withCaption) {
+    const src = coverSrc(c);
+    const cover = src
+        ? `<img src="${src}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';">${phCover(c, 'none')}`
+        : phCover(c, 'flex');
+    const cur = c.book_id === currentId ? ' style="outline:2px solid var(--bs-primary);outline-offset:1px;border-radius:4px;"' : '';
+    const num = c.series_number != null ? `#${c.series_number}` : '';
+    const caption = withCaption
+        ? `<div class="small text-truncate mt-1" title="${esc(dispTitle(c.title))}">${num ? num + ' · ' : ''}${esc(dispTitle(c.title))}</div>`
+        : (num ? `<div class="text-muted text-center" style="font-size:.65rem;line-height:1.4;">${num}</div>` : '');
+    return `<div class="col-4 col-sm-3 col-lg-2 mb-2">
+        <div class="card books-card status-${c.status}" data-bid="${c.book_id}" style="cursor:pointer;"${cur} onclick="openBookDetails('${cardKey(c)}')" title="${esc(dispTitle(c.title))}">
+            <div class="books-cover">${cover}</div>
+        </div>${caption}</div>`;
+}
+
+async function injectSeriesStrip(c) {
+    const wrap = document.getElementById('bdSeries');
+    wrap.innerHTML = '<div class="text-muted small">Loading series…</div>';
+    let list;
+    try { list = await fetchSeries(c.series, c.universe); } catch (e) { wrap.innerHTML = ''; return; }
+    if (!list || list.length <= 1) { wrap.innerHTML = ''; return; }   // nothing to show for a singleton
+    const head = `<div class="d-flex justify-content-between align-items-center mb-2">
+        <span class="text-muted small">In this series (${list.length})</span>
+        <a href="#" class="small" onclick="openSeries();return false;">View series <i class="fas fa-arrow-right ms-1"></i></a></div>`;
+    wrap.innerHTML = head + `<div class="row g-2">${list.map(x => seriesMiniHtml(x, c.book_id, false)).join('')}</div>`;
+}
+
+async function openSeries(series, universe) {
+    series = series || (bdCurrent && bdCurrent.series);
+    universe = universe !== undefined ? universe : (bdCurrent && bdCurrent.universe) || '';
+    if (!series) return;
+    bootstrap.Modal.getInstance(document.getElementById('bookDetailsModal'))?.hide();
+    document.getElementById('srTitle').textContent = series;
+    document.getElementById('srGrid').innerHTML = '<div class="col-12 text-muted text-center py-4">Loading…</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('seriesModal')).show();
+    const curId = bdCurrent && bdCurrent.book_id;
+    let list;
+    try { list = await fetchSeries(series, universe); } catch (e) { list = []; }
+    document.getElementById('srGrid').innerHTML = list.length
+        ? list.map(x => seriesMiniHtml(x, curId, true)).join('')
+        : '<div class="col-12 text-muted text-center py-4">No books found in this series.</div>';
+}
+
+async function injectAuthorReads(author) {
+    const el = document.getElementById('bdAuthorReads');
+    try {
+        const d = await GreatReads.apiCall('/news/author-reads?author=' + encodeURIComponent(author));
+        if (!d.books || !d.books.length) { el.innerHTML = `<span class="text-muted small">No finished books by ${author} yet.</span>`; return; }
+        const base = window.APP_BASE_PATH || '';
+        const rows = d.books.map(b => {
+            const cover = b.has_cover
+                ? `<img src="${base}/static/covers/${b.id}.jpg" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
+                : `<i class="fas fa-book" style="color:#adb5bd;"></i>`;
+            const sub = b.series ? `<div class="text-muted text-truncate" style="font-size:.7rem;">${b.series}${b.series_number != null ? ' #' + b.series_number : ''}</div>` : '';
+            return `<div class="col-6 col-md-4"><div class="d-flex align-items-center gap-2 mb-1">
+                <div style="width:30px;height:45px;flex:0 0 30px;background:#e9ecef;border-radius:3px;overflow:hidden;display:flex;align-items:center;justify-content:center;">${cover}</div>
+                <div class="small" style="min-width:0;"><div class="text-truncate">${b.title}</div>${sub}</div></div></div>`;
+        }).join('');
+        el.innerHTML = `<div class="text-muted small mb-2">You've read ${d.books.length} by ${author}:</div><div class="row g-1">${rows}</div>`;
+    } catch (e) { el.innerHTML = ''; }
+}
+
+// "Save locally" (#68 Phase B): open the shared Add-book modal (#117) prefilled from the
+// detected release so the user reviews/edits before it's written to the DB. On successful
+// create, afterCreate() dismisses the release from the feed.
+let _saveLocallyNewsId = null;
+function saveLocally(newsId) {
+    const c = (bdCurrent && bdCurrent.news_id === newsId) ? bdCurrent
+        : cards.find(x => x.news_id === newsId);
+    if (!c) return;
+    _saveLocallyNewsId = newsId;
+    // Split "First M. Last" on the final space (house first/second style; user can fix it).
+    const name = (c.author || '').trim();
+    const sp = name.lastIndexOf(' ');
+    bkeOpenNew({
+        title: c.title,
+        author_first: sp > 0 ? name.slice(0, sp) : name,
+        author_last: sp > 0 ? name.slice(sp + 1) : '',
+        series: c.series,
+        series_number: c.series_number,
+        genre: c.genre,
+        date_published: c.date,
+        page_count: c.page_count,
+        word_count: c.word_count,
+        cover_url: c.cover_url,
     });
 }
 
-// Load tags on page load
-loadTags();
+async function ignoreRelease(newsId) {
+    try { await GreatReads.apiCall(`/news/${newsId}/dismiss`, { method: 'POST' }); } catch (e) {}
+    cards = cards.filter(c => c.news_id !== newsId);
+    bootstrap.Modal.getInstance(document.getElementById('openBookModal'))?.hide();
+    renderAll();
+    if (typeof loadNewsBadge === 'function') loadNewsBadge();
+}
+
+let _polling = false;
+async function checkNow() {
+    if (_polling) return;
+    _polling = true;
+    const btn = document.getElementById('checkNowBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Checking…';
+    try {
+        await GreatReads.apiCall('/news/poll', { method: 'POST' });
+        showToast('Checking for new releases — runs in the background. Refresh in a minute.', 'info');
+    } catch (e) {}
+    setTimeout(() => {
+        if (isRemote()) loadShelf(true);
+        btn.disabled = false;
+        btn.innerHTML = '<i class="fas fa-rotate me-1"></i>Check now';
+        _polling = false;
+    }, 8000);
+}
+
+// Re-run the filter/ownership pipeline over already-cached releases — no Google quota (#68).
+// Immediate: drops stale junk (Sneak Peek) and placeholders now matched to a library book.
+async function reclean() {
+    const btn = document.getElementById('recleanBtn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Cleaning…';
+    try {
+        const r = await GreatReads.apiCall('/news/reprocess', { method: 'POST' });
+        showToast(`Re-cleaned: ${r.removed} removed, ${r.updated} updated.`, 'success');
+        if (isRemote()) loadShelf(true);
+        if (typeof loadNewsBadge === 'function') loadNewsBadge();
+    } catch (e) { showToast('Re-clean failed.', 'danger'); }
+    btn.disabled = false;
+    btn.innerHTML = '<i class="fas fa-broom me-1"></i>Re-clean';
+}
+
+
+// ── followed authors ─────────────────────────────────────────────────────
+async function loadWatch() {
+    const box = document.getElementById('manageAuthors');
+    let w;
+    try { w = await GreatReads.apiCall('/news/watch'); }
+    catch (e) { box.innerHTML = '<div class="text-danger small">Could not load authors.</div>'; return; }
+    const excl = new Set((w.excluded || []).map(s => s.toLowerCase()));
+    const extra = new Set((w.extra || []).map(s => s.toLowerCase()));
+    document.getElementById('watchCount').textContent = `(${(w.effective || []).length})`;
+    const all = [...new Set([...(w.auto || []), ...(w.extra || [])])].sort((a, b) => a.localeCompare(b));
+    box.innerHTML = all.map(name => {
+        const on = !excl.has(name.toLowerCase());
+        const isExtra = extra.has(name.toLowerCase());
+        return `<div class="manage-author-row">
+            <span>${name} ${isExtra ? '<span class="badge bg-light text-secondary">added</span>' : ''}</span>
+            <div class="form-check form-switch m-0">
+                <input class="form-check-input" type="checkbox" ${on ? 'checked' : ''}
+                       onchange="toggleAuthor('${name.replace(/'/g, "\\'")}', this.checked, ${isExtra})">
+            </div></div>`;
+    }).join('') || '<div class="text-muted small">No read authors yet.</div>';
+}
+async function toggleAuthor(name, on, isExtra) {
+    try {
+        if (isExtra && !on) await GreatReads.apiCall('/news/watch/uninclude', { method: 'POST', data: { author: name } });
+        else if (on) await GreatReads.apiCall('/news/watch/unexclude', { method: 'POST', data: { author: name } });
+        else await GreatReads.apiCall('/news/watch/exclude', { method: 'POST', data: { author: name } });
+    } catch (e) {}
+    loadWatch();
+}
+async function addExtra() {
+    const input = document.getElementById('extraAuthorInput');
+    const name = input.value.trim();
+    if (!name) return;
+    try { await GreatReads.apiCall('/news/watch/include', { method: 'POST', data: { author: name } }); } catch (e) {}
+    input.value = '';
+    loadWatch();
+}
+document.getElementById('settingsPanel').addEventListener('shown.bs.collapse', loadWatch);
+
+// ── Merge Duplicates (#131) ──────────────────────────────────────────────
+let mergeSel = { A: null, B: null };
+const _mesc = s => String(s == null ? '' : s).replace(/[&<>"']/g,
+    c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+let _mergeSearchT = {};
+function openMergeDuplicates() {
+    mergeSel = { A: null, B: null };
+    ['A', 'B'].forEach(s => {
+        document.getElementById('mergeSearch' + s).value = '';
+        document.getElementById('mergeResults' + s).innerHTML = '';
+        document.getElementById('mergeSel' + s).innerHTML = '';
+    });
+    document.getElementById('mergeCompare').innerHTML = '';
+    document.getElementById('mergeSubmitBtn').disabled = true;
+    document.getElementById('mergeSwapBtn').style.display = 'none';
+    new bootstrap.Modal(document.getElementById('mergeDupModal')).show();
+}
+function mergeSearch(slot) {
+    const q = document.getElementById('mergeSearch' + slot).value.trim();
+    clearTimeout(_mergeSearchT[slot]);
+    const box = document.getElementById('mergeResults' + slot);
+    if (q.length < 2) { box.innerHTML = ''; return; }
+    _mergeSearchT[slot] = setTimeout(async () => {
+        let res = [];
+        try { res = await GreatReads.apiCall('/import/books/search?q=' + encodeURIComponent(q)); } catch (e) { res = []; }
+        box.innerHTML = (res || []).slice(0, 25).map(b => {
+            const sc = b.series ? ` · ${_mesc(b.series)}${b.series_number != null ? ' #' + b.series_number : ''}` : '';
+            return `<button type="button" class="list-group-item list-group-item-action py-1" onclick="mergePick('${slot}',${b.id})">
+                <span class="fw-semibold">${_mesc(b.title || 'Untitled')}</span>
+                <span class="text-muted"> — ${_mesc(b.author || '')}${sc}</span> <span class="badge bg-light text-dark">#${b.id}</span></button>`;
+        }).join('') || '<div class="text-muted small px-2 py-1">No matches</div>';
+    }, 250);
+}
+async function mergePick(slot, id) {
+    let d;
+    try { d = await GreatReads.apiCall('/books/' + id + '/details'); } catch (e) { GreatReads.showToast('Could not load book', 'error'); return; }
+    mergeSel[slot] = d;
+    document.getElementById('mergeResults' + slot).innerHTML = '';
+    document.getElementById('mergeSearch' + slot).value = d.title || ('#' + id);
+    renderMergeSel(slot);
+    renderMergeCompare();
+}
+function renderMergeSel(slot) {
+    const d = mergeSel[slot], el = document.getElementById('mergeSel' + slot);
+    if (!d) { el.innerHTML = ''; return; }
+    const media = (d.media_owned || []).join(', ') || 'none';
+    el.innerHTML = `<div class="border rounded p-2 small"><span class="fw-semibold">${_mesc(d.title || 'Untitled')}</span> <span class="badge bg-light text-dark">#${d.id}</span><br>
+        <span class="text-muted">${_mesc(d.author || '')}${d.series ? (' · ' + _mesc(d.series) + (d.series_number != null ? ' #' + d.series_number : '')) : ''}</span><br>
+        <span class="text-muted">Owned: ${_mesc(media)}</span></div>`;
+}
+const MERGE_FIELDS = [
+    ['title', 'Title'], ['author', 'Author'], ['series', 'Series'], ['series_number', 'Series #'],
+    ['universe', 'Universe'], ['genre', 'Genre'], ['word_count', 'Words'], ['page_count', 'Pages'],
+    ['date_published', 'Published']
+];
+function renderMergeCompare() {
+    const A = mergeSel.A, B = mergeSel.B, cmp = document.getElementById('mergeCompare');
+    document.getElementById('mergeSwapBtn').style.display = (A && B) ? '' : 'none';
+    document.getElementById('mergeSubmitBtn').disabled = !(A && B && A.id !== B.id);
+    if (!A || !B) { cmp.innerHTML = ''; return; }
+    if (A.id === B.id) { cmp.innerHTML = '<div class="alert alert-warning py-2 small mb-0">Pick two different books.</div>'; return; }
+    const fmt = v => (v == null || v === '') ? '<span class="text-muted">—</span>' : _mesc(v);
+    let rows = MERGE_FIELDS.map(([f, label]) => {
+        const av = A[f], bv = B[f];
+        if (String(av == null ? '' : av) === String(bv == null ? '' : bv))
+            return `<tr><td class="text-muted">${label}</td><td colspan="2">${fmt(av)}</td></tr>`;
+        return `<tr><td class="text-muted">${label}</td>
+            <td><label class="d-block"><input type="radio" name="mf_${f}" value="A" checked> ${fmt(av)}</label></td>
+            <td><label class="d-block"><input type="radio" name="mf_${f}" value="B"> ${fmt(bv)}</label></td></tr>`;
+    }).join('');
+    const base = window.APP_BASE_PATH || '';
+    const covImg = d => d.cover ? `<img src="${base}/static/covers/${d.id}.jpg?v=${Date.now()}" style="height:60px;border-radius:3px;">` : '<span class="text-muted">none</span>';
+    rows += `<tr><td class="text-muted">Cover</td>
+        <td><label><input type="radio" name="mf_cover" value="A" ${A.cover ? 'checked' : ''} ${A.cover ? '' : 'disabled'}> ${covImg(A)}</label></td>
+        <td><label><input type="radio" name="mf_cover" value="B" ${(!A.cover && B.cover) ? 'checked' : ''} ${B.cover ? '' : 'disabled'}> ${covImg(B)}</label></td></tr>`;
+    const mediaUnion = [...new Set([...(A.media_owned || []), ...(B.media_owned || [])])].join(', ') || 'none';
+    cmp.innerHTML = `<hr><div class="small text-muted mb-1">Pick the value to keep for each differing field. Owned formats are combined: <strong>${_mesc(mediaUnion)}</strong>. Readings, sessions, highlights & tags are preserved on the kept record.</div>
+        <table class="table table-sm align-middle"><thead><tr><th></th><th class="text-success">Keep #${A.id}</th><th class="text-danger">Remove #${B.id}</th></tr></thead><tbody>${rows}</tbody></table>`;
+}
+function mergeSwap() {
+    const t = mergeSel.A; mergeSel.A = mergeSel.B; mergeSel.B = t;
+    ['A', 'B'].forEach(s => {
+        document.getElementById('mergeSearch' + s).value = mergeSel[s] ? (mergeSel[s].title || ('#' + mergeSel[s].id)) : '';
+        renderMergeSel(s);
+    });
+    renderMergeCompare();
+}
+async function submitMerge() {
+    const A = mergeSel.A, B = mergeSel.B;
+    if (!A || !B || A.id === B.id) return;
+    const fields = {};
+    MERGE_FIELDS.forEach(([f]) => {
+        const picked = document.querySelector(`input[name="mf_${f}"]:checked`);
+        if (picked && picked.value === 'B') {
+            if (f === 'author') { fields.author_name_first = B.author_name_first; fields.author_name_second = B.author_name_second; }
+            else fields[f] = B[f];
+        }
+    });
+    const cov = document.querySelector('input[name="mf_cover"]:checked');
+    if (cov && cov.value === 'B') fields.cover = 'loser';
+    const btn = document.getElementById('mergeSubmitBtn'); btn.disabled = true;
+    try {
+        await GreatReads.apiCall('/books/merge', { method: 'POST', data: { survivor_id: A.id, loser_id: B.id, fields } });
+        GreatReads.showToast(`Merged “${B.title || ('#' + B.id)}” into “${A.title || ('#' + A.id)}”`, 'success');
+        bootstrap.Modal.getInstance(document.getElementById('mergeDupModal')).hide();
+        loadShelf(true);
+        refreshImportBadge();
+    } catch (e) { GreatReads.showToast('Merge failed', 'error'); btn.disabled = false; }
+}
+function _maybeOpenMergeFromUrl() {
+    const m = new URLSearchParams(location.search).get('merge');
+    if (!m) return;
+    const [a, b] = m.split(',').map(x => parseInt(x, 10));
+    if (!a || !b) return;
+    openMergeDuplicates(); mergePick('A', a); mergePick('B', b);
+}
+
+// ── Newly Imported tray (#137) ───────────────────────────────────────────
+const _niEsc = _mesc;
+function _niSeen() { try { return new Set(JSON.parse(localStorage.getItem('gr_imports_seen') || '[]')); } catch (e) { return new Set(); } }
+function _niSaveSeen(set) { try { localStorage.setItem('gr_imports_seen', JSON.stringify([...set])); } catch (e) {} }
+function _niAgo(iso) {
+    if (!iso) return '';
+    const d = new Date(iso.length <= 19 ? iso + 'Z' : iso), s = (Date.now() - d.getTime()) / 1000;
+    if (s < 3600) return Math.max(1, Math.round(s / 60)) + 'm ago';
+    if (s < 86400) return Math.round(s / 3600) + 'h ago';
+    return Math.round(s / 86400) + 'd ago';
+}
+let _niCache = [];
+async function _niFetch() {
+    try { _niCache = await GreatReads.apiCall('/import/recent?limit=100') || []; } catch (e) { _niCache = []; }
+    return _niCache;
+}
+async function refreshImportBadge() {
+    const items = await _niFetch();
+    const seen = _niSeen();
+    const unseen = items.filter(i => !seen.has(i.import_id)).length;
+    const badge = document.getElementById('newImportBadge');
+    if (!badge) return;
+    if (unseen > 0) { badge.textContent = unseen > 99 ? '99+' : unseen; badge.style.display = ''; }
+    else badge.style.display = 'none';
+}
+async function openNewlyImported() {
+    new bootstrap.Modal(document.getElementById('newImportModal')).show();
+    document.getElementById('newImportList').innerHTML = '<div class="text-muted small">Loading…</div>';
+    renderImportList(await _niFetch());
+}
+function renderImportList(items) {
+    const box = document.getElementById('newImportList');
+    if (!items.length) { box.innerHTML = '<div class="text-muted small">No recent imports.</div>'; return; }
+    const base = window.APP_BASE_PATH || '';
+    box.innerHTML = items.map(i => {
+        const cover = i.cover
+            ? `<img src="${base}/static/covers/${i.book_id}.jpg?v=1" style="width:40px;height:60px;object-fit:cover;border-radius:3px;">`
+            : `<div style="width:40px;height:60px;background:#e9ecef;border-radius:3px;"></div>`;
+        const src = i.source === 'calibre' ? 'Calibre' : (i.source === 'audiobookshelf' ? 'Audiobookshelf' : i.source);
+        const actBadge = i.action === 'created' ? '<span class="badge bg-success">Created</span>' : '<span class="badge bg-info text-dark">Linked</span>';
+        const sc = i.series ? ` · ${_niEsc(i.series)}${i.series_number != null ? ' #' + i.series_number : ''}` : '';
+        const dupWarn = i.possible_duplicate
+            ? `<div class="mt-1"><span class="badge bg-warning text-dark">possible duplicate</span>
+                 <span class="small text-muted">of “${_niEsc(i.possible_duplicate.title || ('#' + i.possible_duplicate.id))}”</span>
+                 <button class="btn btn-sm btn-outline-danger py-0 ms-1" onclick="mergeFromImport(${i.book_id},${i.possible_duplicate.id})"><i class="fas fa-code-branch me-1"></i>Merge</button></div>`
+            : '';
+        return `<div class="d-flex gap-2 align-items-start border-bottom py-2">
+            ${cover}
+            <div class="flex-grow-1">
+                <div><span class="fw-semibold">${_niEsc(i.title || 'Untitled')}</span> <span class="badge bg-light text-dark">#${i.book_id}</span></div>
+                <div class="small text-muted">${_niEsc(i.author || '')}${sc}</div>
+                <div class="small mt-1">${actBadge} <span class="text-muted">${src} · ${_niEsc((i.media_owned || []).join(', '))} · ${_niAgo(i.imported_at)}</span></div>
+                ${dupWarn}
+            </div>
+            <button class="btn btn-sm btn-link text-muted" title="Mark reviewed" onclick="dismissImport(${i.import_id}, this)"><i class="fas fa-check"></i></button>
+        </div>`;
+    }).join('');
+}
+function dismissImport(importId, btn) {
+    const seen = _niSeen(); seen.add(importId); _niSaveSeen(seen);
+    if (btn) { const row = btn.closest('.d-flex'); if (row) row.style.opacity = '0.4'; }
+    refreshImportBadge();
+}
+function dismissAllImports() {
+    const seen = _niSeen(); _niCache.forEach(i => seen.add(i.import_id)); _niSaveSeen(seen);
+    refreshImportBadge();
+    document.querySelectorAll('#newImportList .d-flex').forEach(r => r.style.opacity = '0.4');
+    GreatReads.showToast('All marked reviewed', 'success');
+}
+// On the Books page the merge tool is right here — open it preselected in place.
+function mergeFromImport(bookId, dupId) {
+    bootstrap.Modal.getInstance(document.getElementById('newImportModal'))?.hide();
+    openMergeDuplicates();
+    mergePick('A', dupId);   // survivor = existing record
+    mergePick('B', bookId);  // remove = the fresh import
+}
 </script>
-
-<style>
-/* Genre Dropdown Styling */
-.genre-dropdown {
-    max-height: 250px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    z-index: 1060;
-    background: white;
-    border: 1px solid #dee2e6;
-    border-radius: 0.5rem;
-    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
-    margin-top: 0.25rem;
-}
-
-.genre-dropdown .list-group-item {
-    border: none;
-    border-bottom: 1px solid #e9ecef;
-    transition: all 0.2s;
-    cursor: pointer;
-}
-
-.genre-dropdown .list-group-item:last-child {
-    border-bottom: none;
-}
-
-.genre-dropdown .list-group-item:hover {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-    transform: translateX(4px);
-}
-
-/* Tag Dropdown Styling */
-.tag-dropdown {
-    max-height: 200px;
-    overflow-y: auto;
-    overflow-x: hidden;
-    z-index: 1060;
-    background: white;
-    border: 1px solid #dee2e6;
-    border-radius: 0.5rem;
-    box-shadow: 0 8px 24px rgba(102, 126, 234, 0.3);
-    margin-top: 0.25rem;
-}
-
-.tag-dropdown .list-group-item {
-    border: none;
-    border-bottom: 1px solid #e9ecef;
-    transition: all 0.2s;
-    cursor: pointer;
-    padding: 0.5rem 0.75rem;
-}
-
-.tag-dropdown .list-group-item:last-child {
-    border-bottom: none;
-}
-
-.tag-dropdown .list-group-item:hover {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.1) 0%, rgba(118, 75, 162, 0.1) 100%);
-    transform: translateX(4px);
-}
-
-.tag-dropdown .list-group-item.create-new {
-    background: linear-gradient(135deg, rgba(102, 126, 234, 0.05) 0%, rgba(118, 75, 162, 0.05) 100%);
-    font-style: italic;
-    color: #667eea;
-}
-
-/* Tag Badge Styling */
-.tag-badge {
-    display: inline-flex;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.4rem 0.75rem;
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border-radius: 1rem;
-    font-size: 0.875rem;
-    font-weight: 500;
-    transition: all 0.2s;
-}
-
-.tag-badge:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
-}
-
-.tag-badge .remove-tag {
-    cursor: pointer;
-    font-weight: bold;
-    opacity: 0.8;
-    transition: opacity 0.2s;
-}
-
-.tag-badge .remove-tag:hover {
-    opacity: 1;
-}
-</style>
 {% endblock %}
-

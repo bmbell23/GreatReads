@@ -13,6 +13,8 @@ from ..database import get_db
 from ..models.book import Book, BookCreate, BookUpdate, BookResponse
 from ..models.reading import Reading
 from ..models.tag import Tag
+from ..models.inventory import Inventory
+from ..models.external_import import ExternalImport
 from ..models.user import User
 from ..config import settings
 from ..auth import get_current_user
@@ -216,6 +218,110 @@ async def delete_book(
         except Exception:
             pass
     return {"message": "Book deleted successfully"}
+
+
+class MergeRequest(BaseModel):
+    """Merge the loser book into the survivor (#131). ``fields`` optionally carries
+    per-field chosen values to write onto the survivor (field-by-field compare)."""
+    survivor_id: int
+    loser_id: int
+    fields: Optional[dict] = None
+
+
+# Scalar book columns the merge can carry over / let the user pick.
+_MERGE_SCALARS = (
+    "title", "author_name_first", "author_name_second", "author_gender",
+    "word_count", "page_count", "date_published", "universe", "series",
+    "series_number", "genre", "isbn_id",
+)
+
+
+@router.post("/merge")
+async def merge_books(
+    request: Request,
+    body: MergeRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
+    """Merge ``loser_id`` into ``survivor_id`` (#131): OR inventory ownership, move
+    external links + readings + tags onto the survivor, fill/override survivor scalar
+    fields, adopt the loser's cover when the survivor lacks one, then delete the loser.
+
+    reading_sessions / reading_activity / ereader_progress / ereader_highlights key off
+    the external (Calibre/ABS) id, not the GreatReads book id, so they follow the moved
+    external_imports automatically — no repoint needed."""
+    if body.survivor_id == body.loser_id:
+        raise HTTPException(status_code=400, detail="Cannot merge a book into itself")
+    survivor = db.query(Book).filter(Book.id == body.survivor_id).first()
+    loser = db.query(Book).filter(Book.id == body.loser_id).first()
+    if not survivor or not loser:
+        raise HTTPException(status_code=404, detail="Book not found")
+
+    chosen = body.fields or {}
+
+    # 1) Inventory — OR ownership into the survivor (create a row if it has none),
+    #    coalescing ISBNs / shelf location from the loser where the survivor is blank.
+    s_inv = db.query(Inventory).filter_by(book_id=survivor.id).first()
+    l_inv = db.query(Inventory).filter_by(book_id=loser.id).first()
+    if l_inv:
+        if not s_inv:
+            s_inv = Inventory(book_id=survivor.id)
+            db.add(s_inv)
+        s_inv.owned_audio = bool(s_inv.owned_audio or l_inv.owned_audio)
+        s_inv.owned_ebook = bool(s_inv.owned_ebook or l_inv.owned_ebook)
+        s_inv.owned_physical = bool(s_inv.owned_physical or l_inv.owned_physical)
+        s_inv.graphic_audio = bool(getattr(s_inv, "graphic_audio", False) or getattr(l_inv, "graphic_audio", False))
+        s_inv.owned_in_library = bool(getattr(s_inv, "owned_in_library", False) or getattr(l_inv, "owned_in_library", False))
+        for f in ("isbn_10", "isbn_13", "location", "shelf_bookshelf",
+                  "shelf_shelf", "shelf_position", "date_purchased"):
+            if getattr(s_inv, f, None) in (None, "") and getattr(l_inv, f, None) not in (None, ""):
+                setattr(s_inv, f, getattr(l_inv, f))
+        db.delete(l_inv)
+
+    # 2) Move external links + readings onto the survivor.
+    for ext in db.query(ExternalImport).filter_by(book_id=loser.id).all():
+        ext.book_id = survivor.id
+        ext.action = ext.action or "linked"
+    for rd in db.query(Reading).filter_by(book_id=loser.id).all():
+        rd.book_id = survivor.id
+    # Tags (m2m): union onto the survivor.
+    for t in list(loser.tags):
+        if t not in survivor.tags:
+            survivor.tags.append(t)
+    loser.tags = []
+
+    # 3) Scalar fields: apply user-chosen values, else fill survivor gaps from loser.
+    for f in _MERGE_SCALARS:
+        if f in chosen:
+            setattr(survivor, f, chosen[f])
+        elif getattr(survivor, f, None) in (None, "", 0) and getattr(loser, f, None) not in (None, "", 0):
+            setattr(survivor, f, getattr(loser, f))
+
+    # 4) Cover: adopt the loser's if the survivor has none (or the user picked it).
+    if (chosen.get("cover") == "loser" or not survivor.cover) and loser.cover:
+        src = settings.covers_dir / f"{loser.id}.jpg"
+        dst = settings.covers_dir / f"{survivor.id}.jpg"
+        try:
+            if src.exists():
+                shutil.copyfile(src, dst)
+                survivor.cover = True
+        except Exception:
+            pass
+
+    # Flush the repoints, then reload the loser so its (now-empty) relationship
+    # collections don't cascade-delete the rows we just moved, and delete it.
+    db.flush()
+    db.expire(loser)
+    db.delete(loser)
+    db.commit()
+
+    for p in (settings.covers_dir / f"{loser.id}.jpg",
+              Path("/app/data/covers_thumb") / f"{loser.id}.jpg"):
+        try:
+            p.unlink(missing_ok=True)
+        except Exception:
+            pass
+    return {"message": "merged", "survivor_id": survivor.id, "removed_id": loser.id}
 
 
 class BulkUpdateRequest(BaseModel):

@@ -344,11 +344,10 @@ async def highlights_page(request: Request, db: Session = Depends(get_db)):
     return templates.TemplateResponse(request, "highlights.html", {"current_user": current_user})
 
 
-@app.get("/news", response_class=HTMLResponse)
-async def news_page(request: Request, db: Session = Depends(get_db)):
-    """News page — upcoming/new releases from watched authors (#68)."""
-    current_user = get_current_user_from_cookie(request, db)
-    return templates.TemplateResponse(request, "news.html", {"current_user": current_user})
+@app.get("/news")
+async def news_page(request: Request):
+    """Legacy /news URL — the page is now the unified Books page (#88). Redirect."""
+    return RedirectResponse(url=request.url_for("books_page"))
 
 
 @app.get("/settings", response_class=HTMLResponse)

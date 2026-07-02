@@ -63,6 +63,68 @@ async def trigger_sync(db: Session = Depends(get_db)):
     return sync_all(db)
 
 
+@router.get("/recent")
+async def recent_imports(limit: int = 50, db: Session = Depends(get_db)):
+    """Recently auto-imported ebooks/audiobooks (newest first) for the Library
+    'Newly Imported' tray (#137). Only external (Calibre/ABS) imports appear —
+    physical books are user-added. Each item reports whether it CREATED a new
+    book or LINKED into an existing one, and flags a possible duplicate when
+    another book shares its normalized title+author (so mis-imports like the
+    Shannara set surface for review/merge)."""
+    from sqlalchemy import func
+    from ..models.inventory import Inventory
+
+    rows = (
+        db.query(ExternalImport)
+        .order_by(ExternalImport.imported_at.desc().nullslast())
+        .limit(max(1, min(limit, 200)))
+        .all()
+    )
+    out = []
+    for e in rows:
+        bk = db.query(Book).filter(Book.id == e.book_id).first()
+        if not bk:
+            continue
+        inv = db.query(Inventory).filter_by(book_id=bk.id).first()
+        media = []
+        if inv:
+            if inv.owned_ebook:
+                media.append("Ebook")
+            if inv.owned_audio:
+                media.append("Audio")
+            if inv.owned_physical:
+                media.append("Physical")
+        dup = None
+        if bk.title and (bk.title or "").strip():
+            t = (bk.title or "").strip().lower()
+            a = ((bk.author_name_first or "") + " " + (bk.author_name_second or "")).strip().lower()
+            for other in (
+                db.query(Book)
+                .filter(Book.id != bk.id, func.lower(func.trim(Book.title)) == t)
+                .all()
+            ):
+                oa = ((other.author_name_first or "") + " " + (other.author_name_second or "")).strip().lower()
+                if oa == a:
+                    dup = {"id": other.id, "title": other.title}
+                    break
+        out.append({
+            "import_id": e.id,
+            "source": e.source,
+            "external_id": e.external_id,
+            "action": e.action,
+            "imported_at": e.imported_at.isoformat() if e.imported_at else None,
+            "book_id": bk.id,
+            "title": bk.title,
+            "author": bk.author,
+            "series": bk.series,
+            "series_number": bk.series_number,
+            "cover": bool(bk.cover),
+            "media_owned": media,
+            "possible_duplicate": dup,
+        })
+    return out
+
+
 # ---------------------------------------------------------------------------
 # Calibre
 # ---------------------------------------------------------------------------

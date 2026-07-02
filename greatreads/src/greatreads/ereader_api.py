@@ -2768,6 +2768,61 @@ def reset_progress_credit_mark(book_id):
     return {'progress': item.get('progress'), 'maxProgress': item.get('maxProgress'),
             'position': item.get('position'), 'maxPosition': item.get('maxPosition')}
 
+@router.post('/api/sessions-gr/{gr_book_id}/recredit')
+def recredit_ebook_sessions(gr_book_id: int):
+    """Self-service word-credit repair (#136): recompute each EBOOK session's words
+    from its own progress range — round(max(0, end_pct - start_pct) × word_count) —
+    re-derive each affected day's reading_activity row, and reset the credit
+    high-water-mark to the current position so forward reading keeps crediting.
+
+    This is the in-app equivalent of the manual fix for a poisoned maxProgress that
+    zeroed real reading. Backward / peek sessions (end ≤ start) credit 0."""
+    ebook_keys = [k for k in _session_keys_for_gr_book(gr_book_id)
+                  if not k.startswith('abs:') and not k.startswith('phys:')]
+    if not ebook_keys:
+        return JSONResponse({'error': 'no ebook sessions for this book'}, status_code=404)
+
+    conn = _gr_db()
+    try:
+        _ensure_reading_sessions_table(conn)
+        row = conn.execute('SELECT word_count FROM books WHERE id=?', (gr_book_id,)).fetchone()
+        wc = int((row['word_count'] if row else 0) or 0)
+        ph = ','.join(['?'] * len(ebook_keys))
+        sess = conn.execute(
+            'SELECT id, book_key, activity_date, start_pct, end_pct FROM reading_sessions '
+            'WHERE book_key IN (' + ph + ") AND format='Ebook'", ebook_keys).fetchall()
+        affected = set()
+        total = 0
+        with conn:
+            for s in sess:
+                sp, ep = s['start_pct'], s['end_pct']
+                if sp is None or ep is None:
+                    continue
+                w = int(round(max(0.0, float(ep) - float(sp)) * wc)) if wc else 0
+                conn.execute('UPDATE reading_sessions SET words=? WHERE id=?', (w, s['id']))
+                total += w
+                if s['activity_date']:
+                    affected.add((s['activity_date'], s['book_key']))
+        for d, bk in affected:
+            _rederive_ebook_activity_row(conn, d, bk)
+    finally:
+        conn.close()
+
+    # Reset the credit mark (maxProgress → current) for each ebook progress key.
+    with _progress_lock:
+        data = _load_progress()
+        for k in ebook_keys:
+            item = data.get(str(k))
+            if item and item.get('progress') is not None:
+                try:
+                    item['maxProgress'] = float(item['progress'])
+                    data[str(k)] = item
+                except (TypeError, ValueError):
+                    pass
+        _save_progress(data)
+
+    return {'recredited_words': total, 'days': len(affected), 'sessions': len(sess)}
+
 @router.put('/api/progress/{book_id}')
 async def put_progress(book_id, request: Request):
     """Upsert progress for one book. Body is the partial record; we fill in

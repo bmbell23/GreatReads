@@ -317,42 +317,6 @@
             </div>
         </div>
 
-        <!-- Manage Books Card -->
-        <div class="card mb-4">
-            <div class="card-header">
-                <h5 class="mb-0">
-                    <i class="fas fa-pen-to-square me-2"></i>
-                    Manage Books
-                </h5>
-            </div>
-            <div class="card-body">
-                <p class="text-muted mb-3">
-                    The <strong>Books</strong> page is a power-user table for manually managing your
-                    catalog — adding books you don't own, editing titles / authors / series / word
-                    counts, fixing metadata, and merging or de-duplicating entries. Day to day you
-                    won't need it: your library auto-imports from Calibre and Audiobookshelf every
-                    few minutes. It's here for the occasional manual cleanup.
-                </p>
-                <a href="{{ url_for('books_page') }}" class="btn btn-outline-primary">
-                    <i class="fas fa-arrow-up-right-from-square me-2"></i>Open Books manager
-                </a>
-
-                <hr class="my-3">
-                <p class="text-muted mb-2">
-                    <strong>Import</strong> — your library auto-syncs from Calibre and Audiobookshelf
-                    every few minutes, so you rarely need this. Use it to pull in new items immediately.
-                </p>
-                <div class="d-flex gap-2 flex-wrap">
-                    <a href="{{ url_for('library_page') }}?import=calibre" class="btn btn-outline-secondary">
-                        <i class="fas fa-book-open me-2 text-primary"></i>Import from Calibre
-                    </a>
-                    <a href="{{ url_for('library_page') }}?import=abs" class="btn btn-outline-secondary">
-                        <i class="fas fa-headphones me-2 text-success"></i>Import from Audiobookshelf
-                    </a>
-                </div>
-            </div>
-        </div>
-
         <!-- Info Card -->
         <div class="card">
             <div class="card-header">

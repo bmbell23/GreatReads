@@ -2261,9 +2261,16 @@ function renderGoalChart() {
     };
 
     // In time mode, label the y-axis in whole hours only (e.g. "5h", not "5h 40m").
-    // Snap ticks to an hour step sized so the axis stays uncluttered.
-    const yTicks = { callback: v => isTime ? Math.round(v / 60) + 'h' : (v >= 1000 ? (v / 1000) + 'k' : v) };
-    if (isTime) {
+    // Snap ticks to an hour step sized so the axis stays uncluttered. EXCEPT the intraday
+    // 'Today' view: its x-axis is 15-min buckets so a bar tops out at ~15 min — label in
+    // minutes with 5-min ticks up to 15 (#138 follow-up), not near-zero hours.
+    const isTodayTime = isTime && goalGran === 'today';
+    const yTicks = { callback: v => isTime
+        ? (isTodayTime ? Math.round(v) + 'm' : Math.round(v / 60) + 'h')
+        : (v >= 1000 ? (v / 1000) + 'k' : v) };
+    if (isTodayTime) {
+        yTicks.stepSize = 5;   // 0 / 5 / 10 / 15 minutes
+    } else if (isTime) {
         const maxStack = Math.max(0, ...labels.map((_, i) => GOAL_FMTS.reduce((s, [f]) => s + (mins[f][i] || 0), 0)));
         const stepH = (maxStack / 60) <= 8 ? 1 : Math.ceil((maxStack / 60) / 8);
         yTicks.stepSize = stepH * 60;
@@ -2277,7 +2284,8 @@ function renderGoalChart() {
         options: { ...commonChartOptions,
             plugins: { legend: { position: 'top' },
                 tooltip: { mode: 'index', intersect: false, callbacks: { label: tooltipLabel, footer: tooltipFooter } } },
-            scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: yTicks } } }
+            scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: yTicks,
+                ...(isTodayTime ? { suggestedMax: 15 } : {}) } } }
     });
 }
 

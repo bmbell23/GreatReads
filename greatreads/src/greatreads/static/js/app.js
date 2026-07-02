@@ -1005,7 +1005,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     const tiles = [];
     if (canRead) tiles.push(`<div class="col"><button type="button" class="open-type-btn open-type-sm open-type-ebook"
         onclick="grOpenEbook('${book.calibre_id}', '${titleEnc}')">
-        <i class="fas fa-book-open"></i><span class="fw-bold">Read</span></button></div>`);
+        <i class="fas fa-tablet-alt"></i><span class="fw-bold">Read</span></button></div>`);
     if (canListen) tiles.push(`<div class="col"><button type="button" class="open-type-btn open-type-sm open-type-audio"
         onclick="grOpenAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}', '${book.calibre_id || ''}')">
         <i class="fas fa-headphones"></i><span class="fw-bold">Listen</span></button></div>`);
@@ -1434,6 +1434,7 @@ async function grShowReadingSessions(bookId, titleEnc, rid) {
         fetch(`${GR_EREADER_API}/sessions-list-gr/${bookId}`).then(r => r.ok ? r.json() : null).catch(() => null),
     ]);
     grSessState = {
+        bookId,
         readings,
         sessions: (sessionsResp && sessionsResp.sessions) || [],
         // Default to the clicked read when it exists, else all.
@@ -1462,8 +1463,14 @@ function grRenderSessions() {
         return `${ymd} - ${hm(s)}-${hm(e)}`;
     };
     const picker = grReadDropdown(readings, sel, 'GreatReads.sessionsSelectRead', [['all', 'All reads']]);
+    // Footer tool (#136): recompute ebook word-credit from each session's progress
+    // range + reset the high-water-mark, for when a poisoned mark zeroed real reading.
+    const fixTool = `<div class="d-flex justify-content-end mt-2">
+        <button type="button" class="btn btn-sm btn-outline-secondary" onclick="GreatReads.recreditSessions()"
+            title="Recompute ebook words from each session's progress range and reset the word-credit mark">
+            <i class="fas fa-wand-magic-sparkles me-1"></i>Fix word credit</button></div>`;
     if (!shown.length) {
-        body.innerHTML = picker + '<p class="text-muted mb-0 text-center py-3">No reading sessions recorded.</p>';
+        body.innerHTML = picker + '<p class="text-muted mb-0 text-center py-3">No reading sessions recorded.</p>' + fixTool;
         return;
     }
     const rowsHtml = shown.map(ss => `
@@ -1484,7 +1491,27 @@ function grRenderSessions() {
                         </tr></thead>
                         <tbody>${rowsHtml}</tbody>
                     </table>
-                </div>`;
+                </div>` + fixTool;
+}
+
+// #136: recompute this book's ebook session word-credit from progress ranges +
+// reset the high-water-mark, then refresh the sessions view to show the new words.
+async function grRecreditSessions() {
+    const bookId = grSessState && grSessState.bookId;
+    if (!bookId) return;
+    if (!confirm('Recompute ebook word-credit for this book from each session’s progress range, and reset the credit mark?')) return;
+    try {
+        const r = await fetch(`${GR_EREADER_API}/sessions-gr/${bookId}/recredit`, { method: 'POST' });
+        const d = r.ok ? await r.json() : null;
+        if (d) {
+            showToast(`Recredited ${Number(d.recredited_words || 0).toLocaleString()} words across ${d.days} day(s)`, 'success');
+            const sessionsResp = await fetch(`${GR_EREADER_API}/sessions-list-gr/${bookId}`).then(x => x.ok ? x.json() : null).catch(() => null);
+            grSessState.sessions = (sessionsResp && sessionsResp.sessions) || [];
+            grRenderSessions();
+        } else {
+            showToast('Nothing to recredit (no ebook sessions)', 'warning');
+        }
+    } catch (e) { showToast('Recredit failed', 'warning'); }
 }
 
 // Reset the #79 word-credit high-water-mark to the current position (#86), so
@@ -1896,6 +1923,7 @@ window.GreatReads = {
     ratingsSelectRead: grRatingsSelectRead,
     saveRatings: grSaveRatings,
     resetCreditMark: grResetCreditMark,
+    recreditSessions: grRecreditSessions,
     updatePhysicalProgress: grUpdatePhysicalProgress,
     startReadingSession: grStartReadingSession,
     formatDateSmart,
