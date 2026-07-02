@@ -931,8 +931,12 @@ def list_shelf(db: Session, status: str = "owned", search: str = None,
     q = db.query(Book)
     q = q.filter(Book.id.in_(owned_ids)) if status == "owned" else q.filter(~Book.id.in_(owned_ids))
     if like:
+        # Author is split across first/second columns, so a "First Last" query matches
+        # neither column alone — also match the concatenated full name.
+        full_name = func.coalesce(Book.author_name_first, "") + " " + func.coalesce(Book.author_name_second, "")
         q = q.filter(or_(Book.title.ilike(like), Book.author_name_first.ilike(like),
-                         Book.author_name_second.ilike(like), Book.series.ilike(like)))
+                         Book.author_name_second.ilike(like), Book.series.ilike(like),
+                         full_name.ilike(like)))
     if cover == "yes":
         q = q.filter(Book.cover.is_(True))
     elif cover == "no":

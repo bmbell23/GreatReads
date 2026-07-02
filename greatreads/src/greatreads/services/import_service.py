@@ -74,8 +74,10 @@ def _already_imported(db: Session, source: str, external_id: str) -> bool:
 
 
 def _word_tokens(s: str) -> frozenset:
-    """Lowercase, strip punctuation (incl. dots), return frozenset of words."""
-    return frozenset(re.sub(r"[^\w\s]", "", s.lower()).split())
+    """Lowercase, normalize '&'→'and', strip punctuation, return frozenset of words.
+    The &↔and normalization lets 'Mother of Death & Dawn' match '… and Dawn' so imports
+    link instead of spawning a duplicate (#148)."""
+    return frozenset(re.sub(r"[^\w\s]", "", s.lower().replace("&", " and ")).split())
 
 
 def _get_calibre_universe_map(conn: sqlite3.Connection) -> dict[int, str]:
@@ -382,14 +384,16 @@ def get_calibre_candidates(db: Session) -> list[dict[str, Any]]:
             continue
         first, last = _split_author(row[7] or "")
         cal_series_num = float(row[5]) if row[5] is not None else None
-        cal_year = row[2][:4] if row[2] else None
+        # Ignore Calibre's 0101-01-01 "undefined date" sentinel.
+        cal_date = row[2][:10] if (row[2] and not row[2].startswith("0101-01-01")) else None
+        cal_year = cal_date[:4] if cal_date else None
         candidate = {
             "external_id": cal_id,
             "title": row[1],
             "author": row[7],
             "author_name_first": first,
             "author_name_second": last,
-            "date_published": row[2][:10] if row[2] else None,
+            "date_published": cal_date,
             "has_cover": bool(row[3]),
             "calibre_path": row[4],
             "series": row[6],
@@ -444,7 +448,11 @@ def import_calibre_book(
     pub_date = None
     if row[2]:
         try:
-            pub_date = datetime.fromisoformat(row[2][:10]).date()
+            _d = datetime.fromisoformat(row[2][:10]).date()
+            # Calibre stores 0101-01-01 as its "undefined date" sentinel — not a real
+            # publication date, so don't import it (it renders as "Jan 1, 101").
+            if _d.year > 101:
+                pub_date = _d
         except ValueError:
             pass
 
