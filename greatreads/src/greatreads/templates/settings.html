@@ -356,17 +356,18 @@
                 <span class="small text-muted" id="gm-total"></span>
             </div>
             <div class="card-body">
-                <p class="text-muted small mb-2">Manage the genre vocabulary — merge near-duplicates (e.g.
-                    “Fantasy fiction” → “Fantasy”), rename, or delete. Changes apply across all books.</p>
-                <div class="row g-2 align-items-end mb-3">
-                    <div class="col"><label class="form-label small mb-0">Merge</label>
-                        <select class="form-select form-select-sm" id="gm-from"></select></div>
-                    <div class="col-auto pb-1 small text-muted">into</div>
-                    <div class="col"><label class="form-label small mb-0">&nbsp;</label>
-                        <select class="form-select form-select-sm" id="gm-into"></select></div>
-                    <div class="col-auto"><button class="btn btn-sm btn-outline-primary" onclick="mergeGenres()">Merge</button></div>
+                <p class="text-muted small mb-2">Manage the genre vocabulary — search, tick several to
+                    merge into one (e.g. the many “… fiction” variants → “Fantasy”), rename, or delete.
+                    Changes apply across all books.</p>
+                <input class="form-control form-control-sm mb-2" id="gm-search" placeholder="Search genres…" oninput="gmRenderList()" autocomplete="off">
+                <div class="d-flex flex-wrap align-items-center gap-2 mb-2">
+                    <span class="small text-muted" id="gm-selcount">0 selected</span>
+                    <span class="small">merge into</span>
+                    <select class="form-select form-select-sm" id="gm-target" style="max-width:230px;"></select>
+                    <button class="btn btn-sm btn-outline-primary" id="gm-merge-sel" onclick="mergeSelected()" disabled>Merge selected</button>
+                    <button class="btn btn-sm btn-outline-danger" id="gm-del-sel" onclick="deleteSelected()" disabled>Delete selected</button>
                 </div>
-                <div id="gm-list" style="max-height:320px;overflow:auto;"></div>
+                <div id="gm-list" class="border-top pe-3" style="max-height:340px;overflow-y:auto;"></div>
             </div>
         </div>
 
@@ -703,28 +704,56 @@ document.addEventListener('DOMContentLoaded', function() {
 // Genre management (#167).
 function _gmEsc(s){ return (s||'').replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
 function _gmEnc(s){ return encodeURIComponent(s).replace(/'/g,'%27'); }
+let _gmGenres = [];
 async function loadGenres() {
-    let genres = [];
-    try { const r = await GreatReads.apiCall('/books/genres-list'); genres = r.genres || []; } catch (e) {}
-    const total = document.getElementById('gm-total'); if (total) total.textContent = `${genres.length} genres`;
-    const opts = genres.map(g => `<option value="${_gmEsc(g.name)}">${_gmEsc(g.name)} (${g.count})</option>`).join('');
-    ['gm-from','gm-into'].forEach(id => { const el = document.getElementById(id); if (el) el.innerHTML = opts; });
-    const list = document.getElementById('gm-list');
-    if (list) list.innerHTML = genres.length ? genres.map(g => `
+    try { const r = await GreatReads.apiCall('/books/genres-list'); _gmGenres = r.genres || []; } catch (e) { _gmGenres = []; }
+    const total = document.getElementById('gm-total'); if (total) total.textContent = `${_gmGenres.length} genres`;
+    const tgt = document.getElementById('gm-target');
+    if (tgt) tgt.innerHTML = _gmGenres.map(g => `<option value="${_gmEsc(g.name)}">${_gmEsc(g.name)} (${g.count})</option>`).join('');
+    gmRenderList();
+}
+function gmRenderList() {
+    const list = document.getElementById('gm-list'); if (!list) return;
+    const q = (document.getElementById('gm-search').value || '').trim().toLowerCase();
+    const shown = q ? _gmGenres.filter(g => g.name.toLowerCase().includes(q)) : _gmGenres;
+    list.innerHTML = shown.length ? shown.map(g => `
         <div class="d-flex align-items-center justify-content-between border-bottom py-1">
-            <span>${_gmEsc(g.name)} <span class="text-muted small">(${g.count})</span></span>
-            <span class="text-nowrap">
+            <label class="d-flex align-items-center gap-2 mb-0" style="min-width:0;cursor:pointer;">
+                <input type="checkbox" class="form-check-input mt-0 gm-check" value="${_gmEsc(g.name)}" onchange="gmSelChanged()">
+                <span class="text-truncate">${_gmEsc(g.name)} <span class="text-muted small">(${g.count})</span></span>
+            </label>
+            <span class="text-nowrap ms-2">
                 <button class="btn btn-sm btn-link p-0 me-2" onclick="renameGenre('${_gmEnc(g.name)}')">Rename</button>
                 <button class="btn btn-sm btn-link text-danger p-0" onclick="deleteGenre('${_gmEnc(g.name)}')">Delete</button>
-            </span></div>`).join('') : '<div class="text-muted small">No genres yet.</div>';
+            </span></div>`).join('') : '<div class="text-muted small py-2">No matching genres.</div>';
+    gmSelChanged();
 }
-async function mergeGenres() {
-    const from = document.getElementById('gm-from').value, into = document.getElementById('gm-into').value;
-    if (!from || !into || from.toLowerCase() === into.toLowerCase()) { GreatReads.showToast('Pick two different genres.', 'warning'); return; }
-    if (!confirm(`Merge “${from}” into “${into}”? This moves all its books and removes “${from}”.`)) return;
+function gmSelected() { return [...document.querySelectorAll('.gm-check:checked')].map(c => c.value); }
+function gmSelChanged() {
+    const n = gmSelected().length;
+    const c = document.getElementById('gm-selcount'); if (c) c.textContent = `${n} selected`;
+    const m = document.getElementById('gm-merge-sel'); if (m) m.disabled = n === 0;
+    const d = document.getElementById('gm-del-sel'); if (d) d.disabled = n === 0;
+}
+async function mergeSelected() {
+    const names = gmSelected();
+    const into = document.getElementById('gm-target').value;
+    if (!names.length || !into) return;
+    const from = names.filter(n => n.toLowerCase() !== into.toLowerCase());
+    if (!from.length) { GreatReads.showToast('Pick genres other than the target.', 'warning'); return; }
+    if (!confirm(`Merge ${from.length} genre${from.length === 1 ? '' : 's'} into “${into}”? Their books move to “${into}” and the merged genres are removed.`)) return;
     try {
-        const r = await GreatReads.apiCall('/books/genres/merge', { method: 'POST', data: { from_name: from, into_name: into } });
-        GreatReads.showToast(`Merged ${r.merged} book${r.merged === 1 ? '' : 's'} into “${r.into}”.`, 'success'); loadGenres();
+        const r = await GreatReads.apiCall('/books/genres/merge-multi', { method: 'POST', data: { from_names: from, into_name: into } });
+        GreatReads.showToast(`Merged ${r.genres_merged} genre${r.genres_merged === 1 ? '' : 's'} into “${into}”.`, 'success'); loadGenres();
+    } catch (e) {}
+}
+async function deleteSelected() {
+    const names = gmSelected();
+    if (!names.length) return;
+    if (!confirm(`Delete ${names.length} genre${names.length === 1 ? '' : 's'} from all books? This can’t be undone.`)) return;
+    try {
+        const r = await GreatReads.apiCall('/books/genres/delete-multi', { method: 'POST', data: { names } });
+        GreatReads.showToast(`Deleted ${r.genres_deleted} genre${r.genres_deleted === 1 ? '' : 's'}.`, 'success'); loadGenres();
     } catch (e) {}
 }
 async function renameGenre(nameEnc) {

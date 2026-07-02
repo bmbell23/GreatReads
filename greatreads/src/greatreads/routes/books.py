@@ -268,6 +268,60 @@ async def genres_delete(
     return {"deleted": tag.name, "books_affected": n}
 
 
+class GenreMergeMultiRequest(BaseModel):
+    from_names: List[str]
+    into_name: str
+
+
+@router.post("/genres/merge-multi")
+async def genres_merge_multi(
+    request: Request,
+    payload: GenreMergeMultiRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Merge several genres into one target in a single pass (#167). Books move to the
+    target; each source genre is removed. The target never removes itself."""
+    dst = get_or_create_tags(db, [payload.into_name.strip()])[0]
+    merged = 0
+    for fn in payload.from_names:
+        src = db.query(Tag).filter(Tag.name.ilike((fn or "").strip())).first()
+        if not src or src.id == dst.id:
+            continue
+        for book in list(src.books):
+            if dst not in book.tags:
+                book.tags.append(dst)
+            book.tags.remove(src)
+            if book.genre and book.genre.lower() == src.name.lower():
+                book.genre = dst.name
+        db.delete(src)
+        merged += 1
+    db.commit()
+    return {"genres_merged": merged, "into": dst.name}
+
+
+class GenreNamesRequest(BaseModel):
+    names: List[str]
+
+
+@router.post("/genres/delete-multi")
+async def genres_delete_multi(
+    request: Request,
+    payload: GenreNamesRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete several genres from all books at once (#167)."""
+    deleted = 0
+    for name in payload.names:
+        tag = db.query(Tag).filter(Tag.name.ilike((name or "").strip())).first()
+        if tag:
+            db.delete(tag)
+            deleted += 1
+    db.commit()
+    return {"genres_deleted": deleted}
+
+
 @router.get("/{book_id}")
 async def get_book(
     request: Request,
