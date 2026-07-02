@@ -781,6 +781,39 @@ function libbyRowToCard(row) {
     };
 }
 
+// Check Libby (#154): from a Wishlist/New/Upcoming book popup, search Libby for this
+// title+author, pick the best match, and open the existing Borrow/Hold panel. Wired
+// into the shared popup via grOpenBookActions (app.js) for non-owned books.
+function grPickLibbyMatch(rows, title) {
+    if (!rows || !rows.length) return null;
+    const norm = s => (s || '').toLowerCase().replace(/[^a-z0-9 ]/g, ' ').split(/\s+/).filter(Boolean);
+    const want = new Set(norm(title));
+    if (!want.size) return rows[0];
+    let best = null, bestScore = 0;
+    for (const row of rows) {
+        const got = new Set(norm(row.title));
+        let overlap = 0; want.forEach(w => { if (got.has(w)) overlap++; });
+        const score = overlap / want.size;
+        if (score > bestScore) { bestScore = score; best = row; }
+    }
+    return bestScore >= 0.6 ? best : null;   // guard against a wrong-title top hit
+}
+async function grCheckLibby(titleEnc, authorEnc) {
+    const title = decodeURIComponent(titleEnc || ''), author = decodeURIComponent(authorEnc || '');
+    if (!title) return;
+    GreatReads.showToast('Searching Libby…', 'info');
+    let r;
+    try {
+        r = await GreatReads.apiCall(`/libby/search?q=${encodeURIComponent((title + ' ' + author).trim())}&library=all&page=1&per_page=10`);
+    } catch (e) { GreatReads.showToast('Libby search failed', 'danger'); return; }
+    const rows = (r && Array.isArray(r.results)) ? r.results : [];
+    const match = grPickLibbyMatch(rows, title);
+    if (!match) { GreatReads.showToast('No Libby match found for this title.', 'warning'); return; }
+    const card = libbyRowToCard(match);
+    try { await annotateLibbyOwnership([card]); } catch (e) { /* best-effort */ }
+    openLibbyDetails(card);
+}
+
 async function loadLibbyShelf(reset) {
     if (!reset && shelfLoading) return;
     if (reset) { shelfGen++; cards = []; libbyPage = 1; }

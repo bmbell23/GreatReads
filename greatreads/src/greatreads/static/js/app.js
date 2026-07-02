@@ -1201,6 +1201,17 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
                     <i class="fas fa-pen-to-square me-2 text-primary"></i>Edit Book
                 </button>` : '';
 
+    // Check Libby (#154): for a book you don't own, search Libby by title+author and
+    // open Borrow/Hold. Only where the Libby feature is present (grCheckLibby exists →
+    // the Store page) and only for non-owned books, so owned/Library books never show it.
+    const grNotOwned = !grOwnsFormat('owned_ebook') && !grOwnsFormat('owned_audio')
+        && !grOwnsFormat('owned_physical') && !book.is_owned;
+    const libbyCheckLink = (grNotOwned && book.title && typeof grCheckLibby === 'function') ? `
+                <button type="button" class="btn btn-sm btn-outline-info"
+                        onclick="grCheckLibby('${titleEnc}','${authorEnc}')">
+                    <i class="fas fa-building-columns me-2"></i>Check Libby
+                </button>` : '';
+
     // "See Reading Sessions" — read-only session history (#77). Hidden until the
     // async summary below confirms there are qualified sessions; shown on every
     // caller (Home in-progress, Journal finished) via book.id. Opt out with
@@ -1274,7 +1285,8 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     const statsRow = statsPair.trim() ? `<div class="gba-edit-row">${statsPair}</div>` : '';
     const editPair = `${opts.editReadingHtml || ''}${editBookLink}`;
     const editRow = editPair.trim() ? `<div class="gba-edit-row">${editPair}</div>` : '';
-    const secondaryInner = `${hlLink}${opts.primaryActionHtml || ''}${statsRow}${opts.actionsHtml || ''}${editRow}`;
+    const libbyRow = libbyCheckLink ? `<div class="gba-edit-row">${libbyCheckLink}</div>` : '';
+    const secondaryInner = `${hlLink}${opts.primaryActionHtml || ''}${statsRow}${opts.actionsHtml || ''}${libbyRow}${editRow}`;
     const secondary = secondaryInner.trim() ? `
         <div class="col-12">
             <div class="open-secondary">${secondaryInner}</div>
