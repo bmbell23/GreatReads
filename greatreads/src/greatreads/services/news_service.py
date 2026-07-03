@@ -839,10 +839,24 @@ def unread_count(db: Session) -> int:
     )
 
 
-def mark_seen(db: Session, item_id: Optional[int] = None) -> None:
+def unread_by_kind(db: Session) -> dict:
+    """Unseen release counts split by kind, for the Store 'New (N)' / 'Upcoming (N)'
+    chip labels (#188)."""
+    rows = (
+        db.query(NewsItem.kind, func.count(NewsItem.id))
+        .filter(NewsItem.dismissed.is_(False), NewsItem.seen.is_(False))
+        .group_by(NewsItem.kind).all()
+    )
+    counts = {k: c for k, c in rows}
+    return {"new": counts.get("new", 0), "upcoming": counts.get("upcoming", 0)}
+
+
+def mark_seen(db: Session, item_id: Optional[int] = None, kind: Optional[str] = None) -> None:
     q = db.query(NewsItem).filter(NewsItem.seen.is_(False))
     if item_id is not None:
         q = q.filter(NewsItem.id == item_id)
+    if kind:
+        q = q.filter(NewsItem.kind == kind)   # #188: clear only the viewed category
     for i in q.all():
         i.seen = True
     db.commit()

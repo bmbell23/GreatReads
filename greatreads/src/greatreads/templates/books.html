@@ -445,6 +445,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupDetailSwipe();
     refreshImportBadge();          // #137 Newly-Imported badge
     loadLibbyBadge();              // #142 Libby token-health warning badge
+    updateReleaseChipCounts();     // #188 New (N) / Upcoming (N) chip counts
     _maybeOpenMergeFromUrl();      // #131 deep-link: /books?merge=a,b
     // the shared Edit Book module (book_edit.js) wires autocomplete + preloads lists
 });
@@ -524,10 +525,23 @@ function setStatus(s) {
     si.placeholder = (s === 'libby')
         ? 'Search Libby for a title or author to borrow…'
         : 'Search by title, author, or series…';
-    // Mark seen + refresh nav badge when viewing releases.
-    if (isRemote()) { GreatReads.apiCall('/news/seen', { method: 'POST', data: {} }).then(() => {
-        if (typeof loadNewsBadge === 'function') loadNewsBadge(); }).catch(() => {}); }
+    // Mark seen (only the viewed category, #188) + refresh badges when viewing releases.
+    if (isRemote()) { GreatReads.apiCall('/news/seen', { method: 'POST', data: { kind: s } }).then(() => {
+        if (typeof loadNewsBadge === 'function') loadNewsBadge();
+        updateReleaseChipCounts(); }).catch(() => {}); }
     loadShelf(true);
+}
+
+// #188: label the New / Upcoming chips with their unseen counts (e.g. "New (1)").
+async function updateReleaseChipCounts() {
+    let c;
+    try { c = await GreatReads.apiCall('/news/unread-by-kind'); } catch (e) { return; }
+    const set = (id, label, n) => {
+        const el = document.querySelector('#' + id + ' span');
+        if (el) el.textContent = (n > 0) ? `${label} (${n})` : label;
+    };
+    set('stNew', 'New', (c && c.new) || 0);
+    set('stUpcoming', 'Upcoming', (c && c.upcoming) || 0);
 }
 
 function toggleCat(c) {
@@ -1777,15 +1791,49 @@ async function loadLibbyCards() {
     if (!cards.length) { box.innerHTML = '<div class="small text-muted">No linked libraries yet — re-link above to sync your cards.</div>'; return; }
     // Credentialed first, then by name.
     cards.sort((a, b) => (b.hasCredentials ? 1 : 0) - (a.hasCredentials ? 1 : 0) || String(a.name || '').localeCompare(String(b.name || '')));
-    box.innerHTML = '<div class="list-group">' + cards.map(c => {
+    box.innerHTML = '<div class="list-group">' + cards.map((c, idx) => {
         const counts = `<span class="small text-muted">${c.loans || 0} loan${c.loans === 1 ? '' : 's'} · ${c.holds || 0} hold${c.holds === 1 ? '' : 's'}</span>`;
         const cred = c.hasCredentials
             ? `<span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" title="Website credentials saved${c.credUsernameMasked ? ' (' + esc(c.credUsernameMasked) + ')' : ''}"><i class="fas fa-check me-1"></i>Ready</span>`
             : '<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle" title="Add website credentials to enable downloads"><i class="fas fa-triangle-exclamation me-1"></i>Needs sign-in</span>';
-        return `<div class="list-group-item d-flex justify-content-between align-items-center py-2">
-            <div><div class="fw-medium small">${esc(c.name || c.advantageKey || '?')}</div>${counts}</div>
-            <div>${cred}</div></div>`;
+        const key = esc(c.advantageKey || '');
+        return `<div class="list-group-item py-2">
+            <div class="d-flex justify-content-between align-items-center">
+                <div><div class="fw-medium small">${esc(c.name || c.advantageKey || '?')}</div>${counts}</div>
+                <div class="d-flex align-items-center gap-2">${cred}
+                    <button class="btn btn-sm btn-outline-secondary py-0" onclick="libbyToggleCredForm(${idx}, '${key}')">${c.hasCredentials ? 'Update' : 'Add sign-in'}</button>
+                </div>
+            </div>
+            <div id="lcred-${idx}" class="mt-2" style="display:none;"></div>
+        </div>`;
     }).join('') + '</div>';
+}
+// #189 — add/update a card's OverDrive WEBSITE credentials (distinct from the Libby app).
+function libbyToggleCredForm(idx, key) {
+    const box = document.getElementById('lcred-' + idx);
+    if (!box) return;
+    if (box.style.display !== 'none') { box.style.display = 'none'; box.innerHTML = ''; return; }
+    box.style.display = '';
+    box.innerHTML = `<div class="row g-1 align-items-end">
+            <div class="col"><label class="form-label small mb-0">Library card # / username</label>
+                <input type="text" class="form-control form-control-sm" id="lcu-${idx}" autocomplete="off"></div>
+            <div class="col"><label class="form-label small mb-0">PIN / password</label>
+                <input type="password" class="form-control form-control-sm" id="lcp-${idx}" autocomplete="new-password"></div>
+            <div class="col-auto"><button class="btn btn-sm btn-primary" id="lcs-${idx}" onclick="libbySaveCreds(${idx}, '${key}')">Save</button></div>
+        </div>
+        <div class="form-text">Your library's OverDrive <b>website</b> sign-in (card number + PIN) — used by the download automation. This can differ from your Libby-app login, which is why a title that borrows in Libby can still fail here.</div>`;
+    const u = document.getElementById('lcu-' + idx); if (u) u.focus();
+}
+async function libbySaveCreds(idx, key) {
+    const u = (document.getElementById('lcu-' + idx).value || '').trim();
+    const p = (document.getElementById('lcp-' + idx).value || '').trim();
+    if (!u || !p) { showToast('Enter both the card # / username and PIN / password.', 'warning'); return; }
+    const btn = document.getElementById('lcs-' + idx); if (btn) btn.disabled = true;
+    try {
+        await GreatReads.apiCall('/libby/cards/credentials', { method: 'POST', data: { advantage_key: key, username: u, password: p } });
+        showToast('Credentials saved.', 'success');
+        loadLibbyCards();
+    } catch (e) { showToast('Could not save credentials — try again.', 'danger'); if (btn) btn.disabled = false; }
 }
 
 async function libbyRelink() {

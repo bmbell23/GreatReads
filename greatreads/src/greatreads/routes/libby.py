@@ -470,6 +470,29 @@ async def libby_cards_status(current_user: User = Depends(get_current_user)):
     return JSONResponse(data, status_code=resp.status_code)
 
 
+class CardCredentialsRequest(BaseModel):
+    advantage_key: str
+    username: str
+    password: str
+    website_id: str | None = None
+
+
+@router.post("/cards/credentials")
+async def libby_set_card_credentials(
+    payload: CardCredentialsRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Save/update a card's OverDrive WEBSITE credentials (library #/PIN used by the
+    fulfill automation — distinct from the Libby-app login) so its downloads work (#189).
+    Proxies to the engine's POST /api/cards/credentials; secrets go server-side only."""
+    if not (payload.advantage_key and payload.username and payload.password):
+        raise HTTPException(status_code=400, detail="advantage_key, username, and password are required.")
+    body = {"advantage_key": payload.advantage_key, "username": payload.username, "password": payload.password}
+    if payload.website_id:
+        body["website_id"] = payload.website_id
+    return await _engine_post("/api/cards/credentials", body)
+
+
 # ── Item 6 — GreatReads ownership annotation for Libby search rows ────────────
 # Ownership must come from the GreatReads library (inventory/external_imports),
 # not the engine's Calibre fuzzy match (which missed e.g. "The Way of Kings").

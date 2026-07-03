@@ -79,6 +79,7 @@ class AuthorBody(BaseModel):
 
 class SeenBody(BaseModel):
     id: Optional[int] = None
+    kind: Optional[str] = None   # #188: mark seen only within one category (new|upcoming)
 
 
 @router.get("/")
@@ -99,6 +100,12 @@ async def get_feed(kind: Optional[str] = None, include_low: bool = True,
 @router.get("/unread-count")
 async def get_unread_count(db: Session = Depends(get_db)):
     return {"count": news_service.unread_count(db)}
+
+
+@router.get("/unread-by-kind")
+async def get_unread_by_kind(db: Session = Depends(get_db)):
+    """Unseen counts per category for the Store 'New (N)'/'Upcoming (N)' chips (#188)."""
+    return news_service.unread_by_kind(db)
 
 
 @router.get("/author-reads")
@@ -138,9 +145,9 @@ async def get_genre_books(name: str, db: Session = Depends(get_db)):
 
 @router.post("/seen")
 async def post_seen(body: SeenBody, db: Session = Depends(get_db)):
-    """Mark one item seen (with id) or all unseen items seen (no id) — clears the badge."""
-    news_service.mark_seen(db, item_id=body.id)
-    return {"unread": news_service.unread_count(db)}
+    """Mark one item seen (id), all in a category seen (kind), or everything (neither)."""
+    news_service.mark_seen(db, item_id=body.id, kind=body.kind)
+    return {"unread": news_service.unread_count(db), "by_kind": news_service.unread_by_kind(db)}
 
 
 @router.post("/{item_id}/dismiss")
