@@ -69,7 +69,11 @@
 - Rebuilding/remaking the application is a **gated action: ask the user before
   rebuilding** (see "Autonomy & permissions" below). Once they say go, run it
   yourself — don't make them type it. The command is:
-  `docker compose -p greatreads_ereader -f greatreads/docker-compose.ereader.yml up -d --build`
+  `./scripts/rebuild-ereader.sh`
+  (the canonical wrapper — it computes the build stamp + a `M`/clean dirty flag on
+  the host and passes them as build-args, then runs the same
+  `docker compose -p greatreads_ereader -f greatreads/docker-compose.ereader.yml up -d --build`;
+  #180. The raw compose command still works but won't set the version's `M` suffix.)
 - This is **data-safe**: the SQLite DB + covers live in the bind-mounted
   `greatreads/data` (`./data:/app/data`), never baked into the image, and host
   prune crons never touch bind mounts. A rebuild only restarts code.

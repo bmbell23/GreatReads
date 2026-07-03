@@ -42,7 +42,17 @@ COPY ereader-assets/version.txt /app/ereader/version.txt
 # sits after every COPY, so Docker's linear layer cache re-runs it on any rebuild
 # that ships new code/assets (a true no-op rebuild keeps the prior stamp, which
 # is correct — the image didn't actually change). Read live via /api/build-time.
-RUN date '+%Y-%m-%d %H:%M %Z' > /app/build-stamp.txt
+#
+# BUILD_STAMP + BUILD_DIRTY (#180) come from scripts/rebuild-ereader.sh as
+# build-args: the host has git (this image doesn't), so "was this built from
+# uncommitted changes?" (BUILD_DIRTY='M') is computed host-side and baked in.
+# A raw `docker compose build` (no helper) falls back to the container clock and
+# an empty dirty flag.
+ARG BUILD_STAMP=""
+ARG BUILD_DIRTY=""
+RUN if [ -n "$BUILD_STAMP" ]; then printf '%s\n' "$BUILD_STAMP" > /app/build-stamp.txt; \
+    else date '+%y%m%d-%H:%M' > /app/build-stamp.txt; fi
+ENV GREATREADS_BUILD_MODIFIED=${BUILD_DIRTY}
 
 # Create necessary directories
 RUN mkdir -p /app/data /app/data/covers

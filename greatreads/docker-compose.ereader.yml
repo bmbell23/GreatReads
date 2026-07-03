@@ -11,7 +11,11 @@
 
 services:
   greatreads_ereader:
-    build: .                          # context = greatreads/  (uses vendored Dockerfile)
+    build:                            # context = greatreads/  (uses vendored Dockerfile)
+      context: .
+      args:                           # #180 — populated by scripts/rebuild-ereader.sh
+        BUILD_STAMP: ${GREATREADS_BUILD_STAMP:-}
+        BUILD_DIRTY: ${GREATREADS_BUILD_DIRTY:-}
     container_name: greatreads_ereader
     restart: unless-stopped
     ports:

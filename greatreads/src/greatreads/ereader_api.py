@@ -165,7 +165,7 @@ def _read_build_stamp():
                 return s
     except OSError:
         pass
-    return _PROCESS_START.strftime('%Y-%m-%d %H:%M')
+    return _PROCESS_START.strftime('%y%m%d-%H:%M')
 
 # Highlights/bookmarks now live in the GreatReads SQLite DB (Story 3), same as
 # progress — one store, covered by the daily DB backup. highlights.json is still
@@ -3416,8 +3416,15 @@ def health_check():
 @router.get('/api/version')
 def get_version():
     """Return the current app version (read live from version.txt so a
-    `gvc` bump is reflected without a server restart)."""
-    return {'version': _read_version()}
+    `gvc` bump is reflected without a server restart).
+
+    `modified` is 'M' when the running image was built from uncommitted git
+    changes (baked in at build time by scripts/rebuild-ereader.sh, #180) — so the
+    version can legitimately be 'behind' HEAD while still flagging a dirty build.
+    `display` is the string to show (e.g. '1.2.195' or '1.2.195M')."""
+    version = _read_version()
+    modified = os.environ.get('GREATREADS_BUILD_MODIFIED', '').strip()
+    return {'version': version, 'modified': modified, 'display': version + modified}
 
 @router.get('/api/build-time')
 def get_build_time():
