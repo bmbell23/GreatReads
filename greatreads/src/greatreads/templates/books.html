@@ -689,7 +689,7 @@ function renderAll() {
     if (shelfStatus === 'unowned') {
         loadWishHolds();
         if (_wishHoldSet && _wishHoldSet.size) list.forEach(c => {
-            if (c.kind === 'local') c._onHold = _wishHoldSet.has(_wishHoldKey(c.title, c.author));
+            if (c.kind === 'local') c._onHold = _wishHoldSet.has(c.book_id);
         });
     }
     grid.innerHTML = list.map(cardHtml).join('');
@@ -749,19 +749,18 @@ function wishlistRibbon(txt, bg, color) {
     return `<div class="position-absolute bottom-0 start-0 end-0 text-center small fw-semibold"
         style="font-size:.6rem;padding:1px 2px;opacity:.92;background:${bg};color:${color};">${txt}</div>`;
 }
-// On-hold badge for Wishlist covers (#175): cross-reference the shelf's local cards
-// against the user's Libby holds by title + author-last-name.
+// On-hold badge for Wishlist covers (#175): the server matches current Libby holds to
+// GreatReads books with the robust title+author matcher and returns book_ids, so we
+// flag on-hold covers by id — reliable, unlike the old client-side last-token match
+// that broke on author suffixes/co-authors/surname-first names.
 let _wishHoldSet = null;
-const _wishNorm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
-const _wishHoldKey = (title, author) => _wishNorm(title) + '|' + _wishNorm((author || '').split(/[\s,]+/).filter(Boolean).pop() || '');
 async function loadWishHolds() {
     if (_wishHoldSet !== null) return;
     _wishHoldSet = new Set();   // mark as loading so we don't refetch
     let r;
-    try { r = await GreatReads.apiCall('/libby/holds'); } catch (e) { return; }
-    const holds = (r && r.holds) || [];
-    holds.forEach(h => _wishHoldSet.add(_wishHoldKey(h.title, h.author || h.firstCreatorName)));
-    if (holds.length && shelfStatus === 'unowned') renderAll();
+    try { r = await GreatReads.apiCall('/libby/wishlist-holds'); } catch (e) { return; }
+    (r && r.book_ids || []).forEach(id => _wishHoldSet.add(id));
+    if (_wishHoldSet.size && shelfStatus === 'unowned') renderAll();
 }
 
 // ── Libby (OverDrive) search category (#142 milestone 3) ─────────────────────
@@ -1208,7 +1207,10 @@ function libbyErrMsg(e, action) {
     if (st === 409) return `Already borrowed on this card (or a loan/hold conflict) — check your Libby loans.`;
     if (st === 403) return `The library rejected this ${action}. The card may need website credentials in the Libby panel, or the title isn’t lendable to it.`;
     if (st === 404) return `That title isn’t available at the selected library right now.`;
-    if (st >= 502 && st <= 504) return `The Libby engine is unavailable right now — try again in a moment.`;
+    // A 5xx with NO detail is almost always a gateway timeout on the slow OverDrive
+    // fulfill path (up to a few minutes) — the borrow may well have gone through, or
+    // failed on the card's saved credentials. Don't call it an "engine outage" (#185).
+    if (st >= 502 && st <= 504) return `This ${action} is taking longer than expected or the connection timed out — check your Loans (it may have gone through). If it keeps failing, re-check this card’s saved credentials in the Libby panel.`;
     return `Couldn’t complete the ${action}. Please try again.`;
 }
 

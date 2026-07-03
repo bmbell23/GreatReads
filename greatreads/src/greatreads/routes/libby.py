@@ -552,6 +552,30 @@ async def libby_wishlist_add(
     return {"book_id": book.id, "created": created, "title": book.title}
 
 
+@router.get("/wishlist-holds")
+async def libby_wishlist_holds(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return the GreatReads book_ids that match a current Libby hold, using the robust
+    server matcher (#175 fix) — so the Wishlist can flag on-hold covers reliably instead
+    of the brittle client-side title+author-last-token match (broke on suffixes like
+    'MD', co-authors, and surname-first stored names)."""
+    try:
+        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+            resp = await client.get(f"{LIBBY_ENGINE_URL}/api/holds")
+        holds = (resp.json() or {}).get("holds", []) if resp.status_code == 200 else []
+    except Exception:
+        return {"book_ids": [], "engine": False}
+    index = _build_all_index(db)
+    book_ids = []
+    for h in holds:
+        m = _match_owned(h.get("title", ""), h.get("author", "") or h.get("firstCreatorName", ""), index)
+        if m:
+            book_ids.append(m["book_id"])
+    return {"book_ids": sorted(set(book_ids)), "engine": True}
+
+
 @router.post("/holds-to-wishlist")
 async def libby_holds_to_wishlist(
     current_user: User = Depends(get_current_user),
