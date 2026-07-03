@@ -209,6 +209,7 @@
          'bkeUniverse', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl', 'bkeDescription']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
         bkeSetGenres([]);
+        _bkeResetContributors();   // #192
         if (prefill) {
             const set = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
             set('bkeTitle', prefill.title);
@@ -251,6 +252,7 @@
         set('bkeDescription', b.description);
         // Genres from the tag store (#156); fall back to the legacy single genre.
         bkeSetGenres((Array.isArray(b.tags) && b.tags.length) ? b.tags : (b.genre ? [b.genre] : []));
+        await _bkeLoadContributors(b.id);   // #192 additional authors/narrators
         bkeRenderCover();
         // Load the book's current format ownership into the picker (edit mode).
         try {
@@ -292,6 +294,55 @@
 
     // PUT the fields; on success let the page refresh itself (afterSave hook) or
     // fall back to a reload. Returns the saved id, or null on failure.
+    // Additional authors/narrators (#192) — dynamic first/last rows.
+    function bkeContribRow(role, first, last) {
+        const wrap = document.getElementById(role === 'author' ? 'bkeAddAuthors' : 'bkeAddNarrators');
+        if (!wrap) return;
+        const row = document.createElement('div');
+        row.className = 'd-flex gap-2 mt-1 bke-contrib-row';
+        row.innerHTML =
+            '<input class="form-control form-control-sm bke-cf" placeholder="First name" autocomplete="off">' +
+            '<input class="form-control form-control-sm bke-cl" placeholder="Last name" autocomplete="off">' +
+            '<button type="button" class="btn btn-sm btn-outline-secondary" title="Remove" onclick="this.parentNode.remove()">&times;</button>';
+        row.querySelector('.bke-cf').value = first || '';
+        row.querySelector('.bke-cl').value = last || '';
+        wrap.appendChild(row);
+    }
+    function bkeAddContribRow(role) { bkeContribRow(role, '', ''); }
+    function _bkeContribRows(wrapId) {
+        return [...document.getElementById(wrapId).querySelectorAll('.bke-contrib-row')]
+            .map(r => ({ first: r.querySelector('.bke-cf').value.trim(), last: r.querySelector('.bke-cl').value.trim() }))
+            .filter(x => x.first || x.last);
+    }
+    function _bkeGatherContributors() {
+        const val = id => (document.getElementById(id).value || '').trim();
+        const authors = [{ first: val('bkeAuthorFirst'), last: val('bkeAuthorLast') }, ..._bkeContribRows('bkeAddAuthors')].filter(x => x.first || x.last);
+        const narrators = [{ first: val('bkeNarratorFirst'), last: val('bkeNarratorLast') }, ..._bkeContribRows('bkeAddNarrators')].filter(x => x.first || x.last);
+        return { authors, narrators };
+    }
+    async function _bkeSaveContributors(id) {
+        try { await api('/books/' + id + '/contributors', { method: 'POST', data: _bkeGatherContributors() }); }
+        catch (e) { /* non-fatal — primary author/narrator already saved on the book */ }
+    }
+    function _bkeResetContributors() {
+        ['bkeAddAuthors', 'bkeAddNarrators'].forEach(w => { const el = document.getElementById(w); if (el) el.innerHTML = ''; });
+        ['bkeNarratorFirst', 'bkeNarratorLast'].forEach(i => { const el = document.getElementById(i); if (el) el.value = ''; });
+    }
+    async function _bkeLoadContributors(bookId) {
+        _bkeResetContributors();
+        try {
+            const cc = await api('/books/' + bookId + '/contributors');
+            (cc.authors || []).slice(1).forEach(c => bkeContribRow('author', c.first, c.last));
+            const narr = cc.narrators || [];
+            if (narr.length) {
+                const n0 = narr[0];
+                const set = (id, v) => { const el = document.getElementById(id); if (el) el.value = (v != null ? v : ''); };
+                set('bkeNarratorFirst', n0.first); set('bkeNarratorLast', n0.last);
+                narr.slice(1).forEach(c => bkeContribRow('narrator', c.first, c.last));
+            }
+        } catch (e) { /* leave blank */ }
+    }
+
     async function _bkeSaveCore() {
         const id = document.getElementById('bkeId').value;
         const v = id2 => { const x = document.getElementById(id2).value.trim(); return x === '' ? null : x; };
@@ -322,6 +373,7 @@
                 book = { ...(bkeBook || {}), ...owned,
                          is_owned: owned.owned_ebook || owned.owned_audio || owned.owned_physical };
             } catch (e) { toast('Saved, but ownership didn’t update', 'warning'); }
+            await _bkeSaveContributors(id);   // #192 authors + narrators
             toast('Book updated', 'success');
             const after = hooks().afterSave;
             if (after) after(parseInt(id, 10), data, book);
@@ -361,6 +413,7 @@
             try { await api(`/inventory/book/${id}`, { method: 'PUT', data: owned }); }
             catch (e) { toast('Book added, but ownership didn’t save', 'warning'); book.is_owned = false; }
         }
+        await _bkeSaveContributors(id);   // #192 authors + narrators
         toast('Book added', 'success');
         const after = hooks().afterCreate || hooks().afterSave;
         if (after) after(id, data, book);
@@ -662,6 +715,7 @@
     // Expose the handlers referenced by inline onclick= in the modal markup.
     Object.assign(window, {
         bkeOpen, bkeOpenNew, bkeSave, bkeSaveAndNext, bkeCreateAnother, bkeDelete,
+        bkeAddContribRow,
         bkeUploadFile, bkeCoverFromUrl, bkeRemoveCover, bkeLoadLists, wireBookEdit: wireAutocomplete,
         bkeRequestMetadata, bkeApplyMetadata,
         bkeGenreKey, bkeAddGenre, bkeRemoveGenre,

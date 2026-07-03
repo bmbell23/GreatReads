@@ -399,6 +399,14 @@ async def contributors_backfill(db: Session = Depends(get_db),
     return backfill_all(db)
 
 
+@router.get("/{book_id}/contributors")
+async def get_contributors(book_id: int, db: Session = Depends(get_db),
+                           current_user: User = Depends(get_current_user)):
+    """A book's authors + narrators (primary-first) for the edit modal (#192)."""
+    from ..services.contributor_service import contributors_for
+    return contributors_for(db, book_id)
+
+
 @router.post("/{book_id}/contributors")
 async def set_contributors(book_id: int, payload: ContributorsRequest,
                            db: Session = Depends(get_db),
