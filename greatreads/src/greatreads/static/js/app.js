@@ -1205,7 +1205,9 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     // Reading Position (in-progress): current % with the high-water mark appended async.
     if (ipReading) {
         const cur = Math.round(ipReading.current_progress_percent || 0);
-        rows.push(['Reading Position', `<span id="gbaPos">${cur}%</span>`]);
+        const pages = book.page_count || 0;
+        const pg = pages ? ` · p. ${Math.max(1, Math.round((cur / 100) * pages))} of ${pages.toLocaleString()}` : '';
+        rows.push(['Reading Position', `<span id="gbaPos">${cur}%</span><span id="gbaPage" class="text-muted">${pg}</span>`]);
     }
     // Reading Sessions summary (N @ avg) — filled async from the sessions list (#127).
     const startedOrFinished = !!(r && (r.is_started || r.is_finished)) || (book.read_count || 0) > 0;
@@ -1458,6 +1460,9 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
                 const pct = Math.round(p.progress * 100);
                 const hwm = (typeof p.maxProgress === 'number') ? Math.round(p.maxProgress * 100) : null;
                 el.textContent = (hwm != null && hwm > pct) ? `${pct}% (${hwm}% max)` : `${pct}%`;
+                const pel = document.getElementById('gbaPage');
+                const pages = book.page_count || 0;
+                if (pel && pages) pel.textContent = ` · p. ${Math.max(1, Math.round((pct / 100) * pages))} of ${pages.toLocaleString()}`;
             })
             .catch(() => {});
     }
