@@ -771,10 +771,12 @@ function cardHtml(c) {
     }
     const libbyOwned = (c.kind === 'libby' && libbyIsOwned(c))
         ? '<div class="books-badge-tl"><span class="books-readcount" title="Already in your library"><i class="fas fa-check"></i></span></div>' : '';
+    // Format chips (ebook/audiobook) top-left for unowned Libby results (#197).
+    const libbyFmtChips = (c.kind === 'libby' && !libbyIsOwned(c)) ? libbyFormatChips(c) : '';
     return `<div class="col-4 col-sm-3 col-lg-2 mb-3">
         <div class="card books-card status-${c.status}${isSel ? ' sel-on' : ''}" style="cursor:pointer;" onclick="${click}" title="${esc(dispTitle(c.title))}">
             <div class="books-cover">${cover}
-                ${tl || libbyOwned}
+                ${tl || libbyOwned}${libbyFmtChips}
                 ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
                 ${libbyRibbon}${wishRibbon}
             </div>
@@ -824,6 +826,17 @@ function setLibbyMedia(m) {
 }
 
 // A small availability ribbon across the bottom of a Libby result cover.
+// Top-left format chips (#197): which formats this title has on Libby. Reuses the
+// app's format convention — ebook blue, audiobook orange (headphones).
+function libbyFormatChips(c) {
+    if (!c.formats) return '';
+    const chips = [];
+    if (c.formats.ebook) chips.push('<i class="fas fa-book" title="Ebook available" style="color:#0d6efd;"></i>');
+    if (c.formats.audiobook) chips.push('<i class="fas fa-headphones" title="Audiobook available" style="color:#FF6600;"></i>');
+    if (!chips.length) return '';
+    return `<div class="position-absolute top-0 start-0 d-flex gap-1 px-1"
+        style="background:rgba(0,0,0,.55);border-bottom-right-radius:5px;font-size:.7rem;padding:2px 4px;">${chips.join('')}</div>`;
+}
 function libbyAvailRibbon(c) {
     let cls, txt;
     if (libbyIsOwned(c)) { cls = 'bg-primary'; txt = 'In library'; }
@@ -854,12 +867,45 @@ function libbyDedupeLibraries(libs) {
     return [...byKey.values()];
 }
 
-// Map an engine search row → a Books card shape (kind:'libby').
+// Map an engine search row → a Books card shape (kind:'libby'). A UNIFIED row (#197)
+// carries `formats:{ebook,audiobook}` (each with its own OverDrive titleId + per-format
+// availability/libraries); a single-media row is flat (backward compatible).
+function _libbyFmt(f) {
+    return f ? {
+        titleId: String(f.titleId),
+        isAvailable: !!f.isAvailable,
+        onHold: !!f.onHold,
+        holdsCount: f.holdsCount,
+        estimatedWaitDays: f.estimatedWaitDays,
+        libraries: libbyDedupeLibraries(f.libraries),
+    } : null;
+}
 function libbyRowToCard(row) {
+    const rf = row.formats || null;
+    let formats, complete;
+    if (rf) {
+        // Unified search knows BOTH formats' status (present or definitively absent).
+        formats = { ebook: _libbyFmt(rf.ebook), audiobook: _libbyFmt(rf.audiobook) };
+        complete = true;
+    } else {
+        // Single-media row (series strip = ebook, or a media=X search): only ONE format
+        // is known — don't imply anything about the other.
+        const media = row.type || 'ebook';
+        formats = { ebook: null, audiobook: null };
+        formats[media] = _libbyFmt({
+            titleId: row.id, isAvailable: row.isAvailable, onHold: row.onHold,
+            holdsCount: row.holdsCount, estimatedWaitDays: row.estimatedWaitDays, libraries: row.libraries,
+        });
+        complete = false;
+    }
+    const eb = formats.ebook, ab = formats.audiobook;
+    const primary = eb || ab;   // for the title_id used by details/cover/series lookups
     return {
         kind: 'libby',
-        title_id: String(row.id),
-        mediaType: row.type || 'ebook',   // #191 ebook | audiobook
+        title_id: String((primary && primary.titleId) || row.id),
+        formats,
+        formatsComplete: complete,
+        mediaType: row.type || (eb ? 'ebook' : ab ? 'audiobook' : 'ebook'),
         title: row.title,
         author: row.author,
         series: row.series || '',
@@ -869,9 +915,11 @@ function libbyRowToCard(row) {
         isAvailable: !!row.isAvailable,
         onHold: !!row.onHold,
         inLibrary: !!row.inLibrary,
-        holdsCount: row.holdsCount,
-        estimatedWaitDays: row.estimatedWaitDays,
-        libraries: libbyDedupeLibraries(row.libraries),
+        holdsCount: row.holdsCount != null ? row.holdsCount : (primary && primary.holdsCount),
+        estimatedWaitDays: row.estimatedWaitDays != null ? row.estimatedWaitDays : (primary && primary.estimatedWaitDays),
+        // Backward-compat top-level libraries (single-media rows / series items); unified
+        // borrow uses the per-format libraries instead.
+        libraries: libbyDedupeLibraries(row.libraries || (primary && primary.libraries) || []),
         _row: row,
     };
 }
@@ -918,16 +966,16 @@ async function loadLibbyShelf(reset) {
     if (!q) {
         cards = []; shelfTotal = 0; shelfLoading = false;
         document.getElementById('shelfCount').textContent = '';
-        grid.innerHTML = libbyMediaToggleHtml() + `<div class="col-12 text-muted text-center py-5">
-            <i class="fas ${libbyMedia === 'audiobook' ? 'fa-headphones' : 'fa-building-columns'} fa-2x mb-2 d-block" style="color:#d63384;"></i>
-            Search Libby for a library ${libbyMedia} to borrow &amp; download into GreatReads.
-            <div class="small mt-1">Type a title or author above. Availability is checked across your linked cards.</div></div>`;
+        grid.innerHTML = `<div class="col-12 text-muted text-center py-5">
+            <i class="fas fa-building-columns fa-2x mb-2 d-block" style="color:#d63384;"></i>
+            Search Libby for a book to borrow &amp; download into GreatReads.
+            <div class="small mt-1">Type a title or author above — results show whichever formats (ebook / audiobook) are available.</div></div>`;
         return;
     }
     if (reset) grid.innerHTML = '<div class="col-12 text-muted text-center py-5"><span class="spinner-border spinner-border-sm me-2"></span>Searching Libby…</div>';
     shelfLoading = true;
     let r = null;
-    try { r = await GreatReads.apiCall(`/libby/search?q=${encodeURIComponent(q)}&library=all&media=${libbyMedia}&page=${libbyPage}&per_page=${PAGE}`); }
+    try { r = await GreatReads.apiCall(`/libby/search?q=${encodeURIComponent(q)}&library=all&page=${libbyPage}&per_page=${PAGE}`); }
     catch (e) {}
     if (myGen !== shelfGen) return;   // superseded by a newer query
     shelfLoading = false;
@@ -965,13 +1013,13 @@ function renderLibby(q) {
     document.getElementById('shelfCount').textContent =
         cards.length ? `${cards.length}${cards.length < shelfTotal ? ' of ' + shelfTotal : ''} on Libby` : '';
     if (!cards.length) {
-        grid.innerHTML = libbyMediaToggleHtml() + `<div class="col-12 text-muted text-center py-5">
-            No Libby ${libbyMedia} matches for “${esc(q)}”.
+        grid.innerHTML = `<div class="col-12 text-muted text-center py-5">
+            No Libby matches for “${esc(q)}”.
             <div class="small mt-1">If this seems wrong, the Libby token may need a re-link — open the
             <a href="#" onclick="openLibby();return false;">Libby panel</a> to check.</div></div>`;
         return;
     }
-    grid.innerHTML = libbyMediaToggleHtml() + cards.map(cardHtml).join('');
+    grid.innerHTML = cards.map(cardHtml).join('');
 }
 
 // ── Holds / Loans shelves (#163) ─────────────────────────────────────────────
@@ -1087,9 +1135,71 @@ function libbyLibraryChooser(c) {
 
 // Render the Borrow/Hold action based on the SELECTED library's availability (item #2)
 // and GreatReads ownership (item #6). Called on open + whenever the library changes.
+// Pick the card to borrow a given format from: first available library, else first.
+function _libbyBestCard(fmt) {
+    const libs = (fmt && fmt.libraries) || [];
+    const pick = libs.find(l => l.isAvailable) || libs[0];
+    return pick ? String(pick.cardId) : '';
+}
+// Unified 'one book, two formats' actions (#197): a row per available format, each
+// with its own Borrow & Download (ebook → .acsm path; audiobook → v-chip Listen).
+// App-wide format convention (matches journal/stats): audiobook = orange headphones,
+// ebook = blue book. Keep these in one place so it's consistent everywhere.
+const LIBBY_FORMAT_SPECS = [
+    { media: 'ebook', label: 'Ebook', icon: 'fa-book', color: '#0d6efd', fn: 'libbyBorrow' },
+    { media: 'audiobook', label: 'Audiobook', icon: 'fa-headphones', color: '#FF6600', fn: 'libbyBorrowAudiobook' },
+];
+function libbyFormatsHtml(c) {
+    const f = c.formats || {};
+    const owned = libbyIsOwned(c);
+    const rows = [];
+    for (const s of LIBBY_FORMAT_SPECS) {
+        const fmt = f[s.media];
+        const label = `<i class="fas ${s.icon} me-2" style="color:${s.color};"></i><strong>${s.label}</strong>`;
+        if (!fmt) {
+            // Only assert "not on Libby" when the search actually checked this format
+            // (a unified search). For a single-media/series result, stay silent.
+            if (c.formatsComplete) {
+                rows.push(`<div class="d-flex align-items-center justify-content-between border rounded px-2 py-1 mb-1 opacity-50">
+                    <span>${label} · <span class="text-muted small">not on Libby</span></span></div>`);
+            }
+            continue;
+        }
+        const card = _libbyBestCard(fmt);
+        let action, avail;
+        if (fmt.onHold) {
+            action = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>On hold</span>';
+            avail = '<span class="text-info small">On hold</span>';
+        } else if (fmt.isAvailable) {
+            const cls = owned ? 'btn-outline-secondary' : 'btn-primary';
+            action = `<button class="btn btn-sm ${cls}" onclick="${s.fn}('${fmt.titleId}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>${owned ? 'Borrow again' : 'Borrow &amp; Download'}</button>`;
+            avail = '<span class="text-success small fw-semibold">Available now</span>';
+        } else {
+            action = `<button class="btn btn-sm btn-outline-warning" onclick="libbyPlaceHoldFmt('${fmt.titleId}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
+            avail = `<span class="text-warning small">${esc(libbyWaitText(fmt.estimatedWaitDays))}</span>`;
+        }
+        rows.push(`<div class="d-flex align-items-center justify-content-between border rounded px-2 py-1 mb-1">
+            <span>${label} · ${avail}</span>${action}</div>`);
+    }
+    return rows.length ? rows.join('') : '<div class="small text-muted">Not found on Libby.</div>';
+}
+// Place a hold on a specific format (thin wrapper over the existing hold flow).
+async function libbyPlaceHoldFmt(titleId, cardId, btn) {
+    if (!cardId) { showToast('No library card available for a hold.', 'warning'); return; }
+    const orig = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>…'; }
+    try {
+        await GreatReads.apiCall('/libby/holds/place', { method: 'POST', data: { title_id: titleId, card_id: cardId }, silent: true });
+        showToast('Hold placed.', 'success');
+        if (btn) btn.innerHTML = '<i class="fas fa-check me-1"></i>On hold';
+    } catch (e) { showToast(libbyErrMsg(e, 'hold'), 'danger'); if (btn) { btn.disabled = false; btn.innerHTML = orig; } }
+}
+
 function libbyRenderAction() {
     const c = libbyActive; if (!c) return;
     const box = document.getElementById('libbyAction'); if (!box) return;
+    // Unified result → per-format actions (#197).
+    if (c.formats) { box.innerHTML = libbyFormatsHtml(c); return; }
     const libs = c.libraries || [];
     if (!libs.length) { box.innerHTML = ''; return; }
     if (c.onHold) { box.innerHTML = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>Already on hold</span>'; return; }
@@ -1139,7 +1249,9 @@ async function openLibbyDetails(c) {
     // only holdable, or you just want to track it.
     const wishBtn = libbyIsOwned(c) ? ''
         : `<button class="btn btn-sm btn-outline-primary w-100 mb-2" id="libbyWishBtn" onclick="grLibbyAddWishlist(libbyActive)"><i class="fas fa-bookmark me-2"></i>Add to Wishlist</button>`;
-    const actionsHtml = `${owned}${wishBtn}<div id="libbyRich" class="mb-2 w-100"></div>${libbyLibraryChooser(c)}<div id="libbyAction" class="mt-1 mb-2 w-100"></div><div id="libbySeries" class="w-100"></div>`;
+    // Unified results carry per-format cards, so skip the single-card chooser (#197).
+    const chooser = c.formats ? '' : libbyLibraryChooser(c);
+    const actionsHtml = `${owned}${wishBtn}<div id="libbyRich" class="mb-2 w-100"></div>${chooser}<div id="libbyAction" class="mt-1 mb-2 w-100"></div><div id="libbySeries" class="w-100"></div>`;
 
     GreatReads.openBookActions(book, {
         title: c.title, actionsHtml,
@@ -1248,24 +1360,27 @@ function _libbyResetBorrowBtn() {
     }
     if (hold) hold.disabled = false;
 }
-async function libbyBorrow() {
+async function libbyBorrow(titleId, cardId, btn) {
     const c = libbyActive; if (!c) return;
-    const cardId = _libbySelectedCard();
+    titleId = titleId || c.title_id;
+    cardId = cardId || _libbySelectedCard();
+    btn = btn || document.getElementById('libbyBorrowBtn');
     if (!cardId) { showToast('No library card available to borrow on.', 'warning'); return; }
-    const btn = document.getElementById('libbyBorrowBtn');
+    const orig = btn ? btn.innerHTML : '';
+    const reset = () => { if (btn) { btn.disabled = false; btn.innerHTML = orig; } };
     const hold = document.getElementById('libbyHoldBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Borrowing…'; }
     if (hold) hold.disabled = true;
 
     let reqId;
     try {
-        const r = await GreatReads.apiCall('/libby/download-async', { method: 'POST', data: { title_id: c.title_id, card_id: cardId, title: c.title }, silent: true });
+        const r = await GreatReads.apiCall('/libby/download-async', { method: 'POST', data: { title_id: titleId, card_id: cardId, title: c.title }, silent: true });
         reqId = r && r.request_id;
     } catch (e) {
-        showToast(libbyErrMsg(e, 'borrow'), 'danger'); _libbyResetBorrowBtn(); return;
+        showToast(libbyErrMsg(e, 'borrow'), 'danger'); reset(); return;
     }
-    if (!reqId) { showToast('Couldn’t start the borrow — try again.', 'danger'); _libbyResetBorrowBtn(); return; }
-    showToast(`Borrowing “${c.title}” — this runs in the background (up to a few minutes).`, 'info');
+    if (!reqId) { showToast('Couldn’t start the borrow — try again.', 'danger'); reset(); return; }
+    showToast(`Borrowing “${c.title}” (ebook) — this runs in the background (up to a few minutes).`, 'info');
 
     const started = Date.now();
     const poll = async () => {
@@ -1273,19 +1388,19 @@ async function libbyBorrow() {
         try { s = await GreatReads.apiCall('/libby/download-status?request_id=' + encodeURIComponent(reqId), { silent: true }); } catch (e) {}
         if (s && s.done) {
             if (s.ok) {
-                showToast(`“${c.title}” downloaded — importing into GreatReads shortly.`, 'success');
-                if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded — importing…';
+                showToast(`“${c.title}” ebook downloaded — importing into GreatReads shortly.`, 'success');
+                if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded';
                 c.inLibrary = true;
                 refreshImportBadge();   // #137 — surfaces the import as it lands
             } else {
                 showToast(s.detail || 'Borrow failed — check this card’s saved credentials in the Libby panel.', 'danger');
-                _libbyResetBorrowBtn();
+                reset();
             }
             return;
         }
         if (Date.now() - started > 5 * 60 * 1000) {   // safety cap ~5 min
             showToast('Still working in the background — check your Loans / Newly-Imported shortly.', 'info');
-            _libbyResetBorrowBtn();
+            reset();
             return;
         }
         if (btn && s && s.status) btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>${s.status}…`;
@@ -1298,17 +1413,20 @@ async function libbyBorrow() {
 // Libby session to fulfil via the bona-fide (prbn:v) chip, harvest the OverDrive
 // Listen player's MP3 parts into /audiobooks, and auto-return the loan. It's ONE
 // background job in the engine (single global status), pollable while it runs.
-async function libbyBorrowAudiobook() {
+async function libbyBorrowAudiobook(titleId, cardId, btn) {
     const c = libbyActive; if (!c) return;
-    const cardId = _libbySelectedCard();
+    titleId = titleId || c.title_id;
+    cardId = cardId || _libbySelectedCard();
+    btn = btn || document.getElementById('libbyBorrowBtn');
     if (!cardId) { showToast('No library card available to borrow on.', 'warning'); return; }
-    const btn = document.getElementById('libbyBorrowBtn');
+    const orig = btn ? btn.innerHTML : '';
+    const reset = () => { if (btn) { btn.disabled = false; btn.innerHTML = orig; } };
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Starting…'; }
     try {
         await GreatReads.apiCall('/libby/audiobook/download', { method: 'POST', silent: true,
-            data: { title_id: c.title_id, card_id: cardId, title: c.title, borrow: true, return_after: true } });
+            data: { title_id: titleId, card_id: cardId, title: c.title, borrow: true, return_after: true } });
     } catch (e) {
-        showToast(libbyErrMsg(e, 'borrow'), 'danger'); _libbyResetBorrowBtn(); return;
+        showToast(libbyErrMsg(e, 'borrow'), 'danger'); reset(); return;
     }
     showToast(`Downloading “${c.title}” audiobook — this runs in the background (several minutes for a full book).`, 'info');
     const started = Date.now();
@@ -1322,15 +1440,15 @@ async function libbyBorrowAudiobook() {
                 c.inLibrary = true;
             } else if (s.phase === 'error') {
                 showToast(s.message || 'Audiobook download failed.', 'danger');
-                _libbyResetBorrowBtn();
+                reset();
             } else {
-                _libbyResetBorrowBtn();
+                reset();
             }
             return;
         }
         if (Date.now() - started > 30 * 60 * 1000) {
             showToast('Still downloading in the background — check Audiobookshelf shortly.', 'info');
-            _libbyResetBorrowBtn(); return;
+            reset(); return;
         }
         if (btn && s && s.active) {
             const prog = s.parts_total ? ` ${s.parts_done}/${s.parts_total}` : '';

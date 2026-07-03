@@ -194,65 +194,137 @@ async def libby_relink(
 
 # ── Milestone 3 — search + borrow/download ───────────────────────────────────
 
+def _fmt_norm_key(r: dict) -> tuple:
+    """Normalized (title, author) key to match an ebook edition to its audiobook.
+    Sorted tokens → order-independent + deterministic (frozenset join isn't)."""
+    return (" ".join(sorted(_tokens(r.get("title", "")))),
+            " ".join(sorted(_tokens(r.get("author", "")))))
+
+
+def _fmt_entry(r: dict) -> dict:
+    """Per-format handle carried on a unified result (its own OverDrive titleId)."""
+    return {
+        "titleId": str(r.get("id", "")),
+        "isAvailable": bool(r.get("isAvailable")),
+        "holdsCount": r.get("holdsCount"),
+        "estimatedWaitDays": r.get("estimatedWaitDays"),
+        "libraries": r.get("libraries") or [],
+        "onHold": bool(r.get("onHold")),
+    }
+
+
+def _merge_formats(ebooks: list, audiobooks: list) -> list:
+    """Merge ebook + audiobook result lists into one result per book (#197).
+
+    OverDrive exposes the two editions as separate titles; we key by normalized
+    title+author and attach each format under `formats`. Ebooks lead the order;
+    audiobook-only titles append after.
+    """
+    merged: dict = {}
+    order: list = []
+    for media, rows in (("ebook", ebooks), ("audiobook", audiobooks)):
+        for r in rows:
+            k = _fmt_norm_key(r)
+            if not k[0]:
+                continue
+            if k not in merged:
+                merged[k] = {
+                    "id": str(r.get("id", "")),
+                    "title": r.get("title"),
+                    "author": r.get("author"),
+                    "cover": r.get("cover"),
+                    "series": r.get("series"),
+                    "seriesIndex": r.get("seriesIndex"),
+                    "seriesId": r.get("seriesId"),
+                    "publishDate": r.get("publishDate"),
+                    "creatorId": r.get("creatorId"),
+                    "inLibrary": bool(r.get("inLibrary")),
+                    "onHold": bool(r.get("onHold")),
+                    "isAvailable": False,
+                    "formats": {},
+                }
+                order.append(k)
+            entry = merged[k]
+            entry["formats"][media] = _fmt_entry(r)
+            entry["isAvailable"] = entry["isAvailable"] or bool(r.get("isAvailable"))
+            entry["onHold"] = entry["onHold"] or bool(r.get("onHold"))
+            entry["inLibrary"] = entry["inLibrary"] or bool(r.get("inLibrary"))
+            for f in ("cover", "series", "seriesIndex", "seriesId"):
+                if not entry.get(f) and r.get(f):
+                    entry[f] = r.get(f)
+    return [merged[k] for k in order]
+
+
+async def _engine_search_media(client, params: dict, q: str, media: str, want_author: bool) -> list:
+    """One media-type search against the engine, with the by-author relevance lead."""
+    p = {**params, "media": media}
+    calls = [client.get(f"{LIBBY_ENGINE_URL}/api/search", params=p)]
+    if want_author:
+        calls.append(client.get(f"{LIBBY_ENGINE_URL}/api/author-books", params={"q": q, "media": media}))
+    resps = await asyncio.gather(*calls, return_exceptions=True)
+    base = resps[0]
+    if isinstance(base, Exception) or base.status_code >= 400:
+        return None if isinstance(base, Exception) or base.status_code >= 500 else []
+    try:
+        results = base.json().get("results") or []
+    except Exception:
+        return []
+    if want_author and len(resps) > 1 and not isinstance(resps[1], Exception) and resps[1].status_code < 400:
+        try:
+            author_rows = resps[1].json().get("results") or []
+        except Exception:
+            author_rows = []
+        q_tokens = set(_tokens(q))
+        leaders = [r for r in author_rows if q_tokens and q_tokens <= set(_tokens(r.get("author", "")))]
+        if leaders:
+            leaders.sort(key=lambda r: (not r.get("isAvailable", False), int(r.get("holdsCount") or 0), (r.get("title") or "").lower()))
+            lead_ids = {str(r.get("id")) for r in leaders}
+            results = leaders + [r for r in results if str(r.get("id")) not in lead_ids]
+    return results
+
+
 @router.get("/search")
 async def libby_search(request: Request, current_user: User = Depends(get_current_user)):
-    """Search library ebooks (OverDrive Thunder catalog via the engine).
+    """Search the OverDrive catalog via the engine.
 
-    Author-name relevance fix (#142 item 1): the engine's text search expands the
-    query into seed terms and drops books BY an author (a bare "stephen king"
-    returns books ABOUT him, not his novels), whereas the engine's /api/author-books
-    passes the raw query and DOES surface them. So on page 1 of a short query we
-    fetch both in parallel and LEAD with genuine by-author matches (query tokens ⊆
-    the item's author), then the normal text results — no dropdowns needed."""
+    Default is the UNIFIED view (#197): search ebooks AND audiobooks and merge each
+    title's two editions into one result carrying per-format availability + titleId,
+    so the UI can show 'one book, two formats'. Pass media=ebook|audiobook for a
+    single-format result set (backward compatible).
+
+    Author-name relevance (#142): the engine's text search drops books BY an author,
+    while /api/author-books surfaces them — so we blend the by-author leaders in."""
     params = dict(request.query_params)
     q = (params.get("q") or "").strip()
     try:
         page = max(1, int(params.get("page") or "1"))
     except ValueError:
         page = 1
-    # Author blend only makes sense for a short, name-like query on the first page.
+    media = (params.get("media") or "both").strip().lower()
     want_author = page == 1 and 1 <= len(q.split()) <= 4
 
     try:
         async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
-            calls = [client.get(f"{LIBBY_ENGINE_URL}/api/search", params=params)]
-            if want_author:
-                calls.append(client.get(f"{LIBBY_ENGINE_URL}/api/author-books", params={"q": q}))
-            responses = await asyncio.gather(*calls, return_exceptions=True)
+            if media in ("ebook", "audiobook"):
+                rows = await _engine_search_media(client, params, q, media, want_author)
+                if rows is None:
+                    return JSONResponse({"error": "Libby search failed — the token may need a re-link."}, status_code=502)
+                for r in rows:
+                    r["type"] = media
+                return JSONResponse({"results": rows, "meta": {"total": len(rows)}, "query": {"text": q}})
+            # Unified: both media types in parallel, then merge by title+author.
+            ebooks, audiobooks = await asyncio.gather(
+                _engine_search_media(client, params, q, "ebook", want_author),
+                _engine_search_media(client, params, q, "audiobook", want_author),
+            )
     except Exception as exc:
         logger.warning("libby_search: engine unreachable: %s", exc)
         return JSONResponse({"error": "Libby engine is unreachable — is the libby-web service running?"}, status_code=502)
 
-    base_resp = responses[0]
-    if isinstance(base_resp, Exception):
-        logger.warning("libby_search: base search failed: %s", base_resp)
+    if ebooks is None and audiobooks is None:
         return JSONResponse({"error": "Libby search failed — the token may need a re-link."}, status_code=502)
-    if base_resp.status_code >= 400:
-        return _mirror(base_resp)
-    try:
-        base = base_resp.json()
-    except Exception:
-        return JSONResponse({"error": "Libby engine returned a non-JSON response."}, status_code=502)
-
-    results = base.get("results") or []
-    meta = base.get("meta") or {}
-
-    if want_author and len(responses) > 1 and not isinstance(responses[1], Exception) and responses[1].status_code < 400:
-        try:
-            author_rows = responses[1].json().get("results") or []
-        except Exception:
-            author_rows = []
-        q_tokens = set(_tokens(q))
-        # Genuine by-author books: every query token appears in the item's author.
-        leaders = [r for r in author_rows if q_tokens and q_tokens <= set(_tokens(r.get("author", "")))]
-        if leaders:
-            leaders.sort(key=lambda r: (not r.get("isAvailable", False), int(r.get("holdsCount") or 0), (r.get("title") or "").lower()))
-            lead_ids = {str(r.get("id")) for r in leaders}
-            rest = [r for r in results if str(r.get("id")) not in lead_ids]
-            results = leaders + rest
-            meta = {**meta, "total": (meta.get("total") or len(rest)) + len(leaders)}
-
-    return JSONResponse({"results": results, "meta": meta, "query": base.get("query")})
+    merged = _merge_formats(ebooks or [], audiobooks or [])
+    return JSONResponse({"results": merged, "meta": {"total": len(merged)}, "query": {"text": q}})
 
 
 class DownloadRequest(BaseModel):
