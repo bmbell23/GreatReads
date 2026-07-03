@@ -80,12 +80,17 @@
   container bakes in copies at `greatreads/ereader-assets/` — `summaries/`
   (from `backend/summaries/`) and `version.txt` (repo root). The Docker build
   context is `greatreads/`, so it can't `COPY` from `backend/` or the root
-  directly; the copies are what get baked. If you edited `backend/summaries/*`
-  or bumped `version.txt`, re-stage **before** rebuilding, or the container
-  serves stale summaries / an old version pill:
-  `cp backend/summaries/*.json greatreads/ereader-assets/summaries/ && cp version.txt greatreads/ereader-assets/version.txt`
-  (A code-only change needs no re-stage.) TODO: fold this re-stage into a
-  deploy-script wrapper when #8 lands so it can't be forgotten.
+  directly; the copies are what get baked.
+  - **`version.txt` is now auto-synced** by a repo `pre-commit` hook
+    (`scripts/git-hooks/pre-commit`, wired via `core.hooksPath`): every commit
+    copies the root `version.txt` into `greatreads/ereader-assets/version.txt`
+    and stages it, so it never drifts and there's **no manual `cp` before a
+    rebuild** and no dangling change. (If you clone fresh, run
+    `git config core.hooksPath scripts/git-hooks` once.)
+  - **`summaries/` still needs a manual re-stage** if you edited
+    `backend/summaries/*`, before rebuilding, or the container serves stale
+    summaries: `cp backend/summaries/*.json greatreads/ereader-assets/summaries/`.
+  (A code-only change needs no re-stage.)
 
 ## Runtime orientation (post backend-merge — #22 step 2 done)
 - `:8090` `web/serve.py` — static reader files + `/greatreads/` reverse proxy (bare-metal).

@@ -1,0 +1,13 @@
+#!/bin/sh
+# Keep the baked ereader copy of version.txt in sync with the repo-root version.txt so it
+# never drifts / shows up as a dangling change (#22 baked-copy fallout). Runs on every
+# commit — no manual re-stage needed before a container rebuild.
+root="$(git rev-parse --show-toplevel)" || exit 0
+src="$root/version.txt"
+dst="$root/greatreads/ereader-assets/version.txt"
+[ -f "$src" ] || exit 0
+if [ ! -f "$dst" ] || ! cmp -s "$src" "$dst"; then
+    cp "$src" "$dst"
+    git add "$dst"
+fi
+exit 0
