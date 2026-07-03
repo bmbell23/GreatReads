@@ -379,6 +379,24 @@
         <h6 class="mb-1"><i class="fas fa-id-card me-1 text-primary"></i>Your libraries &amp; cards</h6>
         <p class="text-muted small mb-2">Libraries linked to your Libby account. A card needs saved website credentials before it can download.</p>
         <div id="libbyCards"><div class="text-muted small">Loading…</div></div>
+
+        <!-- Audiobook downloads: link a bona-fide chip via the real Libby app (#191) -->
+        <hr class="my-3">
+        <h6 class="mb-1"><i class="fas fa-headphones me-1 text-primary"></i>Audiobook downloads <span class="badge bg-secondary">beta</span></h6>
+        <p class="text-muted small mb-2">Ebooks download via the OverDrive website; audiobooks need a full Libby “chip”, which only Libby’s own setup can grant. Link one here — it runs the real Libby app for you and you authorize it from your phone (just like AnyLibro).</p>
+        <div id="abLinkIdle">
+          <button class="btn btn-sm btn-primary" id="abLinkStartBtn" onclick="abLinkStart()"><i class="fas fa-link me-1"></i>Link Libby for audiobooks</button>
+          <span id="abLinkState" class="small text-muted ms-2"></span>
+        </div>
+        <div id="abLinkActive" style="display:none;">
+          <div class="text-center border rounded p-3 mb-2">
+            <div class="small text-muted mb-1">On your phone: <b>Libby → Menu (☰) → Copy To Another Device</b>, then enter this code:</div>
+            <div id="abLinkCode" class="fw-bold" style="font-size:2rem;letter-spacing:.25rem;font-variant-numeric:tabular-nums;">········</div>
+            <div class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span><span id="abLinkMsg">Waiting for you to authorize on your phone…</span></div>
+          </div>
+          <button class="btn btn-sm btn-outline-secondary" onclick="abLinkCancel()">Cancel</button>
+        </div>
+        <div id="abLinkDone" class="small text-success" style="display:none;"></div>
       </div>
     </div>
   </div>
@@ -1778,6 +1796,48 @@ function openLibby() {
     document.getElementById('libbyRelinkMsg').innerHTML = '';
     loadLibbyStatus();
     loadLibbyCards();
+    abLinkPoll();   // #191 reflect current audiobook-link state (and resume polling if active)
+}
+
+// ── Audiobook chip linking (#191) ────────────────────────────────────────────
+let _abLinkTimer = null;
+function _abLinkStop() { if (_abLinkTimer) { clearInterval(_abLinkTimer); _abLinkTimer = null; } }
+function abLinkRefreshUI(s) {
+    const idle = document.getElementById('abLinkIdle'), active = document.getElementById('abLinkActive'), done = document.getElementById('abLinkDone');
+    if (!idle) return;
+    if (s && s.active) {
+        idle.style.display = 'none'; active.style.display = ''; done.style.display = 'none';
+        document.getElementById('abLinkCode').textContent = s.code || '········';
+        document.getElementById('abLinkMsg').textContent = s.message || 'Waiting for you to authorize on your phone…';
+        if (!_abLinkTimer) _abLinkTimer = setInterval(abLinkPoll, 3000);
+    } else if (s && s.linked) {
+        idle.style.display = ''; active.style.display = 'none'; done.style.display = '';
+        done.innerHTML = `<i class="fas fa-circle-check me-1"></i>Linked! ${s.cards || 0} card${s.cards === 1 ? '' : 's'} synced — audiobook borrowing is ready.`;
+        document.getElementById('abLinkState').textContent = '';
+        const b = document.getElementById('abLinkStartBtn'); if (b) b.disabled = false;
+        _abLinkStop();
+    } else {
+        idle.style.display = ''; active.style.display = 'none';
+        const b = document.getElementById('abLinkStartBtn'); if (b) b.disabled = false;
+        if (s && s.already_linked) { done.style.display = ''; done.innerHTML = '<i class="fas fa-circle-check me-1"></i>Audiobook chip is linked.'; }
+        document.getElementById('abLinkState').textContent = (s && s.error) ? ('Error: ' + s.error) : '';
+        _abLinkStop();
+    }
+}
+async function abLinkPoll() {
+    let s; try { s = await GreatReads.apiCall('/libby/audiobook-link/status', { silent: true }); } catch (e) { return; }
+    abLinkRefreshUI(s);
+}
+async function abLinkStart() {
+    const btn = document.getElementById('abLinkStartBtn'); if (btn) btn.disabled = true;
+    document.getElementById('abLinkState').textContent = 'Starting the Libby app…';
+    try { abLinkRefreshUI(await GreatReads.apiCall('/libby/audiobook-link/start', { method: 'POST', silent: true })); }
+    catch (e) { document.getElementById('abLinkState').textContent = 'Could not start — the Libby engine may be busy.'; if (btn) btn.disabled = false; }
+}
+async function abLinkCancel() {
+    _abLinkStop();
+    try { await GreatReads.apiCall('/libby/audiobook-link/cancel', { method: 'POST', silent: true }); } catch (e) {}
+    abLinkRefreshUI({ active: false });
 }
 
 // Linked libraries & cards (#142 item 3) — from the sanitized /libby/cards/status.

@@ -297,6 +297,22 @@ async def libby_downloads(current_user: User = Depends(get_current_user)):
     return await _engine_get("/api/downloads")
 
 
+# ── Audiobook chip linking (#191) — drive the real Libby web app for a bona-fide chip ──
+@router.post("/audiobook-link/start")
+async def libby_audiobook_link_start(current_user: User = Depends(get_current_user)):
+    return await _engine_post("/api/audiobook-link/start", {}, timeout=45.0)
+
+
+@router.get("/audiobook-link/status")
+async def libby_audiobook_link_status(current_user: User = Depends(get_current_user)):
+    return await _engine_get("/api/audiobook-link/status")
+
+
+@router.post("/audiobook-link/cancel")
+async def libby_audiobook_link_cancel(current_user: User = Depends(get_current_user)):
+    return await _engine_post("/api/audiobook-link/cancel", {})
+
+
 # ── Async borrow (#186) ──────────────────────────────────────────────────────
 # The borrow can take minutes via the OverDrive-website fulfill path, long enough to
 # trip a reverse-proxy gateway timeout (→ a body-less 5xx the UI mislabelled as an
