@@ -849,6 +849,40 @@ async function grOpenAuthor() {
         ? cards.map(c => grSeriesMini(c, b && b.id, true)).join('')
         : '<div class="col-12 text-muted text-center py-4">No books found by this author.</div>';
 }
+// #192 — render a role's contributors: primary name(s) linked, plus a (+N) toggle that
+// reveals the additional names (each linked to that person's works, spanning both roles).
+function grContribLinks(list, role) {
+    if (!list || !list.length) return '';
+    const opener = role === 'author' ? 'openAuthorName' : 'openNarrator';
+    const link = c => `<a href="#" class="gba-link" onclick="GreatReads.${opener}('${encodeURIComponent(c.name).replace(/'/g, '%27')}');return false;">${grEsc(c.name)}</a>`;
+    let prim = list.filter(c => c.is_primary);
+    if (!prim.length) prim = [list[0]];
+    const extra = list.filter(c => !prim.includes(c));
+    let html = prim.map(link).join(', ');
+    if (extra.length) {
+        html += ` <a href="#" class="gba-link small text-muted" onclick="GreatReads.showContribExtra(this);return false;" title="${extra.map(c => grEsc(c.name)).join(', ')}">(+${extra.length})</a>`
+             + `<span class="gba-contrib-extra" style="display:none;">, ${extra.map(link).join(', ')}</span>`;
+    }
+    return html;
+}
+function grShowContribExtra(a) {
+    const span = a.parentNode.querySelector('.gba-contrib-extra');
+    if (span) span.style.display = '';
+    a.style.display = 'none';
+}
+async function grOpenAuthorName(nameEnc) {
+    const name = decodeURIComponent(nameEnc || '');
+    if (!name) return;
+    document.getElementById('grSeriesTitle').textContent = name;
+    document.getElementById('grSeriesGrid').innerHTML = '<div class="col-12 text-muted text-center py-4">Loading…</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('grSeriesModal')).show();
+    let cards;
+    try { const d = await GreatReads.apiCall('/news/author?name=' + encodeURIComponent(name)); cards = d.cards || []; }
+    catch (e) { cards = []; }
+    document.getElementById('grSeriesGrid').innerHTML = cards.length
+        ? cards.map(c => grSeriesMini(c, null, true)).join('')
+        : '<div class="col-12 text-muted text-center py-4">No books found by this author.</div>';
+}
 async function grOpenNarrator(nameEnc) {
     const name = decodeURIComponent(nameEnc || '');
     if (!name) return;
@@ -1061,14 +1095,19 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
 
     // Detail rows: author / series / words / pages, plus any caller extras (WPD…).
     const rows = [];
-    // Author is a link → all books by this author (mirrors Series) (#155).
-    if (book.author) rows.push(['Author',
-        `<a href="#" class="gba-link" onclick="GreatReads.openAuthor();return false;">${grEsc(book.author)}</a>`]);
+    // Author is a link → all books by this author (mirrors Series) (#155). With #192,
+    // show the primary + a (+N) reveal for additional authors when present.
+    const _ct = book.contributors || {};
+    if (_ct.authors && _ct.authors.length) rows.push(['Author', grContribLinks(_ct.authors, 'author')]);
+    else if (book.author) rows.push(['Author',
+        `<a href="#" class="gba-link" onclick="GreatReads.openAuthorName('${encodeURIComponent(book.author).replace(/'/g, '%27')}');return false;">${grEsc(book.author)}</a>`]);
     if (book.series) {
         const num = (book.series_number != null) ? ' #' + book.series_number : '';
         rows.push(['Series', `${book.universe ? book.universe + ': ' : ''}${book.series}${num}`]);
     }
-    if (book.narrator) {   // #190 — each narrator name links to that narrator's audiobooks
+    if (_ct.narrators && _ct.narrators.length) {   // #192 primary + (+N) additional
+        rows.push(['Narrator', grContribLinks(_ct.narrators, 'narrator')]);
+    } else if (book.narrator) {   // #190 fallback — split the flat string into links
         const nlinks = String(book.narrator).split(',').map(s => s.trim()).filter(Boolean).map(n =>
             `<a href="#" class="gba-link" onclick="GreatReads.openNarrator('${encodeURIComponent(n).replace(/'/g, '%27')}');return false;">${grEsc(n)}</a>`).join(', ');
         rows.push(['Narrator', nlinks]);
@@ -2117,7 +2156,9 @@ window.GreatReads = {
     openBookActions: grOpenBookActions,
     openSeries: grOpenSeries,
     openAuthor: grOpenAuthor,
+    openAuthorName: grOpenAuthorName,
     openNarrator: grOpenNarrator,
+    showContribExtra: grShowContribExtra,
     openGenre: grOpenGenre,
     popupRequestMeta: grPopupRequestMeta,
     openBookById: grOpenBookById,

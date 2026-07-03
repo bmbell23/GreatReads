@@ -15,6 +15,7 @@ from ..models.reading import Reading
 from ..models.tag import Tag, book_tags
 from ..models.inventory import Inventory
 from ..models.external_import import ExternalImport
+from ..models.book_contributor import BookContributor  # noqa: F401 — register table for create_tables (#192)
 from ..models.user import User
 from ..config import settings
 from ..auth import get_current_user
@@ -374,7 +375,43 @@ async def get_book_details(
     readings = db.query(Reading).filter(Reading.book_id == book_id).all()
     d["readings"] = [r.to_dict() for r in readings]
     enrich_book_dict(d, book.id, db)   # inventory, media_owned, calibre_id, abs_id, read_count
+    from ..services.contributor_service import contributors_for
+    d["contributors"] = contributors_for(db, book_id)   # #192 primary + additional authors/narrators
     return d
+
+
+class ContributorItem(BaseModel):
+    first: Optional[str] = None
+    last: Optional[str] = None
+    name: Optional[str] = None
+
+
+class ContributorsRequest(BaseModel):
+    authors: List[ContributorItem] = []
+    narrators: List[ContributorItem] = []
+
+
+@router.post("/contributors/backfill")
+async def contributors_backfill(db: Session = Depends(get_db),
+                                current_user: User = Depends(get_current_user)):
+    """One-time: seed book_contributors from existing primary author + narrator(s) (#192)."""
+    from ..services.contributor_service import backfill_all
+    return backfill_all(db)
+
+
+@router.post("/{book_id}/contributors")
+async def set_contributors(book_id: int, payload: ContributorsRequest,
+                           db: Session = Depends(get_db),
+                           current_user: User = Depends(get_current_user)):
+    """Replace a book's authors + narrators (index 0 = primary), from the edit modal (#192)."""
+    from ..services.contributor_service import set_book_contributors
+    try:
+        return set_book_contributors(
+            db, book_id,
+            [i.model_dump() for i in payload.authors],
+            [i.model_dump() for i in payload.narrators])
+    except ValueError as e:
+        raise HTTPException(status_code=404, detail=str(e))
 @router.post("/", response_model=BookResponse)
 async def create_book(
     request: Request,

@@ -1057,6 +1057,17 @@ def author_books(db: Session, author_name: str) -> dict:
         if target and _word_tokens(full) != target:   # exact author match (house-style tolerant)
             continue
         books.append(b)
+    # #192 — also include books where this person is an author contributor (primary OR
+    # secondary), so "what else did they write" spans co-author credits too.
+    try:
+        from .contributor_service import _book_ids_by_contributor
+        have = {b.id for b in books}
+        for bid in _book_ids_by_contributor(db, "author", author_name) - have:
+            b = db.query(Book).get(bid)
+            if b:
+                books.append(b)
+    except Exception:
+        pass
     owned = {bid for (bid,) in _owned_book_id_subq(db).all()}
     ids = [b.id for b in books]
     counts = {}
@@ -1080,6 +1091,17 @@ def narrator_books(db: Session, narrator: str) -> dict:
         return {"narrator": narrator, "cards": []}
     books = (db.query(Book)
              .filter(Book.narrator.isnot(None), Book.narrator.ilike(f"%{name}%")).all())
+    # #192 — also include books where this person is a narrator contributor (primary OR
+    # additional), so the link spans co-narrator credits.
+    try:
+        from .contributor_service import _book_ids_by_contributor
+        have = {b.id for b in books}
+        for bid in _book_ids_by_contributor(db, "narrator", name) - have:
+            b = db.query(Book).get(bid)
+            if b:
+                books.append(b)
+    except Exception:
+        pass
     owned = {bid for (bid,) in _owned_book_id_subq(db).all()}
     ids = [b.id for b in books]
     counts = {}
