@@ -266,9 +266,14 @@ async def update_reading_progress(
     session_start_ms: Optional[int] = None,
     session_seconds: Optional[float] = None,
     start_percent: Optional[float] = None,
+    physical: Optional[bool] = False,
     db: Session = Depends(get_db)
 ):
     """Realign the current progress percentage for an in-progress reading.
+
+    ``physical=true`` marks a physical *sitting* logged from the physical popup,
+    which credits physical words/minutes even when this reading's primary media is
+    Audio/Ebook (#41/#183 — read the print copy of a book you're also listening to).
 
     This will:
     1. Accept that the user is at current_percent right now
@@ -313,6 +318,10 @@ async def update_reading_progress(
         db_reading.days_estimate = new_days_estimate
         db_reading.days_estimate_override = True
 
+    # Prior stored position — used to credit only THIS sitting's advance for a
+    # cross-format physical sitting (#183), captured before we overwrite it below.
+    prev_percent = db_reading.current_percent if db_reading.current_percent is not None else 0.0
+
     # Save the manual percent override and the datetime it was set
     db_reading.current_percent = current_percent
     db_reading.current_percent_manual_override = True
@@ -326,43 +335,67 @@ async def update_reading_progress(
     # words land only on days the user actually logs. (key per-reading to keep
     # rereads / the ebook edition's own activity separate.)
     media_lower = (db_reading.media or "").lower()
-    if media_lower in ("physical", "hardcover", "paperback") and db_reading.book and db_reading.book.word_count:
+    is_pure_physical = media_lower in ("physical", "hardcover", "paperback")
+    # A physical SITTING can also be logged against a book that's in progress in
+    # another format — the physical popup sends physical=true (#41/#183). Credit it
+    # either way; only the day's-words math differs (see the branches below).
+    is_phys_sitting = is_pure_physical or bool(physical)
+    if is_phys_sitting and db_reading.book and db_reading.book.word_count:
         from sqlalchemy import text as _sql
         today_str = date.today().isoformat()
         book_key = f"phys:{db_reading.id}"
         word_count = db_reading.book.word_count
-        target_total = (current_percent / 100.0) * word_count
         db.execute(_sql(
             "CREATE TABLE IF NOT EXISTS reading_activity ("
             " activity_date TEXT NOT NULL, book_key TEXT NOT NULL, format TEXT NOT NULL,"
             " minutes REAL NOT NULL DEFAULT 0, words INTEGER NOT NULL DEFAULT 0,"
             " wpm_mpw_sum REAL NOT NULL DEFAULT 0, wpm_n INTEGER NOT NULL DEFAULT 0,"
             " PRIMARY KEY(activity_date, book_key, format))"))
-        logged_before = db.execute(_sql(
-            "SELECT COALESCE(SUM(words),0) FROM reading_activity "
-            "WHERE book_key=:bk AND format='Physical' AND activity_date < :d"),
-            {"bk": book_key, "d": today_str}).scalar() or 0
-        today_words = max(0, round(target_total - logged_before))
-        # Words always OVERWRITE today's row (position-based delta from prior days).
-        # Minutes only overwrite when the caller actually carries a value: a page-only
-        # progress save (minutes_read=None) must NOT clobber today's logged minutes to
-        # 0. minutes_read, when given, is the *today total* the UI carries (loaded via
-        # /today-minutes, edited up, re-sent). Naturally resets at midnight (new date =
-        # new row). (#39/#40, minutes-preservation fix #44)
-        if minutes_read is None:
-            db.execute(_sql(
-                "INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) "
-                "VALUES(:d,:bk,'Physical',0,:w,0,0) "
-                "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET "
-                "words=excluded.words"),
-                {"d": today_str, "bk": book_key, "w": today_words})
+        # Minutes only overwrite when the caller carries a value: a page-only save
+        # (minutes_read=None) must NOT clobber today's logged minutes to 0. When given,
+        # minutes_read is the *today total* the UI carries (via /today-minutes). (#39/#40/#44)
+        if is_pure_physical:
+            # Pure physical reading: current_percent IS the physical position, so the
+            # day's words = position total − prior days (multiple edits/day collapse to
+            # the latest). Words OVERWRITE today's row.
+            target_total = (current_percent / 100.0) * word_count
+            logged_before = db.execute(_sql(
+                "SELECT COALESCE(SUM(words),0) FROM reading_activity "
+                "WHERE book_key=:bk AND format='Physical' AND activity_date < :d"),
+                {"bk": book_key, "d": today_str}).scalar() or 0
+            today_words = max(0, round(target_total - logged_before))
+            if minutes_read is None:
+                db.execute(_sql(
+                    "INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) "
+                    "VALUES(:d,:bk,'Physical',0,:w,0,0) "
+                    "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET words=excluded.words"),
+                    {"d": today_str, "bk": book_key, "w": today_words})
+            else:
+                db.execute(_sql(
+                    "INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) "
+                    "VALUES(:d,:bk,'Physical',:mins,:w,0,0) "
+                    "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET "
+                    "words=excluded.words, minutes=excluded.minutes"),
+                    {"d": today_str, "bk": book_key, "w": today_words, "mins": max(0.0, float(minutes_read))})
         else:
-            db.execute(_sql(
-                "INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) "
-                "VALUES(:d,:bk,'Physical',:mins,:w,0,0) "
-                "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET "
-                "words=excluded.words, minutes=excluded.minutes"),
-                {"d": today_str, "bk": book_key, "w": today_words, "mins": max(0.0, float(minutes_read))})
+            # Cross-format physical sitting (#183): current_percent tracks the shared
+            # audio/ebook position, not physical-from-0, so crediting the cumulative
+            # total would count the whole book. Credit only the advance since the last
+            # saved position (self-deduping — a repeat save adds 0), ADDED to today's row.
+            add_words = max(0, round((current_percent - prev_percent) / 100.0 * word_count))
+            if minutes_read is None:
+                db.execute(_sql(
+                    "INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) "
+                    "VALUES(:d,:bk,'Physical',0,:w,0,0) "
+                    "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET words=words+excluded.words"),
+                    {"d": today_str, "bk": book_key, "w": add_words})
+            else:
+                db.execute(_sql(
+                    "INSERT INTO reading_activity(activity_date,book_key,format,minutes,words,wpm_mpw_sum,wpm_n) "
+                    "VALUES(:d,:bk,'Physical',:mins,:w,0,0) "
+                    "ON CONFLICT(activity_date,book_key,format) DO UPDATE SET "
+                    "words=words+excluded.words, minutes=excluded.minutes"),
+                    {"d": today_str, "bk": book_key, "w": add_words, "mins": max(0.0, float(minutes_read))})
 
         # Record this sitting as a reading_sessions row too (#78), so physical
         # sittings appear in the per-session view like ebook/audio. PURELY ADDITIVE:

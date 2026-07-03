@@ -1790,7 +1790,7 @@ function grUpdatePhysicalProgress(addMinutes, session) {
         // never sends 0 and wipes today's logged minutes. If it never loaded (and the
         // user didn't touch it), omit minutes_read so the backend preserves it. (#44)
         await minutesLoad;
-        const params = { current_percent: pct };
+        const params = { current_percent: pct, physical: true };  // #183: credit physical words even if the reading's media is Audio/Ebook
         if (_minutesLoaded || _minutesTouched) params.minutes_read = Math.max(0, parseInt(minEl.value) || 0);
         // From a timed reading session → also record a per-sitting Physical session
         // row (#78): minutes from the timer, words from this session's % delta.
