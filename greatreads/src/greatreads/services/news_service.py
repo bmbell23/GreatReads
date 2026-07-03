@@ -928,9 +928,17 @@ def list_shelf(db: Session, status: str = "owned", search: str = None,
         cards = [_remote_card(i, status) for i in items[skip:skip + limit]]
         return {"status": status, "total": total, "cards": cards}
 
+    # "In library" = an owned inventory copy OR a Calibre/Audiobookshelf import (a book
+    # that came from a library source is owned even if its inv flag wasn't set — #185).
+    # The Wishlist (unowned) excludes both; the Owned/Library shelf includes both.
+    from ..models.external_import import ExternalImport
     owned_ids = _owned_book_id_subq(db)
+    ext_ids = db.query(ExternalImport.book_id).distinct()
     q = db.query(Book)
-    q = q.filter(Book.id.in_(owned_ids)) if status == "owned" else q.filter(~Book.id.in_(owned_ids))
+    if status == "owned":
+        q = q.filter(or_(Book.id.in_(owned_ids), Book.id.in_(ext_ids)))
+    else:
+        q = q.filter(~Book.id.in_(owned_ids), ~Book.id.in_(ext_ids))
     if like:
         # Author is split across first/second columns, so a "First Last" query matches
         # neither column alone — also match the concatenated full name.
