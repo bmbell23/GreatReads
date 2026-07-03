@@ -519,9 +519,13 @@ async def merge_books(
     loser.tags = []
 
     # 3) Scalar fields: apply user-chosen values, else fill survivor gaps from loser.
+    #    The UI sends chosen values as JSON, so date_published arrives as a string —
+    #    coerce it to a Python date or the SQLite Date column rejects it on flush.
+    from ..services.import_service import _coerce_date
     for f in _MERGE_SCALARS:
         if f in chosen:
-            setattr(survivor, f, chosen[f])
+            val = _coerce_date(chosen[f]) if f == "date_published" else chosen[f]
+            setattr(survivor, f, val)
         elif getattr(survivor, f, None) in (None, "", 0) and getattr(loser, f, None) not in (None, "", 0):
             setattr(survivor, f, getattr(loser, f))
 
