@@ -392,7 +392,7 @@
           <div class="text-center border rounded p-3 mb-2">
             <div class="small text-muted mb-1">On your phone: <b>Libby → Menu (☰) → Copy To Another Device</b>, then enter this code:</div>
             <div class="d-flex align-items-center justify-content-center gap-2">
-              <div id="abLinkCode" class="fw-bold" style="font-size:2rem;letter-spacing:.25rem;font-variant-numeric:tabular-nums;">········</div>
+              <div id="abLinkCode" class="fw-bold" style="font-size:2rem;letter-spacing:.25rem;font-variant-numeric:tabular-nums;user-select:all;-webkit-user-select:all;cursor:pointer;">········</div>
               <button class="btn btn-sm btn-outline-secondary" id="abLinkCopyBtn" onclick="abLinkCopy()" title="Copy code"><i class="fas fa-copy"></i></button>
             </div>
             <div class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span><span id="abLinkMsg">Waiting for you to authorize on your phone…</span></div>
@@ -1812,7 +1812,7 @@ function abLinkRefreshUI(s) {
         idle.style.display = 'none'; active.style.display = ''; done.style.display = 'none';
         document.getElementById('abLinkCode').textContent = s.code || '········';
         document.getElementById('abLinkMsg').textContent = s.message || 'Waiting for you to authorize on your phone…';
-        if (!_abLinkTimer) _abLinkTimer = setInterval(abLinkPoll, 3000);
+        if (!_abLinkTimer) _abLinkTimer = setInterval(abLinkPoll, 1000);
     } else if (s && s.linked) {
         idle.style.display = ''; active.style.display = 'none'; done.style.display = '';
         done.innerHTML = `<i class="fas fa-circle-check me-1"></i>Linked! ${s.cards || 0} card${s.cards === 1 ? '' : 's'} synced — audiobook borrowing is ready.`;
@@ -1842,16 +1842,29 @@ async function abLinkCancel() {
     try { await GreatReads.apiCall('/libby/audiobook-link/cancel', { method: 'POST', silent: true }); } catch (e) {}
     abLinkRefreshUI({ active: false });
 }
-async function abLinkCopy() {
+function abLinkCopy() {
     const code = (document.getElementById('abLinkCode').textContent || '').trim();
     if (!code || code.includes('·')) return;
     const btn = document.getElementById('abLinkCopyBtn');
+    let ok = false;
+    // execCommand path FIRST — navigator.clipboard is unavailable over plain HTTP (the app's
+    // case), but a selected textarea + execCommand('copy') works in that context / WebView.
     try {
-        if (navigator.clipboard && navigator.clipboard.writeText) await navigator.clipboard.writeText(code);
-        else { const t = document.createElement('textarea'); t.value = code; document.body.appendChild(t); t.select(); document.execCommand('copy'); t.remove(); }
-        if (btn) { btn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i>'; }, 1200); }
-        if (typeof showToast === 'function') showToast('Code copied', 'success');
-    } catch (e) { if (typeof showToast === 'function') showToast('Could not copy', 'warning'); }
+        const t = document.createElement('textarea');
+        t.value = code;
+        t.setAttribute('readonly', '');
+        t.style.cssText = 'position:fixed;top:0;left:0;width:1px;height:1px;opacity:0;';
+        document.body.appendChild(t);
+        t.focus(); t.select(); t.setSelectionRange(0, code.length);
+        ok = document.execCommand('copy');
+        t.remove();
+    } catch (e) {}
+    if (!ok && navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(code).then(() => {}).catch(() => {});
+        ok = true;
+    }
+    if (btn) { btn.innerHTML = '<i class="fas fa-check"></i>'; setTimeout(() => { btn.innerHTML = '<i class="fas fa-copy"></i>'; }, 1200); }
+    if (typeof showToast === 'function') showToast(ok ? 'Code copied' : 'Copy blocked — long-press the code to copy', ok ? 'success' : 'warning');
 }
 
 // Linked libraries & cards (#142 item 3) — from the sanitized /libby/cards/status.
