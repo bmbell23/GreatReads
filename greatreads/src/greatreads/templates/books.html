@@ -1168,33 +1168,60 @@ function _libbySelectedCard() {
     return first ? String(first.cardId) : '';
 }
 
-// Borrow → fulfill → .acsm → watcher → Calibre → GreatReads. Synchronous (can take
-// ~a minute via the OverDrive-website path); on success we nudge the #137 tray.
+// Borrow → fulfill → .acsm → watcher → Calibre → GreatReads. ASYNC (#186): the engine
+// borrow can take minutes via the OverDrive-website path — long enough to trip a
+// reverse-proxy gateway timeout — so we kick it off in the background (returns a
+// request_id immediately) and poll status. No request is held open for minutes.
+function _libbyResetBorrowBtn() {
+    const btn = document.getElementById('libbyBorrowBtn');
+    const hold = document.getElementById('libbyHoldBtn');
+    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-arrow-down me-2"></i>Borrow & Download'; }
+    if (hold) hold.disabled = false;
+}
 async function libbyBorrow() {
     const c = libbyActive; if (!c) return;
     const cardId = _libbySelectedCard();
     if (!cardId) { showToast('No library card available to borrow on.', 'warning'); return; }
     const btn = document.getElementById('libbyBorrowBtn');
-    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Borrowing & downloading…'; }
-    const hold = document.getElementById('libbyHoldBtn'); if (hold) hold.disabled = true;
-    showToast('Borrowing & downloading from Libby — this can take up to a minute…', 'info');
+    const hold = document.getElementById('libbyHoldBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Borrowing…'; }
+    if (hold) hold.disabled = true;
+
+    let reqId;
     try {
-        const r = await GreatReads.apiCall('/libby/download', { method: 'POST', data: { title_id: c.title_id, card_id: cardId, title: c.title }, silent: true });
-        if (r && (r.success || r.downloaded)) {
-            showToast(`“${c.title}” downloaded — importing into GreatReads shortly.`, 'success');
-            if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded — importing…';
-            c.inLibrary = true;
-            refreshImportBadge();   // #137 — surfaces the import as it lands
-        } else {
-            showToast((r && r.error) || 'Download did not complete.', 'danger');
-            if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-arrow-down me-2"></i>Borrow & Download'; }
-            if (hold) hold.disabled = false;
-        }
+        const r = await GreatReads.apiCall('/libby/download-async', { method: 'POST', data: { title_id: c.title_id, card_id: cardId, title: c.title }, silent: true });
+        reqId = r && r.request_id;
     } catch (e) {
-        showToast(libbyErrMsg(e, 'borrow'), 'danger');
-        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-arrow-down me-2"></i>Borrow & Download'; }
-        if (hold) hold.disabled = false;
+        showToast(libbyErrMsg(e, 'borrow'), 'danger'); _libbyResetBorrowBtn(); return;
     }
+    if (!reqId) { showToast('Couldn’t start the borrow — try again.', 'danger'); _libbyResetBorrowBtn(); return; }
+    showToast(`Borrowing “${c.title}” — this runs in the background (up to a few minutes).`, 'info');
+
+    const started = Date.now();
+    const poll = async () => {
+        let s = null;
+        try { s = await GreatReads.apiCall('/libby/download-status?request_id=' + encodeURIComponent(reqId), { silent: true }); } catch (e) {}
+        if (s && s.done) {
+            if (s.ok) {
+                showToast(`“${c.title}” downloaded — importing into GreatReads shortly.`, 'success');
+                if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded — importing…';
+                c.inLibrary = true;
+                refreshImportBadge();   // #137 — surfaces the import as it lands
+            } else {
+                showToast(s.detail || 'Borrow failed — check this card’s saved credentials in the Libby panel.', 'danger');
+                _libbyResetBorrowBtn();
+            }
+            return;
+        }
+        if (Date.now() - started > 5 * 60 * 1000) {   // safety cap ~5 min
+            showToast('Still working in the background — check your Loans / Newly-Imported shortly.', 'info');
+            _libbyResetBorrowBtn();
+            return;
+        }
+        if (btn && s && s.status) btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>${s.status}…`;
+        setTimeout(poll, 3000);
+    };
+    setTimeout(poll, 3000);
 }
 
 // Human-readable Libby error from a failed borrow/hold (#4): OverDrive/engine statuses

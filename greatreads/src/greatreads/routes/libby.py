@@ -28,6 +28,7 @@ import asyncio
 import logging
 import os
 import re
+import time
 
 import httpx
 from fastapi import APIRouter, Body, Depends, HTTPException, Request
@@ -294,6 +295,75 @@ async def libby_download(
 async def libby_downloads(current_user: User = Depends(get_current_user)):
     """Server-side download history (from the engine)."""
     return await _engine_get("/api/downloads")
+
+
+# ── Async borrow (#186) ──────────────────────────────────────────────────────
+# The borrow can take minutes via the OverDrive-website fulfill path, long enough to
+# trip a reverse-proxy gateway timeout (→ a body-less 5xx the UI mislabelled as an
+# "engine outage", #185). So kick the engine borrow off as a background task, return a
+# request_id immediately, and let the UI poll status — no request is held open for
+# minutes. (Auto-fulfill #179 keeps using the synchronous /download.)
+_bg_downloads: set = set()
+
+
+@router.post("/download-async")
+async def libby_download_async(
+    payload: DownloadRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    if not payload.title_id or not payload.card_id:
+        raise HTTPException(status_code=400, detail="title_id and card_id are required.")
+    request_id = (payload.request_id or "").strip() or f"{int(time.time() * 1000)}-{payload.title_id}"
+    body = {
+        "title_id": payload.title_id,
+        "card_id": payload.card_id,
+        "title": payload.title or "",
+        "request_id": request_id,
+    }
+
+    async def _run():
+        try:
+            async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
+                await client.post(f"{LIBBY_ENGINE_URL}/api/download", json=body)
+        except Exception as exc:
+            logger.warning("async download %s failed: %s", request_id, exc)
+        finally:
+            _bg_downloads.discard(task)
+
+    task = asyncio.create_task(_run())
+    _bg_downloads.add(task)
+    try:
+        from ..services.event_log_service import log_event
+        log_event("libby", "borrow_start", level="info", title=payload.title or "",
+                  detail={"request_id": request_id})
+    except Exception:
+        pass
+    return {"request_id": request_id, "status": "started"}
+
+
+@router.get("/download-status")
+async def libby_download_status(request_id: str, current_user: User = Depends(get_current_user)):
+    """Poll the engine's download history for a request_id started via /download-async.
+    Terminal when 'Downloaded' (ok) or 'Failed' appears in the status trail."""
+    try:
+        async with httpx.AsyncClient(timeout=_DEFAULT_TIMEOUT) as client:
+            resp = await client.get(f"{LIBBY_ENGINE_URL}/api/downloads")
+        downloads = (resp.json() or {}).get("downloads", []) if resp.status_code == 200 else []
+    except Exception:
+        return {"found": False, "done": False, "engine": False}
+    entry = next((d for d in downloads if str(d.get("requestId")) == str(request_id)), None)
+    if not entry:
+        return {"found": False, "done": False, "engine": True}
+    statuses = entry.get("statuses") or []
+    details = entry.get("details") or []
+    ok = "Downloaded" in statuses
+    failed = "Failed" in statuses
+    return {
+        "found": True, "done": ok or failed, "ok": ok, "failed": failed,
+        "status": statuses[-1] if statuses else None,
+        "detail": details[-1] if details else None,
+        "returned": "Returned" in statuses,
+    }
 
 
 # ── Item 8 — rich metadata + full (foreign) series ───────────────────────────
