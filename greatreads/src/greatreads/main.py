@@ -181,6 +181,19 @@ def _metadata_backfill():
         db.close()
 
 
+def _libby_autofulfill():
+    """Scheduled auto-fulfill of ready Libby holds (#179): borrow → download →
+    confirm import → return. Opt-in (no-op unless the Settings toggle is on)."""
+    db = SessionLocal()
+    try:
+        from .services.libby_autofulfill_service import run_autofulfill
+        run_autofulfill(db)
+    except Exception as exc:
+        logger.error("Libby auto-fulfill failed: %s", exc)
+    finally:
+        db.close()
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -245,6 +258,25 @@ async def lifespan(app: FastAPI):
             id="metadata_backfill",
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=3),
+            coalesce=True,
+            max_instances=1,
+        )
+        # Libby auto-fulfill sweep (#179) — borrows ready holds, confirms the import,
+        # then returns. No-op unless the Settings toggle is on; interval UI-configurable.
+        _af_db = SessionLocal()
+        try:
+            from .services.libby_autofulfill_service import effective_interval as _af_effective_interval
+            _af_interval = _af_effective_interval(_af_db)
+        except Exception:
+            _af_interval = int(os.environ.get("LIBBY_AUTOFULFILL_INTERVAL_MIN", "30"))
+        finally:
+            _af_db.close()
+        scheduler.add_job(
+            _libby_autofulfill,
+            IntervalTrigger(minutes=_af_interval),
+            id="libby_autofulfill",
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(minutes=5),
             coalesce=True,
             max_instances=1,
         )

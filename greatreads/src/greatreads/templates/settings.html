@@ -408,6 +408,42 @@
             </div>
         </div>
 
+        <!-- Libby auto-fulfill ready holds (#179) -->
+        <div class="card mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0"><i class="fas fa-book-bookmark me-2"></i>Libby — auto-fulfill ready holds</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-2">When one of your Libby <strong>holds</strong> becomes available,
+                    automatically borrow it, download the ebook, and import it — then <strong>return the loan</strong>
+                    to free the copy, but <em>only after the import is confirmed</em> (if it can't confirm, the loan is
+                    left in place so the book is never lost). Ebook holds only.</p>
+                <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" id="af-enabled" onchange="saveAutofulfill()">
+                    <label class="form-check-label" for="af-enabled">Enable auto-fulfill
+                        <span class="badge bg-secondary ms-1">off by default</span></label>
+                </div>
+                <div class="row g-2 align-items-end mt-1">
+                    <div class="col-auto"><label class="form-label small mb-0">Check every (minutes)</label>
+                        <input type="number" class="form-control form-control-sm" id="af-interval" min="5" max="1440" style="width:130px;"></div>
+                    <div class="col-auto"><label class="form-label small mb-0">Max borrows / run</label>
+                        <input type="number" class="form-control form-control-sm" id="af-max" min="1" max="10" style="width:120px;"></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" id="af-save" onclick="saveAutofulfill()">Save</button></div>
+                </div>
+                <div class="form-text">Respects your Libby loan limits by capping borrows per run. Newly-borrowed
+                    titles wait in a queue until their import is confirmed, then the loan is returned.</div>
+                <div class="d-flex justify-content-between border-top mt-2 py-1">
+                    <span class="text-muted">Awaiting import confirmation</span>
+                    <span class="font-monospace" id="af-pending">…</span></div>
+                <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-primary" id="af-run" onclick="runAutofulfill()">
+                        <i class="fas fa-play me-1"></i>Run now</button>
+                    <span class="small text-muted" id="af-status"></span>
+                </div>
+                <div class="small text-muted mt-2" id="af-log"></div>
+            </div>
+        </div>
+
         <!-- About Card (folded in from the former standalone Ereader About page) -->
         <div class="card mb-4">
             <div class="card-header d-flex align-items-center justify-content-between">
@@ -690,6 +726,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadChartPreferences();
     loadLeftHandedMode();
     loadBackfillStatus();
+    loadAutofulfill();
     loadGenres();
 
     // Show/hide auto WPD section when radio changes
@@ -818,6 +855,60 @@ async function runBackfill() {
         const u = r.updated || 0, f = r.fields_filled || 0;
         if (st) st.textContent = u ? `Filled ${f} field${f === 1 ? '' : 's'} across ${u} book${u === 1 ? '' : 's'}.` : 'Nothing new found this batch.';
         loadBackfillStatus();
+    } catch (e) { if (st) st.textContent = 'Run failed.'; }
+    if (btn) btn.disabled = false;
+}
+
+// Libby auto-fulfill ready holds (#179).
+function _afEsc(s){ return (s||'').replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function _afRender(cfg) {
+    const setVal = (id, v) => { const el = document.getElementById(id); if (el != null && v != null) el.value = v; };
+    document.getElementById('af-enabled').checked = !!cfg.enabled;
+    setVal('af-interval', cfg.interval_min);
+    setVal('af-max', cfg.max_per_run);
+    const pend = document.getElementById('af-pending');
+    if (pend) pend.textContent = cfg.pending_count || 0;
+    const log = document.getElementById('af-log');
+    const lr = cfg.last_run;
+    if (log) {
+        if (lr && (lr.events || []).length) {
+            const when = lr.at ? new Date(lr.at + 'Z').toLocaleString() : '';
+            const lines = lr.events.slice(-6).map(e =>
+                `<div>• ${_afEsc(e.title || e.event)} — <span class="text-muted">${_afEsc(e.event)}${e.detail ? ': ' + _afEsc(e.detail) : ''}</span></div>`).join('');
+            log.innerHTML = `<div class="text-muted">Last run ${_afEsc(when)}: borrowed ${lr.borrowed||0}, returned ${lr.returned||0}.</div>${lines}`;
+        } else if (lr) {
+            log.innerHTML = `<div class="text-muted">Last run: nothing to do.</div>`;
+        } else {
+            log.innerHTML = '';
+        }
+    }
+}
+async function loadAutofulfill() {
+    try { _afRender(await GreatReads.apiCall('/libby/autofulfill-config')); } catch (e) { /* leave placeholders */ }
+}
+async function saveAutofulfill() {
+    const btn = document.getElementById('af-save'), st = document.getElementById('af-status');
+    const enabled = document.getElementById('af-enabled').checked;
+    const interval_min = parseInt(document.getElementById('af-interval').value, 10);
+    const max_per_run = parseInt(document.getElementById('af-max').value, 10);
+    if (!(interval_min >= 5) || !(max_per_run >= 1)) { GreatReads.showToast('Enter a valid interval (≥5 min) and max (≥1).', 'warning'); return; }
+    if (btn) btn.disabled = true;
+    try {
+        const cfg = await GreatReads.apiCall('/libby/autofulfill-config', { method: 'POST', data: { enabled, interval_min, max_per_run } });
+        _afRender(cfg);
+        GreatReads.showToast(enabled ? `Auto-fulfill on — checking every ${cfg.interval_min} min.` : 'Auto-fulfill off.', 'success');
+    } catch (e) { if (st) st.textContent = 'Save failed.'; }
+    if (btn) btn.disabled = false;
+}
+async function runAutofulfill() {
+    const btn = document.getElementById('af-run'), st = document.getElementById('af-status');
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = 'Running…';
+    try {
+        const r = await GreatReads.apiCall('/libby/autofulfill-run', { method: 'POST' });
+        if (r.skipped) { if (st) st.textContent = ''; }
+        else if (st) st.textContent = `Borrowed ${r.borrowed||0}, returned ${r.returned||0}, ${r.pending||0} awaiting import.`;
+        loadAutofulfill();
     } catch (e) { if (st) st.textContent = 'Run failed.'; }
     if (btn) btn.disabled = false;
 }
@@ -1156,7 +1247,7 @@ document.getElementById('password-form').addEventListener('submit', async functi
 
     fetch(`${API}/api/version`, { cache: 'no-store' })
         .then(r => r.json())
-        .then(v => { vEl.textContent = (v && v.version) ? v.version : '?'; })
+        .then(v => { vEl.textContent = (v && (v.display || v.version)) ? (v.display || v.version) : '?'; })
         .catch(() => { vEl.textContent = '?'; });
     fetch(`${API}/api/build-stamp`, { cache: 'no-store' })
         .then(r => r.json())

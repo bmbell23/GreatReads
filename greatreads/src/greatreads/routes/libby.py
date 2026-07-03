@@ -569,3 +569,63 @@ async def libby_holds_to_wishlist(
         else:
             existing += 1
     return {"added": added, "existing": existing, "total": len(holds)}
+
+
+# ── Auto-fulfill ready holds (#179) ──────────────────────────────────────────
+
+class AutofulfillConfigRequest(BaseModel):
+    enabled: bool | None = None
+    interval_min: int | None = None
+    max_per_run: int | None = None
+
+
+def _reschedule_autofulfill(request: Request, interval_min: int) -> None:
+    """Push a new interval to the live APScheduler job (#166 pattern)."""
+    scheduler = getattr(request.app.state, "scheduler", None)
+    if not scheduler:
+        return
+    try:
+        from apscheduler.triggers.interval import IntervalTrigger
+        scheduler.reschedule_job("libby_autofulfill", trigger=IntervalTrigger(minutes=max(1, interval_min)))
+    except Exception as exc:
+        logger.warning("Could not reschedule libby_autofulfill: %s", exc)
+
+
+@router.get("/autofulfill-config")
+async def libby_autofulfill_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services.libby_autofulfill_service import get_config
+    return get_config(db)
+
+
+@router.post("/autofulfill-config")
+async def libby_autofulfill_set_config(
+    request: Request,
+    payload: AutofulfillConfigRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services.libby_autofulfill_service import (
+        get_config, _set, SETTING_ENABLED, SETTING_INTERVAL, SETTING_MAX,
+    )
+    if payload.enabled is not None:
+        _set(db, SETTING_ENABLED, "1" if payload.enabled else "0")
+    if payload.interval_min is not None:
+        iv = max(1, int(payload.interval_min))
+        _set(db, SETTING_INTERVAL, iv)
+        _reschedule_autofulfill(request, iv)
+    if payload.max_per_run is not None:
+        _set(db, SETTING_MAX, max(1, int(payload.max_per_run)))
+    return get_config(db)
+
+
+@router.post("/autofulfill-run")
+async def libby_autofulfill_run(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Manual 'Run now' — runs one pass even when the toggle is off."""
+    from ..services.libby_autofulfill_service import run_autofulfill
+    return run_autofulfill(db, force=True)
