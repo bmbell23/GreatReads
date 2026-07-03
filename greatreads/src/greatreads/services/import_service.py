@@ -680,14 +680,22 @@ def import_calibre_book(
                 inv.isbn_10 = isbn_10
         action = "linked"
 
-    record = ExternalImport(
-        source="calibre",
-        external_id=cal_id,
-        book_id=book.id,
-        action=action,
-        imported_at=datetime.utcnow(),
+    # One ExternalImport per Calibre id — skip if already recorded so a re-sync of
+    # an existing book doesn't mint a duplicate row/id (which would resurrect it in
+    # the Newly-Imported tray). Mirrors the ABS path. (#181)
+    already = (
+        db.query(ExternalImport)
+        .filter(ExternalImport.source == "calibre", ExternalImport.external_id == cal_id)
+        .first()
     )
-    db.add(record)
+    if already is None:
+        db.add(ExternalImport(
+            source="calibre",
+            external_id=cal_id,
+            book_id=book.id,
+            action=action,
+            imported_at=datetime.utcnow(),
+        ))
     db.commit()
     db.refresh(book)
     return book.to_dict()

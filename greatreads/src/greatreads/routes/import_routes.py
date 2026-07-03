@@ -72,6 +72,58 @@ async def trigger_calibre_refresh(db: Session = Depends(get_db)):
     return refresh_calibre_metadata(db)
 
 
+# ---------------------------------------------------------------------------
+# Newly-Imported "dismissed" set — persisted server-side (#181)
+# ---------------------------------------------------------------------------
+# Dismissal used to live only in browser localStorage, so it never survived a
+# refresh from another device/origin (phone vs. the forge-freedom proxy). We now
+# keep the reviewed import_ids in user_settings (migration-free — no schema change,
+# and we deliberately DON'T delete the external_imports rows: they're the import
+# ledger and #179 auto-fulfill confirmation reads them).
+_DISMISSED_KEY = "imports_dismissed"
+
+
+def _get_dismissed(db: Session) -> set[int]:
+    from ..models.user_settings import UserSettings
+    import json
+    s = db.query(UserSettings).filter(UserSettings.setting_key == _DISMISSED_KEY).first()
+    if not s or not s.setting_value:
+        return set()
+    try:
+        return {int(x) for x in json.loads(s.setting_value)}
+    except (ValueError, TypeError):
+        return set()
+
+
+def _set_dismissed(db: Session, ids: set[int]) -> None:
+    from ..models.user_settings import UserSettings
+    import json
+    val = json.dumps(sorted(ids))
+    s = db.query(UserSettings).filter(UserSettings.setting_key == _DISMISSED_KEY).first()
+    if s:
+        s.setting_value = val
+    else:
+        db.add(UserSettings(setting_key=_DISMISSED_KEY, setting_value=val))
+    db.commit()
+
+
+class DismissRequest(BaseModel):
+    import_ids: List[int]
+
+
+@router.post("/dismiss")
+async def dismiss_imports(payload: DismissRequest, db: Session = Depends(get_db)):
+    """Mark import rows reviewed so they drop from the Newly-Imported tray + badge.
+    Accepts a list so it serves single-dismiss, dismiss-all, and one-time migration
+    of a browser's old localStorage set. Persistent + cross-device (#181)."""
+    dismissed = _get_dismissed(db)
+    before = len(dismissed)
+    dismissed.update(int(i) for i in (payload.import_ids or []))
+    if len(dismissed) != before:
+        _set_dismissed(db, dismissed)
+    return {"dismissed": len(dismissed), "added": len(dismissed) - before}
+
+
 @router.get("/recent")
 async def recent_imports(limit: int = 50, db: Session = Depends(get_db)):
     """Recently auto-imported ebooks/audiobooks (newest first) for the Library
@@ -79,10 +131,14 @@ async def recent_imports(limit: int = 50, db: Session = Depends(get_db)):
     physical books are user-added. Each item reports whether it CREATED a new
     book or LINKED into an existing one, and flags a possible duplicate when
     another book shares its normalized title+author (so mis-imports like the
-    Shannara set surface for review/merge)."""
+    Shannara set surface for review/merge).
+
+    Reviewed (dismissed) rows are excluded server-side so the tray stays cleared
+    across refreshes and devices (#181)."""
     from sqlalchemy import func
     from ..models.inventory import Inventory
 
+    dismissed = _get_dismissed(db)
     rows = (
         db.query(ExternalImport)
         .order_by(ExternalImport.imported_at.desc().nullslast())
@@ -91,6 +147,8 @@ async def recent_imports(limit: int = 50, db: Session = Depends(get_db)):
     )
     out = []
     for e in rows:
+        if e.id in dismissed:
+            continue
         bk = db.query(Book).filter(Book.id == e.book_id).first()
         if not bk:
             continue

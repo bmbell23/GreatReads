@@ -1945,8 +1945,21 @@ function _maybeOpenMergeFromUrl() {
 
 // ── Newly Imported tray (#137) ───────────────────────────────────────────
 const _niEsc = _mesc;
-function _niSeen() { try { return new Set(JSON.parse(localStorage.getItem('gr_imports_seen') || '[]')); } catch (e) { return new Set(); } }
-function _niSaveSeen(set) { try { localStorage.setItem('gr_imports_seen', JSON.stringify([...set])); } catch (e) {} }
+// #181: dismissal is now persisted server-side (survives refresh + is the same on
+// every device). This one-time migration pushes any legacy browser localStorage set
+// up to the server, then clears the key so it can't resurrect anything.
+let _niMigrated = false;
+async function _niMigrateSeen() {
+    if (_niMigrated) return;
+    _niMigrated = true;
+    let ids = [];
+    try { ids = JSON.parse(localStorage.getItem('gr_imports_seen') || '[]'); } catch (e) { ids = []; }
+    if (ids && ids.length) {
+        try { await GreatReads.apiCall('/import/dismiss', { method: 'POST', data: { import_ids: ids } }); }
+        catch (e) { _niMigrated = false; return; }   // retry next time if the server was unreachable
+    }
+    try { localStorage.removeItem('gr_imports_seen'); } catch (e) {}
+}
 function _niAgo(iso) {
     if (!iso) return '';
     const d = new Date(iso.length <= 19 ? iso + 'Z' : iso), s = (Date.now() - d.getTime()) / 1000;
@@ -1960,12 +1973,12 @@ async function _niFetch() {
     return _niCache;
 }
 async function refreshImportBadge() {
-    const items = await _niFetch();
-    const seen = _niSeen();
-    const unseen = items.filter(i => !seen.has(i.import_id)).length;
+    await _niMigrateSeen();               // one-time localStorage → server migration
+    const items = await _niFetch();       // server already excludes dismissed (#181)
     const badge = document.getElementById('newImportBadge');
     if (!badge) return;
-    if (unseen > 0) { badge.textContent = unseen > 99 ? '99+' : unseen; badge.style.display = ''; }
+    const n = items.length;
+    if (n > 0) { badge.textContent = n > 99 ? '99+' : n; badge.style.display = ''; }
     else badge.style.display = 'none';
 }
 async function openNewlyImported() {
@@ -1975,12 +1988,8 @@ async function openNewlyImported() {
 }
 function renderImportList(items) {
     const box = document.getElementById('newImportList');
-    if (!items.length) { box.innerHTML = '<div class="text-muted small">No recent imports.</div>'; return; }
-    // Only show items not yet reviewed — otherwise dismissed rows reappear on reopen
-    // while the badge (which counts unseen) has already dropped, so you can't tell what
-    // you dismissed. Filtering here keeps the list in lockstep with the badge (#153).
-    const seen = _niSeen();
-    items = items.filter(i => !seen.has(i.import_id));
+    // The server already excludes reviewed (dismissed) rows (#181), so whatever we
+    // get here is the live list — no client-side filtering needed.
     if (!items.length) { box.innerHTML = '<div class="text-muted small">Nothing left to review.</div>'; return; }
     const base = window.APP_BASE_PATH || '';
     box.innerHTML = items.map(i => {
@@ -2018,8 +2027,10 @@ function niOpen(bookId) {
     bootstrap.Modal.getInstance(document.getElementById('newImportModal'))?.hide();
     GreatReads.openBookById(bookId);
 }
-function dismissImport(importId, btn) {
-    const seen = _niSeen(); seen.add(importId); _niSaveSeen(seen);
+async function dismissImport(importId, btn) {
+    // Persist server-side first so a refresh (any device) keeps it dismissed (#181).
+    try { await GreatReads.apiCall('/import/dismiss', { method: 'POST', data: { import_ids: [importId] } }); } catch (e) {}
+    _niCache = _niCache.filter(i => i.import_id !== importId);
     // #153: remove the row outright so the next one slides up under the cursor.
     const row = btn && btn.closest('.d-flex');
     if (row) {
@@ -2034,11 +2045,14 @@ function dismissImport(importId, btn) {
     }
     refreshImportBadge();
 }
-function dismissAllImports() {
-    const seen = _niSeen(); _niCache.forEach(i => seen.add(i.import_id)); _niSaveSeen(seen);
-    refreshImportBadge();
+async function dismissAllImports() {
+    const ids = _niCache.map(i => i.import_id);
+    if (ids.length) {
+        try { await GreatReads.apiCall('/import/dismiss', { method: 'POST', data: { import_ids: ids } }); } catch (e) {}
+    }
     document.querySelectorAll('#newImportList .d-flex').forEach(r => r.style.opacity = '0.4');
     GreatReads.showToast('All marked reviewed', 'success');
+    refreshImportBadge();
 }
 // On the Books page the merge tool is right here — open it preselected in place.
 function mergeFromImport(bookId, dupId) {
