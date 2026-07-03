@@ -13,11 +13,20 @@
                 <p class="text-muted small">Only the fields you fill in are applied to every selected book.
                     Leave a field blank to keep each book's existing value.</p>
                 <div class="row g-2">
-                    <div class="col-6"><label class="form-label small mb-0">Author first name</label>
+                    <div class="col-6"><label class="form-label small mb-0">Primary author first name <span class="text-muted">(replaces)</span></label>
                         <input class="form-control form-control-sm" id="grBulkAuthorFirst" autocomplete="off"></div>
-                    <div class="col-6"><label class="form-label small mb-0">Author last name</label>
+                    <div class="col-6"><label class="form-label small mb-0">Primary author last name <span class="text-muted">(replaces)</span></label>
                         <input class="form-control form-control-sm" id="grBulkAuthorLast" list="grBulkAuthorLastList" autocomplete="off">
                         <datalist id="grBulkAuthorLastList"></datalist></div>
+                    <!-- Bulk-add an ADDITIONAL author / narrator to every selected book (#192) -->
+                    <div class="col-12"><label class="form-label small mb-0">Add an additional <strong>author</strong> to all selected</label>
+                        <div class="d-flex gap-2">
+                            <input class="form-control form-control-sm" id="grBulkAddAuthFirst" placeholder="First name" autocomplete="off">
+                            <input class="form-control form-control-sm" id="grBulkAddAuthLast" placeholder="Last name" autocomplete="off"></div></div>
+                    <div class="col-12"><label class="form-label small mb-0">Add an additional <strong>narrator</strong> to all selected</label>
+                        <div class="d-flex gap-2">
+                            <input class="form-control form-control-sm" id="grBulkAddNarrFirst" placeholder="First name" autocomplete="off">
+                            <input class="form-control form-control-sm" id="grBulkAddNarrLast" placeholder="Last name" autocomplete="off"></div></div>
                     <div class="col-8"><label class="form-label small mb-0">Series</label>
                         <input class="form-control form-control-sm" id="grBulkSeries" list="grBulkSeriesList" autocomplete="off">
                         <datalist id="grBulkSeriesList"></datalist></div>

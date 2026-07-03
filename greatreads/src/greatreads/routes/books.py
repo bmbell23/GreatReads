@@ -399,6 +399,22 @@ async def contributors_backfill(db: Session = Depends(get_db),
     return backfill_all(db)
 
 
+class BulkAddContributorRequest(BaseModel):
+    book_ids: List[int]
+    role: str                # 'author' | 'narrator'
+    first: Optional[str] = None
+    last: Optional[str] = None
+
+
+@router.post("/contributors/bulk-add")
+async def bulk_add_contributor_route(payload: BulkAddContributorRequest,
+                                     db: Session = Depends(get_db),
+                                     current_user: User = Depends(get_current_user)):
+    """Add one author/narrator to many books at once (#192 bulk)."""
+    from ..services.contributor_service import bulk_add_contributor
+    return bulk_add_contributor(db, payload.book_ids, payload.role, payload.first, payload.last)
+
+
 @router.get("/{book_id}/contributors")
 async def get_contributors(book_id: int, db: Session = Depends(get_db),
                            current_user: User = Depends(get_current_user)):

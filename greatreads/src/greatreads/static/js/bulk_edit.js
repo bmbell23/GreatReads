@@ -101,7 +101,8 @@
     window.grBulkOpen = async function () {
         if (!sel.size) return;
         const ids = [...sel];
-        ['grBulkAuthorFirst', 'grBulkAuthorLast', 'grBulkSeries', 'grBulkSeriesNum', 'grBulkUniverse', 'grBulkGenreInput']
+        ['grBulkAuthorFirst', 'grBulkAuthorLast', 'grBulkSeries', 'grBulkSeriesNum', 'grBulkUniverse', 'grBulkGenreInput',
+         'grBulkAddAuthFirst', 'grBulkAddAuthLast', 'grBulkAddNarrFirst', 'grBulkAddNarrLast']
             .forEach(id => { const el = $(id); if (el) el.value = ''; });
         genres = []; renderGenres();
         wireAutocomplete();
@@ -131,11 +132,28 @@
         const u = v('grBulkUniverse'); if (u) payload.universe = u;
         const mode = (document.querySelector('input[name=grBulkMode]:checked') || {}).value || 'add';
         if (mode === 'replace' || genres.length) { payload.genres = genres.slice(); payload.genres_mode = mode; }
-        if (Object.keys(payload).length === 1) { toast('Fill in at least one field to apply.', 'info'); return; }
-        let r;
-        try { r = await api('/books/bulk-update', { method: 'POST', data: payload }); }
-        catch (e) { toast('Bulk update failed', 'danger'); return; }
-        toast(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`, 'success');
+        // Additional author/narrator to bulk-ADD (#192) — independent of the field updates.
+        const contribAdds = [];
+        if (v('grBulkAddAuthFirst') || v('grBulkAddAuthLast'))
+            contribAdds.push({ role: 'author', first: v('grBulkAddAuthFirst'), last: v('grBulkAddAuthLast') });
+        if (v('grBulkAddNarrFirst') || v('grBulkAddNarrLast'))
+            contribAdds.push({ role: 'narrator', first: v('grBulkAddNarrFirst'), last: v('grBulkAddNarrLast') });
+        const hasFieldUpdates = Object.keys(payload).length > 1;
+        if (!hasFieldUpdates && !contribAdds.length) { toast('Fill in at least one field to apply.', 'info'); return; }
+        let r = { updated: 0 };
+        if (hasFieldUpdates) {
+            try { r = await api('/books/bulk-update', { method: 'POST', data: payload }); }
+            catch (e) { toast('Bulk update failed', 'danger'); return; }
+        }
+        const msgs = [];
+        if (hasFieldUpdates) msgs.push(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`);
+        for (const c of contribAdds) {
+            try {
+                const cr = await api('/books/contributors/bulk-add', { method: 'POST', data: { book_ids: ids, ...c } });
+                msgs.push(`Added ${c.role} to ${cr.added} book${cr.added === 1 ? '' : 's'}${cr.skipped ? ` (${cr.skipped} already had it)` : ''}`);
+            } catch (e) { toast(`Could not add ${c.role}`, 'danger'); }
+        }
+        toast(msgs.join(' · ') || 'Nothing to apply', 'success');
         bootstrap.Modal.getInstance($('grBulkModal'))?.hide();
         const patch = {};
         if (payload.series !== undefined) patch.series = payload.series;

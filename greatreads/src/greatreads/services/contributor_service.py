@@ -90,6 +90,57 @@ def set_book_contributors(db: Session, book_id: int, authors: list, narrators: l
     return contributors_for(db, book_id)
 
 
+def _mirror_primary(db: Session, book: Book) -> None:
+    """Rebuild the denormalized Book.author_name_* / narrator from the contributor rows."""
+    auths = (db.query(BookContributor)
+             .filter_by(book_id=book.id, role=AUTHOR)
+             .order_by(BookContributor.is_primary.desc(), BookContributor.position, BookContributor.id).all())
+    narrs = (db.query(BookContributor)
+             .filter_by(book_id=book.id, role=NARRATOR)
+             .order_by(BookContributor.is_primary.desc(), BookContributor.position, BookContributor.id).all())
+    if auths:
+        book.author_name_first, book.author_name_second = auths[0].first, auths[0].last
+    book.narrator = ", ".join(n.name for n in narrs if n.name) or None
+
+
+def bulk_add_contributor(db: Session, book_ids: list, role: str, first: str, last: str) -> dict:
+    """Add ONE author/narrator to many books at once (#192 bulk) — e.g. add 'Tracy
+    Hickman' to a set of Dragonlance books. Added as an ADDITIONAL contributor (or the
+    primary if the book has none in that role). Skips books that already have that person.
+    Seeds a book's primary from its denormalized field first if it has no rows yet."""
+    first = (first or "").strip() or None
+    last = (last or "").strip() or None
+    if not (first or last) or role not in (AUTHOR, NARRATOR):
+        return {"added": 0, "skipped": 0}
+    target = _norm(" ".join(p for p in (first, last) if p))
+    added = skipped = 0
+    for bid in book_ids or []:
+        book = db.query(Book).filter(Book.id == bid).first()
+        if not book:
+            continue
+        existing = (db.query(BookContributor)
+                    .filter(BookContributor.book_id == bid, BookContributor.role == role).all())
+        # Seed the primary from the book's denormalized field if this role has no rows yet.
+        if not existing:
+            if role == AUTHOR and (book.author_name_first or book.author_name_second):
+                db.add(BookContributor(book_id=bid, role=AUTHOR, first=book.author_name_first,
+                                       last=book.author_name_second, is_primary=True, position=0))
+                db.flush()
+                existing = db.query(BookContributor).filter_by(book_id=bid, role=role).all()
+        if any(_norm(c.name) == target for c in existing):
+            skipped += 1
+            continue
+        pos = max([c.position for c in existing], default=-1) + 1
+        db.add(BookContributor(book_id=bid, role=role, first=first, last=last,
+                               is_primary=(len(existing) == 0), position=pos))
+        db.flush()
+        _mirror_primary(db, book)
+        added += 1
+    if added:
+        db.commit()
+    return {"added": added, "skipped": skipped}
+
+
 def backfill_all(db: Session) -> dict:
     """One-time: seed book_contributors from the existing primary author + narrator(s).
     Idempotent — skips books that already have any contributor row."""
