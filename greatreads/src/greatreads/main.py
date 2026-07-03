@@ -214,7 +214,6 @@ async def lifespan(app: FastAPI):
     # Background schedulers are opt-out so a vendored/second copy of GreatReads
     # (e.g. the isolated :8092 instance inside the Ereader repo) doesn't auto-sync
     # or write the DB behind our back. Default stays enabled for production.
-    import os
     if os.environ.get("ENABLE_SCHEDULERS", "true").lower() != "true":
         logger.info("Schedulers disabled (ENABLE_SCHEDULERS=false); skipping background jobs.")
         yield
