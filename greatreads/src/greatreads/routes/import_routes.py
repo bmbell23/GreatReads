@@ -21,6 +21,7 @@ from ..services.import_service import (
     get_abs_cover_path,
     backfill_calibre_word_counts,
     backfill_abs_word_counts,
+    backfill_abs_narrators,
     refresh_calibre_metadata,
 )
 from ..services.sync_service import sync_all
@@ -312,6 +313,16 @@ async def abs_backfill_word_counts(db: Session = Depends(get_db)):
     try:
         result = backfill_abs_word_counts(db)
         return {"status": "ok", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
+@router.post("/abs/backfill-narrators")
+async def abs_backfill_narrators(db: Session = Depends(get_db)):
+    """One-time: fill Narrator from ABS for already-imported audiobooks missing it (#190).
+    (Static route MUST precede /abs/{abs_id:path} or it's parsed as an abs_id.)"""
+    try:
+        return {"status": "ok", **backfill_abs_narrators(db)}
     except Exception as exc:
         raise HTTPException(status_code=500, detail=str(exc))
 

@@ -32,6 +32,7 @@ class Book(Base):
     description = Column(String)                 # synopsis (from Calibre comments / enrichment)
     public_rating = Column(Float)                # community/public rating 0–5, SEPARATE from the
                                                  # user's own ratings (which live on Reading)
+    narrator = Column(String)                    # audiobook narrator(s), from ABS / enrichment (#190)
 
     # Relationships
     readings = relationship("Reading", back_populates="book", cascade="all, delete-orphan")
@@ -89,6 +90,7 @@ class Book(Base):
             "tags": [tag.name for tag in self.tags] if self.tags else [],
             "description": self.description,
             "public_rating": self.public_rating,
+            "narrator": self.narrator,
         }
 
 

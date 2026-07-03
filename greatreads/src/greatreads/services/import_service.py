@@ -759,6 +759,38 @@ def backfill_calibre_word_counts(db: Session) -> dict[str, int]:
     return {"updated": updated, "skipped": skipped, "no_calibre_data": no_calibre_data}
 
 
+def backfill_abs_narrators(db: Session) -> dict:
+    """One-time backfill of Narrator (#190) for already-imported ABS audiobooks that
+    have none — reads b.narrators from the ABS DB, keyed by the stored external_id.
+    Never clobbers an existing narrator."""
+    conn = _ro_connect(settings.abs_db_path)
+    if conn is None:
+        raise RuntimeError("ABS DB not accessible")
+    narr_rows = conn.execute(
+        "SELECT li.id, b.narrators FROM libraryItems li"
+        " JOIN books b ON li.mediaId = b.id WHERE li.mediaType = 'book'"
+    ).fetchall()
+    conn.close()
+    narr_map = {r[0]: r[1] for r in narr_rows if r[1]}
+
+    updated = 0
+    seen: set[int] = set()
+    for rec in db.query(ExternalImport).filter(ExternalImport.source == "audiobookshelf").all():
+        if rec.book_id in seen:
+            continue
+        book = db.query(Book).get(rec.book_id)
+        if book is None or getattr(book, "narrator", None):
+            continue
+        narr = _parse_narrators(narr_map.get(rec.external_id))
+        if narr:
+            book.narrator = narr
+            updated += 1
+            seen.add(rec.book_id)
+    if updated:
+        db.commit()
+    return {"updated": updated}
+
+
 def backfill_abs_word_counts(db: Session) -> dict:
     """Estimate and back-fill word counts for ABS-imported books that have none.
 
@@ -857,6 +889,27 @@ ORDER BY li.title COLLATE NOCASE
 """
 
 
+
+
+def _parse_narrators(raw) -> Optional[str]:
+    """ABS stores narrators as a JSON array string (e.g. '["Name A","Name B"]').
+    Return a clean 'Name A, Name B' display string (#190), or None."""
+    if not raw:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    try:
+        import json as _json
+        val = _json.loads(s)
+        if isinstance(val, list):
+            names = [str(n).strip() for n in val if str(n).strip()]
+            return ", ".join(names) or None
+        if isinstance(val, str):
+            return val.strip() or None
+    except (ValueError, TypeError):
+        pass
+    return s or None
 
 
 def _is_graphic_audio(title: str, publisher: Optional[str], narrators: Optional[str]) -> bool:
@@ -1191,6 +1244,7 @@ def import_abs_book(
             "series": row[9],
             "series_number": _parse_seq(row[10]),
             "word_count": estimated_wc,
+            "narrator": _parse_narrators(row[12]),   # #190
             "cover": False,
         }
         if override:
@@ -1230,6 +1284,9 @@ def import_abs_book(
         # Merge word count: fill in estimated value if missing
         if estimated_wc and not book.word_count:
             book.word_count = estimated_wc
+        # Narrator: fill from ABS if we don't have one (never clobber, #190)
+        if not getattr(book, "narrator", None):
+            book.narrator = _parse_narrators(row[12])
         # Apply explicit user-selected field overrides (take precedence over auto-merge)
         if override:
             for field in ('series', 'series_number', 'universe'):

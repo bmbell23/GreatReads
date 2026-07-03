@@ -1055,6 +1055,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
         const num = (book.series_number != null) ? ' #' + book.series_number : '';
         rows.push(['Series', `${book.universe ? book.universe + ': ' : ''}${book.series}${num}`]);
     }
+    if (book.narrator) rows.push(['Narrator', grEsc(book.narrator)]);   // #190 audiobook narrator
     if (book.date_published) {
         // date-only ISO → parse at local midnight so the day doesn't shift a TZ back.
         const iso = String(book.date_published);
