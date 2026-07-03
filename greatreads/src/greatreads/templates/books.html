@@ -395,8 +395,10 @@
               <div id="abLinkCode" class="fw-bold" style="font-size:2rem;letter-spacing:.25rem;font-variant-numeric:tabular-nums;user-select:all;-webkit-user-select:all;cursor:pointer;">········</div>
               <button class="btn btn-sm btn-outline-secondary" id="abLinkCopyBtn" onclick="abLinkCopy()" title="Copy code"><i class="fas fa-copy"></i></button>
             </div>
+            <div id="abLinkTtl" class="small fw-semibold mb-1"></div>
             <div class="small text-muted"><span class="spinner-border spinner-border-sm me-1"></span><span id="abLinkMsg">Waiting for you to authorize on your phone…</span></div>
           </div>
+          <div class="small text-muted mb-1">⚠️ Use the code <b>shown here</b> (it refreshes) — not one from chat.</div>
           <button class="btn btn-sm btn-outline-secondary" onclick="abLinkCancel()">Cancel</button>
         </div>
         <div id="abLinkDone" class="small text-success" style="display:none;"></div>
@@ -1812,6 +1814,11 @@ function abLinkRefreshUI(s) {
         idle.style.display = 'none'; active.style.display = ''; done.style.display = 'none';
         document.getElementById('abLinkCode').textContent = s.code || '········';
         document.getElementById('abLinkMsg').textContent = s.message || 'Waiting for you to authorize on your phone…';
+        const ttl = document.getElementById('abLinkTtl'), n = s.expires_in || 0;
+        if (ttl) {
+            ttl.textContent = s.code ? (n > 0 ? `Valid for ${n}s — enter it now` : 'Getting a code…') : '';
+            ttl.className = 'small fw-semibold mb-1 ' + (n > 0 && n <= 15 ? 'text-danger' : 'text-success');
+        }
         if (!_abLinkTimer) _abLinkTimer = setInterval(abLinkPoll, 1000);
     } else if (s && s.linked) {
         idle.style.display = ''; active.style.display = 'none'; done.style.display = '';
