@@ -141,6 +141,37 @@ def bulk_add_contributor(db: Session, book_ids: list, role: str, first: str, las
     return {"added": added, "skipped": skipped}
 
 
+def bulk_set_primary(db: Session, book_ids: list, role: str, first: str, last: str) -> dict:
+    """Set/replace the PRIMARY author or narrator across many books (#192 bulk), keeping
+    any additional contributors. Mirrors the denormalized Book field. Blank last+first is
+    ignored (use the edit modal to clear)."""
+    first = (first or "").strip() or None
+    last = (last or "").strip() or None
+    if not (first or last) or role not in (AUTHOR, NARRATOR):
+        return {"updated": 0}
+    updated = 0
+    for bid in book_ids or []:
+        book = db.query(Book).filter(Book.id == bid).first()
+        if not book:
+            continue
+        rows = (db.query(BookContributor).filter_by(book_id=bid, role=role)
+                .order_by(BookContributor.is_primary.desc(), BookContributor.position, BookContributor.id).all())
+        primary = next((r for r in rows if r.is_primary), rows[0] if rows else None)
+        if primary:
+            primary.first, primary.last, primary.is_primary, primary.position = first, last, True, 0
+            for r in rows:
+                if r is not primary:
+                    r.is_primary = False
+        else:
+            db.add(BookContributor(book_id=bid, role=role, first=first, last=last, is_primary=True, position=0))
+        db.flush()
+        _mirror_primary(db, book)
+        updated += 1
+    if updated:
+        db.commit()
+    return {"updated": updated}
+
+
 def backfill_all(db: Session) -> dict:
     """One-time: seed book_contributors from the existing primary author + narrator(s).
     Idempotent — skips books that already have any contributor row."""

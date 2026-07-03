@@ -101,9 +101,10 @@
     window.grBulkOpen = async function () {
         if (!sel.size) return;
         const ids = [...sel];
-        ['grBulkAuthorFirst', 'grBulkAuthorLast', 'grBulkSeries', 'grBulkSeriesNum', 'grBulkUniverse', 'grBulkGenreInput',
-         'grBulkAddAuthFirst', 'grBulkAddAuthLast', 'grBulkAddNarrFirst', 'grBulkAddNarrLast']
+        ['grBulkAuthorFirst', 'grBulkAuthorLast', 'grBulkNarratorFirst', 'grBulkNarratorLast',
+         'grBulkSeries', 'grBulkSeriesNum', 'grBulkUniverse', 'grBulkGenreInput']
             .forEach(id => { const el = $(id); if (el) el.value = ''; });
+        ['grBulkAddAuthorsBox', 'grBulkAddNarratorsBox'].forEach(b => { const el = $(b); if (el) el.innerHTML = ''; });
         genres = []; renderGenres();
         wireAutocomplete();
         const addR = $('grBulkModeAdd'); if (addR) addR.checked = true;
@@ -124,34 +125,43 @@
         const ids = [...sel];
         if (!ids.length) return;
         const v = id => { const el = $(id); return (el && el.value.trim()) ? el.value.trim() : null; };
+        // Field updates (series/universe/genres) go through bulk-update. Author/narrator
+        // are contributor ops so the primary + additional stay in sync (#192).
         const payload = { ids };
-        const f = v('grBulkAuthorFirst'); if (f) payload.author_name_first = f;
-        const l = v('grBulkAuthorLast'); if (l) payload.author_name_second = l;
         const s = v('grBulkSeries'); if (s) payload.series = s;
         const snEl = $('grBulkSeriesNum'); if (snEl && snEl.value !== '') payload.series_number = parseFloat(snEl.value);
         const u = v('grBulkUniverse'); if (u) payload.universe = u;
         const mode = (document.querySelector('input[name=grBulkMode]:checked') || {}).value || 'add';
         if (mode === 'replace' || genres.length) { payload.genres = genres.slice(); payload.genres_mode = mode; }
-        // Additional author/narrator to bulk-ADD (#192) — independent of the field updates.
-        const contribAdds = [];
-        if (v('grBulkAddAuthFirst') || v('grBulkAddAuthLast'))
-            contribAdds.push({ role: 'author', first: v('grBulkAddAuthFirst'), last: v('grBulkAddAuthLast') });
-        if (v('grBulkAddNarrFirst') || v('grBulkAddNarrLast'))
-            contribAdds.push({ role: 'narrator', first: v('grBulkAddNarrFirst'), last: v('grBulkAddNarrLast') });
+        // Primary author/narrator → set-primary; the +Add rows → bulk-add (additional).
+        const setPrimary = [];
+        if (v('grBulkAuthorFirst') || v('grBulkAuthorLast'))
+            setPrimary.push({ role: 'author', first: v('grBulkAuthorFirst'), last: v('grBulkAuthorLast') });
+        if (v('grBulkNarratorFirst') || v('grBulkNarratorLast'))
+            setPrimary.push({ role: 'narrator', first: v('grBulkNarratorFirst'), last: v('grBulkNarratorLast') });
+        const rowVals = boxId => [...($(boxId)?.querySelectorAll('.bke-contrib-row') || [])]
+            .map(rw => ({ first: rw.querySelector('.bke-cf').value.trim(), last: rw.querySelector('.bke-cl').value.trim() }))
+            .filter(x => x.first || x.last);
+        const adds = [
+            ...rowVals('grBulkAddAuthorsBox').map(x => ({ role: 'author', ...x })),
+            ...rowVals('grBulkAddNarratorsBox').map(x => ({ role: 'narrator', ...x })),
+        ];
         const hasFieldUpdates = Object.keys(payload).length > 1;
-        if (!hasFieldUpdates && !contribAdds.length) { toast('Fill in at least one field to apply.', 'info'); return; }
+        if (!hasFieldUpdates && !setPrimary.length && !adds.length) { toast('Fill in at least one field to apply.', 'info'); return; }
+        const msgs = [];
         let r = { updated: 0 };
         if (hasFieldUpdates) {
             try { r = await api('/books/bulk-update', { method: 'POST', data: payload }); }
             catch (e) { toast('Bulk update failed', 'danger'); return; }
+            msgs.push(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`);
         }
-        const msgs = [];
-        if (hasFieldUpdates) msgs.push(`Updated ${r.updated} book${r.updated === 1 ? '' : 's'}`);
-        for (const c of contribAdds) {
-            try {
-                const cr = await api('/books/contributors/bulk-add', { method: 'POST', data: { book_ids: ids, ...c } });
-                msgs.push(`Added ${c.role} to ${cr.added} book${cr.added === 1 ? '' : 's'}${cr.skipped ? ` (${cr.skipped} already had it)` : ''}`);
-            } catch (e) { toast(`Could not add ${c.role}`, 'danger'); }
+        for (const sp of setPrimary) {
+            try { const rr = await api('/books/contributors/bulk-set-primary', { method: 'POST', data: { book_ids: ids, ...sp } });
+                msgs.push(`Set primary ${sp.role} on ${rr.updated}`); } catch (e) { toast(`Could not set ${sp.role}`, 'danger'); }
+        }
+        for (const c of adds) {
+            try { const cr = await api('/books/contributors/bulk-add', { method: 'POST', data: { book_ids: ids, ...c } });
+                msgs.push(`Added ${c.role} to ${cr.added}${cr.skipped ? ` (+${cr.skipped} had it)` : ''}`); } catch (e) { toast(`Could not add ${c.role}`, 'danger'); }
         }
         toast(msgs.join(' · ') || 'Nothing to apply', 'success');
         bootstrap.Modal.getInstance($('grBulkModal'))?.hide();
@@ -159,10 +169,24 @@
         if (payload.series !== undefined) patch.series = payload.series;
         if (payload.series_number !== undefined) patch.series_number = payload.series_number;
         if (payload.universe !== undefined) patch.universe = payload.universe;
-        if (payload.author_name_first && payload.author_name_second) patch.author = payload.author_name_first + ' ' + payload.author_name_second;
+        const pa = setPrimary.find(x => x.role === 'author');
+        if (pa && pa.first && pa.last) patch.author = pa.first + ' ' + pa.last;
         if (payload.genres_mode === 'replace' && payload.genres.length) patch.genre = payload.genres[0];
         if (hooks.afterEdit) hooks.afterEdit(ids, patch);
         exitMode();
+    };
+
+    // Additional author/narrator rows — revealed by the "+ Add additional…" buttons (#192).
+    window.grBulkAddContribRow = function (role) {
+        const box = $(role === 'author' ? 'grBulkAddAuthorsBox' : 'grBulkAddNarratorsBox');
+        if (!box) return;
+        const row = document.createElement('div');
+        row.className = 'd-flex gap-2 mt-1 bke-contrib-row';
+        row.innerHTML =
+            '<input class="form-control form-control-sm bke-cf" placeholder="First name" autocomplete="off">' +
+            '<input class="form-control form-control-sm bke-cl" placeholder="Last name" autocomplete="off">' +
+            '<button type="button" class="btn btn-sm btn-outline-secondary" title="Remove" onclick="this.parentNode.remove()">&times;</button>';
+        box.appendChild(row);
     };
 
     window.grBulkFetchMeta = async function () {

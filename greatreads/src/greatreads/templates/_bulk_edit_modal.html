@@ -18,15 +18,19 @@
                     <div class="col-6"><label class="form-label small mb-0">Primary author last name <span class="text-muted">(replaces)</span></label>
                         <input class="form-control form-control-sm" id="grBulkAuthorLast" list="grBulkAuthorLastList" autocomplete="off">
                         <datalist id="grBulkAuthorLastList"></datalist></div>
-                    <!-- Bulk-add an ADDITIONAL author / narrator to every selected book (#192) -->
-                    <div class="col-12"><label class="form-label small mb-0">Add an additional <strong>author</strong> to all selected</label>
-                        <div class="d-flex gap-2">
-                            <input class="form-control form-control-sm" id="grBulkAddAuthFirst" placeholder="First name" autocomplete="off">
-                            <input class="form-control form-control-sm" id="grBulkAddAuthLast" placeholder="Last name" autocomplete="off"></div></div>
-                    <div class="col-12"><label class="form-label small mb-0">Add an additional <strong>narrator</strong> to all selected</label>
-                        <div class="d-flex gap-2">
-                            <input class="form-control form-control-sm" id="grBulkAddNarrFirst" placeholder="First name" autocomplete="off">
-                            <input class="form-control form-control-sm" id="grBulkAddNarrLast" placeholder="Last name" autocomplete="off"></div></div>
+                    <div class="col-6"><label class="form-label small mb-0">Primary narrator first name <span class="text-muted">(replaces)</span></label>
+                        <input class="form-control form-control-sm" id="grBulkNarratorFirst" autocomplete="off"></div>
+                    <div class="col-6"><label class="form-label small mb-0">Primary narrator last name <span class="text-muted">(replaces)</span></label>
+                        <input class="form-control form-control-sm" id="grBulkNarratorLast" autocomplete="off"></div>
+                    <!-- Additional author/narrator — revealed on demand (#192) -->
+                    <div class="col-12">
+                        <div id="grBulkAddAuthorsBox"></div>
+                        <button type="button" class="btn btn-sm btn-link p-0" onclick="grBulkAddContribRow('author')"><i class="fas fa-plus me-1"></i>Add additional author</button>
+                    </div>
+                    <div class="col-12">
+                        <div id="grBulkAddNarratorsBox"></div>
+                        <button type="button" class="btn btn-sm btn-link p-0" onclick="grBulkAddContribRow('narrator')"><i class="fas fa-plus me-1"></i>Add additional narrator</button>
+                    </div>
                     <div class="col-8"><label class="form-label small mb-0">Series</label>
                         <input class="form-control form-control-sm" id="grBulkSeries" list="grBulkSeriesList" autocomplete="off">
                         <datalist id="grBulkSeriesList"></datalist></div>

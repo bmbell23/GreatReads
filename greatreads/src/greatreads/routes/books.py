@@ -415,6 +415,15 @@ async def bulk_add_contributor_route(payload: BulkAddContributorRequest,
     return bulk_add_contributor(db, payload.book_ids, payload.role, payload.first, payload.last)
 
 
+@router.post("/contributors/bulk-set-primary")
+async def bulk_set_primary_route(payload: BulkAddContributorRequest,
+                                 db: Session = Depends(get_db),
+                                 current_user: User = Depends(get_current_user)):
+    """Set/replace the primary author or narrator across many books (#192 bulk)."""
+    from ..services.contributor_service import bulk_set_primary
+    return bulk_set_primary(db, payload.book_ids, payload.role, payload.first, payload.last)
+
+
 @router.get("/{book_id}/contributors")
 async def get_contributors(book_id: int, db: Session = Depends(get_db),
                            current_user: User = Depends(get_current_user)):
