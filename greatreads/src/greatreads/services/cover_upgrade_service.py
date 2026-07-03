@@ -72,6 +72,12 @@ def upgrade_low_res(db: Session, limit: int = 25, min_width: int = LOW_RES_WIDTH
                 # Drop the cached thumbnail so it regenerates from the sharper cover.
                 (_THUMB_DIR / f"{b.id}.jpg").unlink(missing_ok=True)
                 upgraded += 1
+                try:
+                    from .event_log_service import log_event
+                    log_event("cover", "upgraded", level="success", book_id=b.id, title=b.title,
+                              detail={"from_px": cur_w, "to_px": new_w})
+                except Exception:
+                    pass
             except Exception:
                 pass
     return {"processed_lowres": processed, "upgraded": upgraded, "min_width": min_width}

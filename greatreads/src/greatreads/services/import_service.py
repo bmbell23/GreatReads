@@ -696,6 +696,12 @@ def import_calibre_book(
             action=action,
             imported_at=datetime.utcnow(),
         ))
+        try:
+            from .event_log_service import log_event
+            log_event("import", action, level="success", book_id=book.id, title=book.title,
+                      detail={"source": "calibre", "calibre_id": cal_id})
+        except Exception:
+            pass
     db.commit()
     db.refresh(book)
     return book.to_dict()
@@ -1268,6 +1274,7 @@ def import_abs_book(
         )
         .all()
     }
+    _abs_new = False
     for pid in part_ids:
         if pid not in already_recorded:
             db.add(ExternalImport(
@@ -1277,6 +1284,14 @@ def import_abs_book(
                 action=action,
                 imported_at=datetime.utcnow(),
             ))
+            _abs_new = True
+    if _abs_new:
+        try:
+            from .event_log_service import log_event
+            log_event("import", action, level="success", book_id=book.id, title=book.title,
+                      detail={"source": "audiobookshelf"})
+        except Exception:
+            pass
     db.commit()
     db.refresh(book)
     return book.to_dict()

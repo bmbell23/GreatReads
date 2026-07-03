@@ -119,9 +119,15 @@ async def dismiss_imports(payload: DismissRequest, db: Session = Depends(get_db)
     dismissed = _get_dismissed(db)
     before = len(dismissed)
     dismissed.update(int(i) for i in (payload.import_ids or []))
-    if len(dismissed) != before:
+    added = len(dismissed) - before
+    if added:
         _set_dismissed(db, dismissed)
-    return {"dismissed": len(dismissed), "added": len(dismissed) - before}
+        try:
+            from ..services.event_log_service import log_event
+            log_event("import", "dismiss", level="info", detail={"count": added})
+        except Exception:
+            pass
+    return {"dismissed": len(dismissed), "added": added}
 
 
 @router.get("/recent")

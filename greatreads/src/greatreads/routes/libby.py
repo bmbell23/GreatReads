@@ -278,7 +278,16 @@ async def libby_download(
         "title": payload.title or "",
         "request_id": payload.request_id or "",
     }
-    return await _engine_post("/api/download", body, timeout=_DOWNLOAD_TIMEOUT)
+    resp = await _engine_post("/api/download", body, timeout=_DOWNLOAD_TIMEOUT)
+    try:
+        from ..services.event_log_service import log_event
+        ok = resp.status_code < 400
+        log_event("libby", "borrow" if ok else "borrow_failed",
+                  level="success" if ok else "error", title=payload.title or "",
+                  detail={"title_id": payload.title_id, "manual": True})
+    except Exception:
+        pass
+    return resp
 
 
 @router.get("/downloads")

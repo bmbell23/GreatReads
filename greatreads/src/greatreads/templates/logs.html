@@ -1,0 +1,134 @@
+{% extends "base.html" %}
+
+{% block title %}Logs - GreatReads{% endblock %}
+
+{% block content %}
+<div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+    <div class="page-header-bookish mb-0">
+        <div class="page-header-icon"><i class="fas fa-clipboard-list"></i></div>
+        <div class="page-header-content"><h1 class="page-header-title mb-0">Activity Log</h1></div>
+    </div>
+    <a href="{{ request.scope.get('root_path','') }}/settings" class="btn btn-sm btn-outline-secondary"><i class="fas fa-cog me-1"></i>Settings</a>
+</div>
+<style>.page-header-bookish { padding-top: 0; padding-bottom: 0; }
+    .log-cat { font-size:.72rem; padding:.15rem .45rem; border-radius:.35rem; color:#fff; white-space:nowrap; }
+    .log-cat-libby{background:#c2185b;} .log-cat-import{background:#00796b;} .log-cat-metadata{background:#5e35b1;}
+    .log-cat-cover{background:#1565c0;} .log-cat-system{background:#455a64;} .log-cat-other{background:#6c757d;}
+    .log-row{border-bottom:1px solid var(--bs-border-color,#dee2e6);}
+    .log-detail{font-family:monospace;font-size:.78rem;color:var(--bs-secondary-color,#6c757d);word-break:break-word;}
+    .log-ts{font-variant-numeric:tabular-nums;white-space:nowrap;}
+    .log-dot{width:.5rem;height:.5rem;border-radius:50%;display:inline-block;}
+    .lvl-info{background:#6c757d;} .lvl-success{background:#2e7d32;} .lvl-warn{background:#f9a825;} .lvl-error{background:#c62828;}
+</style>
+
+<div class="card mb-3">
+    <div class="card-body py-2">
+        <div class="row g-2 align-items-end">
+            <div class="col-auto"><label class="form-label small mb-0">Category</label>
+                <select class="form-select form-select-sm" id="lgCat" onchange="lgReload()" style="width:150px;">
+                    <option value="">All</option>
+                </select></div>
+            <div class="col-auto"><label class="form-label small mb-0">Level</label>
+                <select class="form-select form-select-sm" id="lgLevel" onchange="lgReload()" style="width:130px;">
+                    <option value="">All</option>
+                </select></div>
+            <div class="col"><label class="form-label small mb-0">Search</label>
+                <input type="text" class="form-control form-control-sm" id="lgSearch" placeholder="title, event, detail…"></div>
+            <div class="col-auto">
+                <button class="btn btn-sm btn-outline-primary" onclick="lgReload()"><i class="fas fa-rotate me-1"></i>Refresh</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="card">
+    <div class="card-body p-0">
+        <div id="lgList" class="p-2"><div class="text-muted small p-2">Loading…</div></div>
+    </div>
+    <div class="card-footer text-center py-2">
+        <button class="btn btn-sm btn-outline-secondary" id="lgMore" onclick="lgLoadMore()" style="display:none;">Load older</button>
+        <span class="small text-muted" id="lgCount"></span>
+    </div>
+</div>
+{% endblock %}
+
+{% block extra_scripts %}
+<script>
+const LG_PAGE = 100;
+let _lgOldestId = null, _lgSearchT = null;
+
+function _lgEsc(s){ return (s==null?'':String(s)).replace(/[&<>"]/g, m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function _lgAgo(iso){
+    if(!iso) return '';
+    const d=new Date(iso.length<=19?iso+'Z':iso), s=(Date.now()-d.getTime())/1000;
+    if(s<60) return 'just now';
+    if(s<3600) return Math.round(s/60)+'m ago';
+    if(s<86400) return Math.round(s/3600)+'h ago';
+    return d.toLocaleDateString([], {month:'short',day:'numeric'});
+}
+function _lgWhen(iso){
+    if(!iso) return '';
+    const d=new Date(iso.length<=19?iso+'Z':iso);
+    return d.toLocaleString([], {month:'short',day:'numeric',hour:'2-digit',minute:'2-digit',second:'2-digit'});
+}
+function _lgCatClass(c){ return ['libby','import','metadata','cover','system'].includes(c)?('log-cat-'+c):'log-cat-other'; }
+function _lgDetail(d){
+    if(d==null) return '';
+    if(typeof d!=='object') return _lgEsc(d);
+    return Object.entries(d).map(([k,v])=>`${_lgEsc(k)}=${_lgEsc(Array.isArray(v)?v.join(', '):(typeof v==='object'?JSON.stringify(v):v))}`).join('  ·  ');
+}
+function _lgRow(e){
+    return `<div class="log-row d-flex gap-2 align-items-start py-2 px-1">
+        <span class="log-dot mt-2 lvl-${_lgEsc(e.level||'info')}" title="${_lgEsc(e.level||'info')}"></span>
+        <div class="flex-grow-1" style="min-width:0;">
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+                <span class="log-cat ${_lgCatClass(e.category)}">${_lgEsc(e.category)}</span>
+                <span class="fw-semibold">${_lgEsc(e.event)}</span>
+                ${e.title?`<span class="text-truncate">${_lgEsc(e.title)}</span>`:''}
+                <span class="log-ts small text-muted ms-auto" title="${_lgEsc(_lgWhen(e.ts))}">${_lgEsc(_lgAgo(e.ts))}</span>
+            </div>
+            ${e.detail!=null?`<div class="log-detail mt-1">${_lgDetail(e.detail)}</div>`:''}
+        </div>
+    </div>`;
+}
+async function lgReload(){
+    _lgOldestId = null;
+    const box = document.getElementById('lgList');
+    box.innerHTML = '<div class="text-muted small p-2">Loading…</div>';
+    const items = await lgFetch();
+    box.innerHTML = items.length ? items.map(_lgRow).join('') : '<div class="text-muted small p-2">No events match.</div>';
+    document.getElementById('lgCount').textContent = items.length ? `${items.length} shown` : '';
+}
+async function lgLoadMore(){
+    const items = await lgFetch();
+    if(!items.length){ document.getElementById('lgMore').style.display='none'; return; }
+    document.getElementById('lgList').insertAdjacentHTML('beforeend', items.map(_lgRow).join(''));
+}
+async function lgFetch(){
+    const params = new URLSearchParams();
+    const cat=document.getElementById('lgCat').value, lvl=document.getElementById('lgLevel').value, q=document.getElementById('lgSearch').value.trim();
+    if(cat) params.set('category',cat);
+    if(lvl) params.set('level',lvl);
+    if(q) params.set('q',q);
+    params.set('limit', LG_PAGE);
+    if(_lgOldestId) params.set('before_id', _lgOldestId);
+    let r;
+    try { r = await GreatReads.apiCall('/logs?'+params.toString()); } catch(e){ return []; }
+    const items = (r && r.events) || [];
+    if(items.length){ _lgOldestId = items[items.length-1].id; }
+    document.getElementById('lgMore').style.display = items.length >= LG_PAGE ? '' : 'none';
+    return items;
+}
+async function lgInitMeta(){
+    let m; try { m = await GreatReads.apiCall('/logs/meta'); } catch(e){ m = {categories:[],levels:[]}; }
+    const catSel=document.getElementById('lgCat'), lvlSel=document.getElementById('lgLevel');
+    (m.categories||[]).forEach(c=>{ const o=document.createElement('option'); o.value=c; o.textContent=c; catSel.appendChild(o); });
+    (m.levels||[]).forEach(l=>{ const o=document.createElement('option'); o.value=l; o.textContent=l; lvlSel.appendChild(o); });
+}
+document.addEventListener('DOMContentLoaded', async ()=>{
+    await lgInitMeta();
+    document.getElementById('lgSearch').addEventListener('input', ()=>{ clearTimeout(_lgSearchT); _lgSearchT=setTimeout(lgReload, 350); });
+    lgReload();
+});
+</script>
+{% endblock %}

@@ -15,7 +15,7 @@ from sqlalchemy.orm import Session
 
 from .config import settings
 from .database import create_tables, get_db, SessionLocal
-from .routes import books, readings, chains, library, settings as settings_routes, stats, auth, inventory, reports, import_routes, bookshelves, news, enrichment, libby
+from .routes import books, readings, chains, library, settings as settings_routes, stats, auth, inventory, reports, import_routes, bookshelves, news, enrichment, libby, events
 from . import ereader_api  # absorbed Ereader backend (:8091), routes carry /api/... (#22)
 from .auth import get_current_user_from_cookie
 
@@ -200,6 +200,17 @@ async def lifespan(app: FastAPI):
     # Startup
     create_tables()
 
+    # Record the deploy/version as an event (#184) + prune the log so it stays bounded.
+    try:
+        from .services.event_log_service import log_event, prune_events
+        from .ereader_api import _read_version, _read_build_stamp
+        log_event("system", "deploy", level="success",
+                  detail={"version": _read_version(), "build": _read_build_stamp(),
+                          "modified": os.environ.get("GREATREADS_BUILD_MODIFIED", "")})
+        prune_events()
+    except Exception as _e:
+        logger.warning("startup event-log write failed: %s", _e)
+
     # Background schedulers are opt-out so a vendored/second copy of GreatReads
     # (e.g. the isolated :8092 instance inside the Ereader repo) doesn't auto-sync
     # or write the DB behind our back. Default stays enabled for production.
@@ -369,6 +380,7 @@ app.include_router(bookshelves.router, prefix="/api/bookshelves", tags=["bookshe
 app.include_router(news.router, prefix="/api/news", tags=["news"])
 app.include_router(enrichment.router, prefix="/api/enrichment", tags=["enrichment"])
 app.include_router(libby.router, prefix="/api/libby", tags=["libby"])  # Libby/OverDrive proxy (#142)
+app.include_router(events.router, prefix="/api", tags=["events"])  # activity/event log (#184)
 app.include_router(ereader_api.router, tags=["ereader"])  # no prefix — routes already carry /api/... (#22)
 
 
@@ -439,6 +451,13 @@ async def settings_page(request: Request, db: Session = Depends(get_db)):
     """User settings page."""
     current_user = get_current_user_from_cookie(request, db)
     return templates.TemplateResponse(request, "settings.html", {"current_user": current_user})
+
+
+@app.get("/logs", response_class=HTMLResponse)
+async def logs_page(request: Request, db: Session = Depends(get_db)):
+    """Activity / event log page (#184)."""
+    current_user = get_current_user_from_cookie(request, db)
+    return templates.TemplateResponse(request, "logs.html", {"current_user": current_user})
 
 
 @app.get("/api/covers/thumb/{book_id}")

@@ -192,6 +192,23 @@ def backfill_one(db: Session, book: Book, vocab: Optional[dict] = None) -> list:
 
     if applied:
         db.commit()
+        try:
+            from .event_log_service import log_event
+            got = {}
+            if "genres" in applied:
+                got["genres"] = [t.name for t in book.tags][:8]
+            if "public_rating" in applied:
+                got["rating"] = book.public_rating
+            if "date_published" in applied:
+                got["date"] = str(book.date_published)
+            if "page_count" in applied:
+                got["pages"] = book.page_count
+            if "description" in applied:
+                got["synopsis"] = (book.description or "")[:140]
+            log_event("metadata", "enriched", level="success", book_id=book.id, title=title,
+                      detail={"fields": applied, **got})
+        except Exception:
+            pass
     return applied
 
 

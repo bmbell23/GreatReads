@@ -38,6 +38,7 @@ from sqlalchemy.orm import Session
 from ..models.book import Book
 from ..models.external_import import ExternalImport
 from ..routes.libby import LIBBY_ENGINE_URL, _tokens, _match_owned
+from .event_log_service import log_event
 
 logger = logging.getLogger(__name__)
 
@@ -188,6 +189,8 @@ def _process_pending(db: Session, log: list) -> list:
             )
             if status < 400:
                 log.append({"title": title, "event": "returned", "detail": "import confirmed"})
+                log_event("libby", "return", level="success", title=title,
+                          detail={"reason": "import confirmed"})
             else:
                 # Import is confirmed but the return failed — keep it so we retry
                 # the return next run (the loan is a spare copy, not lost).
@@ -199,6 +202,8 @@ def _process_pending(db: Session, log: list) -> list:
         if now - borrowed_at > timedelta(hours=CONFIRM_TIMEOUT_HOURS):
             log.append({"title": title, "event": "gave_up",
                         "detail": f"no import after {CONFIRM_TIMEOUT_HOURS:g}h — loan left in place"})
+            log_event("libby", "autofulfill_giveup", level="warn", title=title,
+                      detail={"after_hours": CONFIRM_TIMEOUT_HOURS})
             # Drop it: stop retrying, but never auto-return an unconfirmed loan.
             continue
         keep.append(item)
@@ -253,11 +258,15 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
             pending.append(item)
             queued_ids.add(title_id)
             taken += 1
-            log.append({"title": title, "event": "borrowed",
-                        "detail": (data or {}).get("filename", "downloaded")})
+            fname = (data or {}).get("filename", "downloaded")
+            log.append({"title": title, "event": "borrowed", "detail": fname})
+            log_event("libby", "auto_borrow", level="success", title=title,
+                      detail={"author": author, "file": fname})
+            log_event("libby", "acsm_download", level="info", title=title, detail={"file": fname})
         else:
             err = (data or {}).get("error", f"HTTP {status}")
             log.append({"title": title, "event": "download_failed", "detail": err})
+            log_event("libby", "borrow_failed", level="error", title=title, detail={"error": err})
     return pending
 
 
