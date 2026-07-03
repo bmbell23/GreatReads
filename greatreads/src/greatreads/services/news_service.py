@@ -1071,6 +1071,29 @@ def author_books(db: Session, author_name: str) -> dict:
     return {"author": author_name, "cards": cards}
 
 
+def narrator_books(db: Session, narrator: str) -> dict:
+    """All DB books this person narrated (substring match on the narrator field, which
+    can hold several comma-separated names) — for the narrator view opened from the book
+    popup (#190). Mirrors author_books."""
+    name = (narrator or "").strip()
+    if not name:
+        return {"narrator": narrator, "cards": []}
+    books = (db.query(Book)
+             .filter(Book.narrator.isnot(None), Book.narrator.ilike(f"%{name}%")).all())
+    owned = {bid for (bid,) in _owned_book_id_subq(db).all()}
+    ids = [b.id for b in books]
+    counts = {}
+    if ids:
+        for bid, c in (db.query(Reading.book_id, func.count(Reading.id))
+                       .filter(Reading.book_id.in_(ids), Reading.date_finished_actual.isnot(None))
+                       .group_by(Reading.book_id).all()):
+            counts[bid] = c
+    books.sort(key=lambda b: (b.series or "~", b.series_number or 0, b.title or ""))
+    cards = [_local_card(b, "owned" if b.id in owned else "unowned", counts.get(b.id, 0))
+             for b in books]
+    return {"narrator": narrator, "cards": cards}
+
+
 def genre_books(db: Session, genre: str) -> dict:
     """ALL DB books tagged with this genre (any ownership), ordered by author then series
     then title — for the genre view opened by clicking a genre chip in the popup (#155).

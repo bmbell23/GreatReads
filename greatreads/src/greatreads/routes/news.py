@@ -143,6 +143,12 @@ async def get_genre_books(name: str, db: Session = Depends(get_db)):
     return news_service.genre_books(db, name)
 
 
+@router.get("/narrator")
+async def get_narrator_books(name: str, db: Session = Depends(get_db)):
+    """All DB audiobooks narrated by this person (any ownership) for the narrator view (#190)."""
+    return news_service.narrator_books(db, name)
+
+
 @router.post("/seen")
 async def post_seen(body: SeenBody, db: Session = Depends(get_db)):
     """Mark one item seen (id), all in a category seen (kind), or everything (neither)."""

@@ -849,6 +849,19 @@ async function grOpenAuthor() {
         ? cards.map(c => grSeriesMini(c, b && b.id, true)).join('')
         : '<div class="col-12 text-muted text-center py-4">No books found by this author.</div>';
 }
+async function grOpenNarrator(nameEnc) {
+    const name = decodeURIComponent(nameEnc || '');
+    if (!name) return;
+    document.getElementById('grSeriesTitle').textContent = name;
+    document.getElementById('grSeriesGrid').innerHTML = '<div class="col-12 text-muted text-center py-4">Loading…</div>';
+    bootstrap.Modal.getOrCreateInstance(document.getElementById('grSeriesModal')).show();
+    let cards;
+    try { const d = await GreatReads.apiCall('/news/narrator?name=' + encodeURIComponent(name)); cards = d.cards || []; }
+    catch (e) { cards = []; }
+    document.getElementById('grSeriesGrid').innerHTML = cards.length
+        ? cards.map(c => grSeriesMini(c, null, true)).join('')
+        : '<div class="col-12 text-muted text-center py-4">No audiobooks found for this narrator.</div>';
+}
 async function grInjectAuthorReads(author) {
     const el = document.getElementById('gbaAuthorReads');
     if (!el) return;
@@ -1055,7 +1068,11 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
         const num = (book.series_number != null) ? ' #' + book.series_number : '';
         rows.push(['Series', `${book.universe ? book.universe + ': ' : ''}${book.series}${num}`]);
     }
-    if (book.narrator) rows.push(['Narrator', grEsc(book.narrator)]);   // #190 audiobook narrator
+    if (book.narrator) {   // #190 — each narrator name links to that narrator's audiobooks
+        const nlinks = String(book.narrator).split(',').map(s => s.trim()).filter(Boolean).map(n =>
+            `<a href="#" class="gba-link" onclick="GreatReads.openNarrator('${encodeURIComponent(n).replace(/'/g, '%27')}');return false;">${grEsc(n)}</a>`).join(', ');
+        rows.push(['Narrator', nlinks]);
+    }
     if (book.date_published) {
         // date-only ISO → parse at local midnight so the day doesn't shift a TZ back.
         const iso = String(book.date_published);
@@ -2100,6 +2117,7 @@ window.GreatReads = {
     openBookActions: grOpenBookActions,
     openSeries: grOpenSeries,
     openAuthor: grOpenAuthor,
+    openNarrator: grOpenNarrator,
     openGenre: grOpenGenre,
     popupRequestMeta: grPopupRequestMeta,
     openBookById: grOpenBookById,
