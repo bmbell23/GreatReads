@@ -17,7 +17,7 @@ import logging
 import os
 from typing import Optional
 
-from sqlalchemy import or_
+from sqlalchemy import case, or_
 from sqlalchemy.orm import Session
 
 from ..models.book import Book
@@ -79,8 +79,15 @@ def _needs_fields_filter():
 
 
 def candidate_query(db: Session):
+    """Books still missing fields, ordered so OWNED (library) books are enriched first,
+    then Wishlist/unowned, then the rest (#178)."""
     conds = _needs_fields_filter()
-    return db.query(Book).filter(*conds).order_by(Book.id)
+    owned_q = db.query(Inventory.book_id).filter(
+        or_(Inventory.owned_ebook == True, Inventory.owned_audio == True,  # noqa: E712
+            Inventory.owned_physical == True)
+    )
+    priority = case((Book.id.in_(owned_q), 0), else_=1)
+    return db.query(Book).filter(*conds).order_by(priority, Book.id)
 
 
 def _get_or_create_tags(db: Session, names) -> list:

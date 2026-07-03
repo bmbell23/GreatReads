@@ -900,6 +900,14 @@ async function grFetchAndOpen(id, extraOpts, keepNav) {
 // Optional per-page builder: (book) => opts merged into the nav popup (#2).
 let grNavOptsBuilder = null;
 function grSetNavOptsBuilder(fn) { grNavOptsBuilder = fn; }
+
+// Open the metadata compare window straight from the popup (#177): reuses Edit Book's
+// enrichment flow (opens the editor, then the compare window; #157 returns to the popup).
+async function grPopupRequestMeta(id) {
+    if (id == null || typeof window.bkeOpen !== 'function') return;
+    try { await window.bkeOpen(id); } catch (e) { return; }
+    if (typeof window.bkeRequestMetadata === 'function') window.bkeRequestMetadata();
+}
 async function grOpenBookById(id) {
     if (id == null) return;
     bootstrap.Modal.getInstance(document.getElementById('grSeriesModal'))?.hide();  // came from grid
@@ -1221,6 +1229,13 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
                     <i class="fas fa-building-columns me-2"></i>Check Libby
                 </button>` : '';
 
+    // Request metadata straight from the popup (#177) — saved books only (needs an id).
+    const metaLink = (opts.editBook !== false && book.id != null && typeof window.bkeOpen === 'function') ? `
+                <button type="button" class="btn btn-sm btn-outline-secondary"
+                        onclick="GreatReads.popupRequestMeta(${book.id})">
+                    <i class="fas fa-magnifying-glass me-2 text-info"></i>Request metadata
+                </button>` : '';
+
     // "See Reading Sessions" — read-only session history (#77). Hidden until the
     // async summary below confirms there are qualified sessions; shown on every
     // caller (Home in-progress, Journal finished) via book.id. Opt out with
@@ -1292,7 +1307,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     // together); Edit Reading + Edit Book share the row below.
     const statsPair = `${viewRatingsBtn}${sessionsBtn}`;
     const statsRow = statsPair.trim() ? `<div class="gba-edit-row">${statsPair}</div>` : '';
-    const editPair = `${opts.editReadingHtml || ''}${editBookLink}`;
+    const editPair = `${opts.editReadingHtml || ''}${metaLink}${editBookLink}`;
     const editRow = editPair.trim() ? `<div class="gba-edit-row">${editPair}</div>` : '';
     const libbyRow = libbyCheckLink ? `<div class="gba-edit-row">${libbyCheckLink}</div>` : '';
     const secondaryInner = `${hlLink}${opts.primaryActionHtml || ''}${statsRow}${opts.actionsHtml || ''}${libbyRow}${editRow}`;
@@ -2085,6 +2100,7 @@ window.GreatReads = {
     openSeries: grOpenSeries,
     openAuthor: grOpenAuthor,
     openGenre: grOpenGenre,
+    popupRequestMeta: grPopupRequestMeta,
     openBookById: grOpenBookById,
     openBookNav: grOpenBookNav,
     setNavOptsBuilder: grSetNavOptsBuilder,

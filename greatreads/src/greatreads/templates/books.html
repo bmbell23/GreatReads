@@ -676,13 +676,21 @@ function renderAll() {
     updateBulkBar();
     const list = visibleCards();
     const grid = document.getElementById('booksGrid');
-    const label = { owned: 'owned', unowned: 'unowned', upcoming: 'upcoming', new: 'new' }[shelfStatus];
+    const label = { owned: 'owned', unowned: 'wishlist', upcoming: 'upcoming', new: 'new' }[shelfStatus];
+    const countLabel = shelfStatus === 'unowned' ? 'on your Wishlist' : label;
     document.getElementById('shelfCount').textContent =
-        list.length ? `${list.length}${list.length < shelfTotal ? ' of ' + shelfTotal : ''} ${label}` : '';
+        list.length ? `${list.length}${list.length < shelfTotal ? ' of ' + shelfTotal : ''} ${countLabel}` : '';
     if (!list.length) {
         grid.innerHTML = `<div class="col-12 text-muted text-center py-5">No ${label} books${
             document.getElementById('searchInput').value ? ' match your search' : ''}.</div>`;
         return;
+    }
+    // Wishlist: annotate on-hold state (fetch Libby holds once; re-renders when ready). #175
+    if (shelfStatus === 'unowned') {
+        loadWishHolds();
+        if (_wishHoldSet && _wishHoldSet.size) list.forEach(c => {
+            if (c.kind === 'local') c._onHold = _wishHoldSet.has(_wishHoldKey(c.title, c.author));
+        });
     }
     grid.innerHTML = list.map(cardHtml).join('');
 }
@@ -716,6 +724,14 @@ function cardHtml(c) {
     const click = selectable ? `toggleSelect('${key}')` : `openBookDetails('${key}')`;
     // Libby cards: availability ribbon (bottom) + an "owned/in library" corner check.
     const libbyRibbon = (c.kind === 'libby') ? libbyAvailRibbon(c) : '';
+    // Wishlist cards (#175/#176): bottom ribbon showing on-hold (Libby) or Upcoming
+    // (future publication date). On-hold takes precedence.
+    let wishRibbon = '';
+    if (c.kind === 'local' && shelfStatus === 'unowned') {
+        const isUpcoming = c.date && (() => { const iso = String(c.date); const d = new Date(iso.length <= 10 ? iso + 'T00:00:00' : iso); return !isNaN(d) && d > new Date(); })();
+        if (c._onHold) wishRibbon = wishlistRibbon('On hold', '#0dcaf0', '#000');
+        else if (isUpcoming) wishRibbon = wishlistRibbon('Upcoming', '#e0a800', '#000');
+    }
     const libbyOwned = (c.kind === 'libby' && libbyIsOwned(c))
         ? '<div class="books-badge-tl"><span class="books-readcount" title="Already in your library"><i class="fas fa-check"></i></span></div>' : '';
     return `<div class="col-4 col-sm-3 col-lg-2 mb-3">
@@ -723,10 +739,29 @@ function cardHtml(c) {
             <div class="books-cover">${cover}
                 ${tl || libbyOwned}
                 ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
-                ${libbyRibbon}
+                ${libbyRibbon}${wishRibbon}
             </div>
         </div>
     </div>`;
+}
+
+function wishlistRibbon(txt, bg, color) {
+    return `<div class="position-absolute bottom-0 start-0 end-0 text-center small fw-semibold"
+        style="font-size:.6rem;padding:1px 2px;opacity:.92;background:${bg};color:${color};">${txt}</div>`;
+}
+// On-hold badge for Wishlist covers (#175): cross-reference the shelf's local cards
+// against the user's Libby holds by title + author-last-name.
+let _wishHoldSet = null;
+const _wishNorm = s => (s || '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+const _wishHoldKey = (title, author) => _wishNorm(title) + '|' + _wishNorm((author || '').split(/[\s,]+/).filter(Boolean).pop() || '');
+async function loadWishHolds() {
+    if (_wishHoldSet !== null) return;
+    _wishHoldSet = new Set();   // mark as loading so we don't refetch
+    let r;
+    try { r = await GreatReads.apiCall('/libby/holds'); } catch (e) { return; }
+    const holds = (r && r.holds) || [];
+    holds.forEach(h => _wishHoldSet.add(_wishHoldKey(h.title, h.author || h.firstCreatorName)));
+    if (holds.length && shelfStatus === 'unowned') renderAll();
 }
 
 // ── Libby (OverDrive) search category (#142 milestone 3) ─────────────────────
