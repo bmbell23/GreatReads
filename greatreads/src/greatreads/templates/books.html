@@ -803,6 +803,26 @@ async function loadWishHolds() {
 // ── Libby (OverDrive) search category (#142 milestone 3) ─────────────────────
 let libbyPage = 1;
 
+// Format toggle (#191): search Libby for ebooks or audiobooks. Audiobooks download
+// via the bona-fide (prbn:v) chip + OverDrive Listen harvest into Audiobookshelf;
+// ebooks keep the existing OverDrive-website .acsm path.
+let libbyMedia = 'ebook';
+function libbyMediaToggleHtml() {
+    const mk = (val, icon, label) =>
+        `<button type="button" class="btn btn-sm ${libbyMedia === val ? 'btn-primary' : 'btn-outline-primary'}" onclick="setLibbyMedia('${val}')"><i class="fas ${icon} me-1"></i>${label}</button>`;
+    return `<div class="col-12 mb-2 d-flex align-items-center gap-2">
+        <div class="btn-group btn-group-sm" role="group" aria-label="Libby format">
+            ${mk('ebook', 'fa-book', 'Ebook')}${mk('audiobook', 'fa-headphones', 'Audiobook')}
+        </div>
+        <span class="small text-muted">${libbyMedia === 'audiobook' ? 'Audiobooks download into Audiobookshelf.' : 'Ebooks download into your library.'}</span>
+    </div>`;
+}
+function setLibbyMedia(m) {
+    if (m === libbyMedia) return;
+    libbyMedia = m;
+    loadLibbyShelf(true);
+}
+
 // A small availability ribbon across the bottom of a Libby result cover.
 function libbyAvailRibbon(c) {
     let cls, txt;
@@ -839,6 +859,7 @@ function libbyRowToCard(row) {
     return {
         kind: 'libby',
         title_id: String(row.id),
+        mediaType: row.type || 'ebook',   // #191 ebook | audiobook
         title: row.title,
         author: row.author,
         series: row.series || '',
@@ -897,16 +918,16 @@ async function loadLibbyShelf(reset) {
     if (!q) {
         cards = []; shelfTotal = 0; shelfLoading = false;
         document.getElementById('shelfCount').textContent = '';
-        grid.innerHTML = `<div class="col-12 text-muted text-center py-5">
-            <i class="fas fa-building-columns fa-2x mb-2 d-block" style="color:#d63384;"></i>
-            Search Libby for a library ebook to borrow &amp; download into GreatReads.
+        grid.innerHTML = libbyMediaToggleHtml() + `<div class="col-12 text-muted text-center py-5">
+            <i class="fas ${libbyMedia === 'audiobook' ? 'fa-headphones' : 'fa-building-columns'} fa-2x mb-2 d-block" style="color:#d63384;"></i>
+            Search Libby for a library ${libbyMedia} to borrow &amp; download into GreatReads.
             <div class="small mt-1">Type a title or author above. Availability is checked across your linked cards.</div></div>`;
         return;
     }
     if (reset) grid.innerHTML = '<div class="col-12 text-muted text-center py-5"><span class="spinner-border spinner-border-sm me-2"></span>Searching Libby…</div>';
     shelfLoading = true;
     let r = null;
-    try { r = await GreatReads.apiCall(`/libby/search?q=${encodeURIComponent(q)}&library=all&page=${libbyPage}&per_page=${PAGE}`); }
+    try { r = await GreatReads.apiCall(`/libby/search?q=${encodeURIComponent(q)}&library=all&media=${libbyMedia}&page=${libbyPage}&per_page=${PAGE}`); }
     catch (e) {}
     if (myGen !== shelfGen) return;   // superseded by a newer query
     shelfLoading = false;
@@ -944,13 +965,13 @@ function renderLibby(q) {
     document.getElementById('shelfCount').textContent =
         cards.length ? `${cards.length}${cards.length < shelfTotal ? ' of ' + shelfTotal : ''} on Libby` : '';
     if (!cards.length) {
-        grid.innerHTML = `<div class="col-12 text-muted text-center py-5">
-            No Libby matches for “${esc(q)}”.
+        grid.innerHTML = libbyMediaToggleHtml() + `<div class="col-12 text-muted text-center py-5">
+            No Libby ${libbyMedia} matches for “${esc(q)}”.
             <div class="small mt-1">If this seems wrong, the Libby token may need a re-link — open the
             <a href="#" onclick="openLibby();return false;">Libby panel</a> to check.</div></div>`;
         return;
     }
-    grid.innerHTML = cards.map(cardHtml).join('');
+    grid.innerHTML = libbyMediaToggleHtml() + cards.map(cardHtml).join('');
 }
 
 // ── Holds / Loans shelves (#163) ─────────────────────────────────────────────
@@ -1075,11 +1096,17 @@ function libbyRenderAction() {
     const sel = document.getElementById('libbyCardSel');
     const opt = sel && sel.selectedOptions[0];
     const available = opt ? opt.dataset.avail === '1' : libs.some(l => l.isAvailable);
-    const borrowBtn = '<button id="libbyBorrowBtn" class="btn btn-sm btn-primary" onclick="libbyBorrow()"><i class="fas fa-cloud-arrow-down me-2"></i>Borrow &amp; Download</button>';
+    // #191: audiobooks download via the bona-fide chip + Listen harvest; ebooks keep
+    // the .acsm path. Route the borrow button to the right handler + label.
+    const isAudio = (c.mediaType || (c._row && c._row.type)) === 'audiobook';
+    const fn = isAudio ? 'libbyBorrowAudiobook()' : 'libbyBorrow()';
+    const lbl = isAudio ? 'Borrow &amp; Download audiobook' : 'Borrow &amp; Download';
+    const icon = isAudio ? 'fa-headphones' : 'fa-cloud-arrow-down';
+    const borrowBtn = `<button id="libbyBorrowBtn" class="btn btn-sm btn-primary" onclick="${fn}"><i class="fas ${icon} me-2"></i>${lbl}</button>`;
     if (libbyIsOwned(c)) {
         // Owned → don't push a borrow; offer it only as a de-emphasized secondary.
         box.innerHTML = available
-            ? `<button class="btn btn-sm btn-outline-secondary" onclick="libbyBorrow()"><i class="fas fa-cloud-arrow-down me-2"></i>Borrow another copy</button>`
+            ? `<button class="btn btn-sm btn-outline-secondary" onclick="${fn}"><i class="fas ${icon} me-2"></i>Borrow another copy</button>`
             : `<button id="libbyHoldBtn" class="btn btn-sm btn-outline-secondary" onclick="libbyPlaceHold()"><i class="fas fa-clock me-2"></i>Place hold</button>`;
         return;
     }
@@ -1212,7 +1239,13 @@ function _libbySelectedCard() {
 function _libbyResetBorrowBtn() {
     const btn = document.getElementById('libbyBorrowBtn');
     const hold = document.getElementById('libbyHoldBtn');
-    if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-cloud-arrow-down me-2"></i>Borrow & Download'; }
+    const isAudio = libbyActive && (libbyActive.mediaType || (libbyActive._row && libbyActive._row.type)) === 'audiobook';
+    if (btn) {
+        btn.disabled = false;
+        btn.innerHTML = isAudio
+            ? '<i class="fas fa-headphones me-2"></i>Borrow &amp; Download audiobook'
+            : '<i class="fas fa-cloud-arrow-down me-2"></i>Borrow & Download';
+    }
     if (hold) hold.disabled = false;
 }
 async function libbyBorrow() {
@@ -1257,6 +1290,54 @@ async function libbyBorrow() {
         }
         if (btn && s && s.status) btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>${s.status}…`;
         setTimeout(poll, 3000);
+    };
+    setTimeout(poll, 3000);
+}
+
+// Audiobook borrow → download (#191). Unlike the ebook path this drives a headless
+// Libby session to fulfil via the bona-fide (prbn:v) chip, harvest the OverDrive
+// Listen player's MP3 parts into /audiobooks, and auto-return the loan. It's ONE
+// background job in the engine (single global status), pollable while it runs.
+async function libbyBorrowAudiobook() {
+    const c = libbyActive; if (!c) return;
+    const cardId = _libbySelectedCard();
+    if (!cardId) { showToast('No library card available to borrow on.', 'warning'); return; }
+    const btn = document.getElementById('libbyBorrowBtn');
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Starting…'; }
+    try {
+        await GreatReads.apiCall('/libby/audiobook/download', { method: 'POST', silent: true,
+            data: { title_id: c.title_id, card_id: cardId, title: c.title, borrow: true, return_after: true } });
+    } catch (e) {
+        showToast(libbyErrMsg(e, 'borrow'), 'danger'); _libbyResetBorrowBtn(); return;
+    }
+    showToast(`Downloading “${c.title}” audiobook — this runs in the background (several minutes for a full book).`, 'info');
+    const started = Date.now();
+    const poll = async () => {
+        let s = null;
+        try { s = await GreatReads.apiCall('/libby/audiobook/download/status', { silent: true }); } catch (e) {}
+        if (s && s.active === false && s.phase) {
+            if (s.phase === 'done') {
+                showToast(`“${s.title || c.title}” audiobook downloaded (${s.parts_total} parts) — Audiobookshelf will pick it up.`, 'success');
+                if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded';
+                c.inLibrary = true;
+            } else if (s.phase === 'error') {
+                showToast(s.message || 'Audiobook download failed.', 'danger');
+                _libbyResetBorrowBtn();
+            } else {
+                _libbyResetBorrowBtn();
+            }
+            return;
+        }
+        if (Date.now() - started > 30 * 60 * 1000) {
+            showToast('Still downloading in the background — check Audiobookshelf shortly.', 'info');
+            _libbyResetBorrowBtn(); return;
+        }
+        if (btn && s && s.active) {
+            const prog = s.parts_total ? ` ${s.parts_done}/${s.parts_total}` : '';
+            const ph = ({ borrow: 'Borrowing', chip: 'Preparing', open: 'Opening', download: 'Downloading', return: 'Returning' })[s.phase] || 'Working';
+            btn.innerHTML = `<span class="spinner-border spinner-border-sm me-2"></span>${ph}${prog}…`;
+        }
+        setTimeout(poll, 4000);
     };
     setTimeout(poll, 3000);
 }

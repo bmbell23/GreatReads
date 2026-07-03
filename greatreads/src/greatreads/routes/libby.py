@@ -313,6 +313,55 @@ async def libby_audiobook_link_cancel(current_user: User = Depends(get_current_u
     return await _engine_post("/api/audiobook-link/cancel", {})
 
 
+# ── Audiobook download (#191) — borrow + fulfil via the bona-fide (prbn:v) chip +
+# OverDrive Listen-player harvest into /audiobooks (Audiobookshelf ingests it). ──
+class AudiobookDownloadRequest(BaseModel):
+    title_id: str
+    card_id: str | None = None
+    title: str | None = ""
+    borrow: bool = False
+    return_after: bool = False
+
+
+@router.post("/audiobook/download")
+async def libby_audiobook_download(
+    payload: AudiobookDownloadRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Kick off a background borrow(optional)+download of an audiobook loan. The
+    download runs a headless Libby session (minutes for a full book), so this
+    returns immediately and the UI polls /audiobook/download/status."""
+    if not payload.title_id:
+        raise HTTPException(status_code=400, detail="title_id is required.")
+    if payload.borrow and not payload.card_id:
+        raise HTTPException(status_code=400, detail="card_id is required to borrow.")
+    resp = await _engine_post("/api/audiobook/download", {
+        "title_id": payload.title_id,
+        "card_id": payload.card_id or "",
+        "borrow": payload.borrow,
+        "return_after": payload.return_after,
+    }, timeout=45.0)
+    try:
+        from ..services.event_log_service import log_event
+        ok = resp.status_code < 400
+        log_event("libby", "audiobook_download" if ok else "audiobook_download_failed",
+                  level="success" if ok else "error", title=payload.title or "",
+                  detail={"title_id": payload.title_id, "manual": True})
+    except Exception:
+        pass
+    return resp
+
+
+@router.get("/audiobook/download/status")
+async def libby_audiobook_download_status(current_user: User = Depends(get_current_user)):
+    return await _engine_get("/api/audiobook/download/status")
+
+
+@router.post("/audiobook/download/cancel")
+async def libby_audiobook_download_cancel(current_user: User = Depends(get_current_user)):
+    return await _engine_post("/api/audiobook/download/cancel", {})
+
+
 # ── Async borrow (#186) ──────────────────────────────────────────────────────
 # The borrow can take minutes via the OverDrive-website fulfill path, long enough to
 # trip a reverse-proxy gateway timeout (→ a body-less 5xx the UI mislabelled as an

@@ -1027,7 +1027,9 @@ function applyFilters() {
 
         switch (sort) {
             case 'author': {
-                const byAuthor = a.author_sorted.localeCompare(b.author_sorted);
+                // Null-safe: an audiobook synced from ABS without an author must never
+                // crash the whole sort/render (#191). Blank authors sort to the end.
+                const byAuthor = (a.author_sorted || '￿').localeCompare(b.author_sorted || '￿');
                 // Author direction flips with the toggle; the series tiebreaker stays
                 // ascending (book order), so return directly and skip the outer flip.
                 if (byAuthor !== 0) return sortAscending ? byAuthor : -byAuthor;
@@ -1237,8 +1239,8 @@ function setupLibraryAutocomplete() {
 
         // Filter books
         const matches = allBooksForLibrary.filter(book =>
-            book.title.toLowerCase().includes(searchTerm) ||
-            book.author.toLowerCase().includes(searchTerm)
+            (book.title || '').toLowerCase().includes(searchTerm) ||
+            (book.author || '').toLowerCase().includes(searchTerm)
         ).slice(0, 50); // Limit to 50 results
 
         if (matches.length === 0) {
