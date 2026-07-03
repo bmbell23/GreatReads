@@ -22,8 +22,10 @@ logger = logging.getLogger(__name__)
 CATEGORIES = ["libby", "import", "metadata", "cover", "system"]
 LEVELS = ["info", "success", "warn", "error"]
 
-# Keep the log bounded — events are low-volume, but prune so it can't grow forever.
-MAX_ROWS = 20000
+# Keep the log bounded. Retention is primarily TIME-based (keep the last ~90 days so
+# there's real history to look back on), with a generous row cap as a safety net.
+MAX_AGE_DAYS = 90
+MAX_ROWS = 100000
 
 
 def log_event(category: str, event: str, *, level: str = "info",
@@ -74,23 +76,26 @@ def query_events(db: Session, *, category: Optional[str] = None,
     return [e.to_dict() for e in query.order_by(desc(EventLog.id)).limit(limit).all()]
 
 
-def prune_events(db: Optional[Session] = None, keep: int = MAX_ROWS) -> int:
-    """Trim the log to the newest ``keep`` rows. Returns rows deleted."""
+def prune_events(db: Optional[Session] = None, keep: int = MAX_ROWS,
+                 max_age_days: int = MAX_AGE_DAYS) -> int:
+    """Prune the log: drop rows older than ``max_age_days``, then trim to the newest
+    ``keep`` rows as a safety cap. Returns rows deleted."""
+    from datetime import datetime, timedelta
     own = db is None
     if own:
         from ..database import SessionLocal
         db = SessionLocal()
     try:
+        deleted = 0
+        # 1) Time-based: keep the last N days of history.
+        cutoff_dt = datetime.utcnow() - timedelta(days=max_age_days)
+        deleted += db.query(EventLog).filter(EventLog.ts < cutoff_dt).delete(synchronize_session=False)
+        # 2) Safety row cap: if still over `keep`, drop the oldest beyond it.
         total = db.query(EventLog.id).count()
-        if total <= keep:
-            return 0
-        # id of the newest row to keep; delete everything older.
-        cutoff = (
-            db.query(EventLog.id).order_by(desc(EventLog.id)).offset(keep).limit(1).scalar()
-        )
-        if cutoff is None:
-            return 0
-        deleted = db.query(EventLog).filter(EventLog.id <= cutoff).delete(synchronize_session=False)
+        if total > keep:
+            cutoff = db.query(EventLog.id).order_by(desc(EventLog.id)).offset(keep).limit(1).scalar()
+            if cutoff is not None:
+                deleted += db.query(EventLog).filter(EventLog.id <= cutoff).delete(synchronize_session=False)
         db.commit()
         return deleted
     except Exception as exc:   # noqa: BLE001
