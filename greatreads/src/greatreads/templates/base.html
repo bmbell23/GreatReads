@@ -405,6 +405,8 @@
     <!-- Shared Edit Book modal behavior (#110); needs GreatReads.* from app.js above -->
     {% if current_user %}<script src="{{ url_for('static', path='/js/book_edit.js') }}?v={{ asset_ver }}"></script>{% endif %}
     {% if current_user %}<script src="{{ url_for('static', path='/js/bulk_edit.js') }}?v={{ asset_ver }}"></script>{% endif %}
+    <!-- Check Libby + Libby borrow/hold popup, shared across pages (#205); needs GreatReads.* above -->
+    {% if current_user %}<script src="{{ url_for('static', path='/js/libby_check.js') }}?v={{ asset_ver }}"></script>{% endif %}
 
     <!-- Loading screen (#55/#114): the shared quotes.js on ONE host — same as the
          ereader (web/index.html), which works great. The doubling was base.html
