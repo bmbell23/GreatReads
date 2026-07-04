@@ -266,20 +266,20 @@ async function finishReading(readingId) {
     });
 }
 
-// Finish a reading, then open the full Edit Reading form so the user can add
-// ratings/review (and adjust dates) and Save (#108). The finish endpoint handles
-// the finish date + chain logic; we then re-fetch the now-finished reading (with
-// its book) and open the shared edit modal. `reload` refreshes the calling page's
-// list. Pages without the edit modal (Library) fall back to a plain finish.
+// Finish a reading, then open the ratings/review screen (#127) so the user can
+// rate it on the spot (#212 — this used to open the full Edit Reading form
+// (#108), but the focused review screen is the right landing after a finish;
+// Edit Reading stays reachable for date fixes). The finish endpoint handles the
+// finish date + chain logic. `reload` refreshes the calling page's list. Pages
+// without the ratings modal fall back to a plain finish toast.
 async function finishAndReview(readingId, reload) {
     try {
         await finishReading(readingId);
         if (typeof reload === 'function') await reload();
-        const modal = document.getElementById('editReadingModal');
+        const modal = document.getElementById('viewRatingsModal');
         if (!modal) { showToast('Reading marked as finished!', 'success'); return; }
-        const reading = await apiCall(`/readings/${readingId}`);
-        showToast('Finished — add your ratings and Save.', 'success');
-        showEditModal(reading);
+        showToast('Finished — rate and review it!', 'success');
+        await grOpenRatings(readingId);
     } catch (e) { /* errors surfaced by apiCall */ }
 }
 
@@ -1597,7 +1597,12 @@ async function grOpenRatings(rid) {
     body.innerHTML = '<div class="text-center text-muted py-3"><i class="fas fa-spinner fa-spin"></i></div>';
     bootstrap.Modal.getOrCreateInstance(document.getElementById('viewRatingsModal')).show();
     const bid = grActiveBook && grActiveBook.id;
-    const readings = await grLoadReadings(bid, rid);
+    let readings = await grLoadReadings(bid, rid);
+    // Stale-context guard (#212): opened straight from a finish (no popup), the
+    // last-viewed book may not own this reading — reload by the reading itself.
+    if (rid != null && readings.length && !readings.find(x => x.id === rid)) {
+        readings = await grLoadReadings(null, rid);
+    }
     if (!readings.length) { body.innerHTML = '<div class="text-danger small">Could not load ratings.</div>'; return; }
     // Default selection: the passed read, but if it's a planned/not-started read (reread
     // opened from TBR) prefer the most recent FINISHED read — that's what has ratings.
