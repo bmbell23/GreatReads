@@ -37,60 +37,76 @@ import java.lang.ref.WeakReference;
 public class MainActivity extends Activity {
     private WebView webView;
 
+    // #210: ONE WebView for the app's lifetime. Folding to the cover screen
+    // destroys + recreates the Activity even with configChanges declared (a
+    // physical display switch), and a recreated activity used to build a NEW
+    // WebView and cold-load "/" — a loading screen, a reloaded page (killed
+    // reading-session timers), and a ghost audio player (#207's symptom via a
+    // second path). Instead the WebView is created once, on a
+    // MutableContextWrapper, and every subsequent activity just re-points the
+    // wrapper at itself and re-attaches the view: the live page (timer, audio,
+    // scroll) carries over untouched. Everything the retained WebView's
+    // clients/bridge need from an Activity is routed through sRef (the CURRENT
+    // activity) or the application context — never a captured instance.
+    private static WebView sWebView;
+    private static android.content.MutableContextWrapper sWebCtx;
+
     // Pending callback for a WebView <input type="file"> picker (#98). Android
     // WebViews drop file-input taps unless we override onShowFileChooser, launch
     // a picker, and hand the chosen Uri(s) back through this callback.
-    private ValueCallback<Uri[]> filePathCallback;
+    // Static (#210): the chrome client outlives any single activity.
+    private static ValueCallback<Uri[]> filePathCallback;
     private static final int REQUEST_FILE_CHOOSER = 0xF11E;
 
     // When true, the web UI has explicitly asked for the system bars to be
     // visible (e.g. reader menu is open). onWindowFocusChanged respects this
     // so the bars don't immediately snap back to hidden on the next focus
     // event. Cleared again when the web UI calls hideSystemBars().
-    private boolean systemBarsRequested = false;
-
-    // Set when the main page failed to load from the network (offline, or the
-    // host is unreachable even though ConnectivityManager reports "online").
-    // While true, shouldInterceptRequest serves the bundled shell even if
-    // isOnline() is true — so we recover regardless of the connectivity read.
-    // Reset on the next successful page load. (#23)
-    private boolean forcedOfflineReload = false;
+    // Static (#210): the preference must survive activity recreation.
+    private static boolean systemBarsRequested = false;
 
     // Weak self-reference so PlaybackService (same process) can route media
-    // button / notification actions back into the WebView's <audio> via JS.
+    // button / notification actions back into the WebView's <audio> via JS,
+    // and so the retained WebView's clients/bridge (#210) always act on the
+    // CURRENT activity.
     private static WeakReference<MainActivity> sRef;
+
+    static MainActivity cur() {
+        return (sRef != null) ? sRef.get() : null;
+    }
 
     // Called from PlaybackService's MediaSession callback. `action` is one of
     // play / pause / next / prev / forward / backward / seek:<ms>. Forwarded
     // to window.__mediaControl in player.js, which drives the <audio> element.
+    // Targets the retained WebView directly (#210) so lock-screen / headphone
+    // controls keep working even mid-recreation, when no activity is current.
     static void dispatchMedia(final String action) {
-        MainActivity a = (sRef != null) ? sRef.get() : null;
-        if (a != null) a.runMediaControl(action);
+        final WebView wv = sWebView;
+        if (wv == null || action == null) return;
+        // action is a fixed vocabulary (ascii + digits); single-quote safe.
+        wv.post(() -> wv.evaluateJavascript(
+            "window.__mediaControl && window.__mediaControl('" + action + "')", null));
     }
 
-    private void runMediaControl(final String action) {
-        if (action == null) return;
-        runOnUiThread(() -> {
-            if (webView == null) return;
-            // action is a fixed vocabulary (ascii + digits); single-quote safe.
-            webView.evaluateJavascript(
-                "window.__mediaControl && window.__mediaControl('" + action + "')", null);
-        });
-    }
-
-    private void startMediaService(Intent i) {
+    private static void startMediaService(android.content.Context c, Intent i) {
         try {
             if (PlaybackService.ACTION_STOP.equals(i.getAction())) {
-                startService(i);  // not foreground — service will stop itself
+                c.startService(i);  // not foreground — service will stop itself
             } else if (android.os.Build.VERSION.SDK_INT >= 26) {
-                startForegroundService(i);
+                c.startForegroundService(i);
             } else {
-                startService(i);
+                c.startService(i);
             }
         } catch (Exception e) {
             android.util.Log.e("Ereader", "startMediaService failed", e);
         }
     }
+
+    // Page-driven window state that must survive activity recreation (#210):
+    // the reader asks for these once on boot; a fold would otherwise silently
+    // drop them with the old window.
+    private static boolean keepScreenOnWanted = false;
+    private static float brightnessWanted = -1f;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -162,6 +178,41 @@ public class MainActivity extends Activity {
             getWindow().setAttributes(layoutParams);
         }
 
+        // #210: re-apply page-driven window state that lived on the previous
+        // activity's window (recreation gets a fresh window with default flags).
+        if (keepScreenOnWanted) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+        if (brightnessWanted >= 0f) {
+            WindowManager.LayoutParams blp = getWindow().getAttributes();
+            blp.screenBrightness = brightnessWanted;
+            getWindow().setAttributes(blp);
+        }
+
+        // #210: adopt the retained WebView if one exists (fold/recreation) —
+        // NO reload, the live page carries over. Only a truly fresh process
+        // builds the WebView and loads "/" (where #198 rehydration applies).
+        if (sWebView == null) {
+            sWebCtx = new android.content.MutableContextWrapper(this);
+            webView = createRetainedWebView(sWebCtx);
+            sWebView = webView;
+            setContentView(webView);
+            webView.loadUrl("http://100.69.184.113:8090/");
+        } else {
+            sWebCtx.setBaseContext(this);
+            webView = sWebView;
+            android.view.ViewGroup parent = (android.view.ViewGroup) webView.getParent();
+            if (parent != null) parent.removeView(webView);
+            setContentView(webView);
+        }
+    }
+
+    // Build + fully wire the app's single retained WebView (#210). Static so
+    // nothing here captures the creating activity: clients and the JS bridge
+    // reach the CURRENT activity via cur()/sRef, or use the app context.
+    private static WebView createRetainedWebView(android.content.MutableContextWrapper ctx) {
+        final android.content.Context app = ctx.getApplicationContext();
+
         // Anonymous WebView subclass that suppresses the text-selection
         // floating toolbar (Copy / Share / Select All / Read Aloud / Web
         // Search) WITHOUT breaking selection itself.
@@ -184,7 +235,7 @@ public class MainActivity extends Activity {
         //     keep it invisible.
         //   - We forward onDestroyActionMode so Chromium's bookkeeping
         //     stays consistent and selection remains live.
-        webView = new WebView(this) {
+        WebView wv = new WebView(ctx) {
             @Override
             public ActionMode startActionMode(ActionMode.Callback callback) {
                 return super.startActionMode(wrapEmptyMenu(callback));
@@ -194,13 +245,11 @@ public class MainActivity extends Activity {
                 return super.startActionMode(wrapEmptyMenu(callback), type);
             }
         };
-        webView.setBackgroundColor(Color.BLACK);
-        webView.setFitsSystemWindows(false);
-        webView.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
+        wv.setBackgroundColor(Color.BLACK);
+        wv.setFitsSystemWindows(false);
+        wv.setScrollBarStyle(View.SCROLLBARS_INSIDE_OVERLAY);
 
-        setContentView(webView);
-
-        WebSettings webSettings = webView.getSettings();
+        WebSettings webSettings = wv.getSettings();
         webSettings.setJavaScriptEnabled(true);
         webSettings.setDomStorageEnabled(true);
         webSettings.setAllowFileAccess(true);
@@ -217,16 +266,18 @@ public class MainActivity extends Activity {
         // Allow <audio>/<video> to autoplay without a user gesture so ambient
         // reading music starts the moment an ebook opens. (#32)
         webSettings.setMediaPlaybackRequiresUserGesture(false);
-        webView.clearCache(true);
+        wv.clearCache(true);
 
-        webView.setWebViewClient(new OfflineShellWebViewClient());
+        wv.setWebViewClient(new OfflineShellWebViewClient(app));
         // Custom chrome client so <input type="file"> (e.g. book-cover Upload on
         // the Books page) actually opens the system photo picker. (#98)
-        webView.setWebChromeClient(new WebChromeClient() {
+        wv.setWebChromeClient(new WebChromeClient() {
             @Override
             public boolean onShowFileChooser(WebView view,
                                              ValueCallback<Uri[]> callback,
                                              FileChooserParams params) {
+                MainActivity a = cur();
+                if (a == null) return false;
                 // Drop any previous pending callback (cancel it) before storing ours.
                 if (filePathCallback != null) {
                     filePathCallback.onReceiveValue(null);
@@ -237,8 +288,8 @@ public class MainActivity extends Activity {
                     // page; wrap in a chooser so the user can pick gallery/files.
                     Intent intent = params.createIntent();
                     intent.addCategory(Intent.CATEGORY_OPENABLE);
-                    startActivityForResult(Intent.createChooser(intent, "Select image"),
-                                           REQUEST_FILE_CHOOSER);
+                    a.startActivityForResult(Intent.createChooser(intent, "Select image"),
+                                             REQUEST_FILE_CHOOSER);
                     return true;
                 } catch (Exception e) {
                     filePathCallback = null;
@@ -250,14 +301,14 @@ public class MainActivity extends Activity {
         // JS bridge: lets reader.html show/hide the Android system bars so
         // the user can use system gestures (swipe up to go home, etc) when
         // the in-app reader menu is open. Exposed as `window.Android`.
-        webView.addJavascriptInterface(new JsBridge(), "Android");
+        wv.addJavascriptInterface(new JsBridge(app), "Android");
 
         // Hand off any non-HTML download (e.g. the APK self-update URL) to the
         // system DownloadManager instead of silently dropping it. Guard
         // against non-http(s) schemes (blob:, data:, file:) — DownloadManager
         // throws IllegalArgumentException on those, which would crash the
         // WebView process.
-        webView.setDownloadListener(new DownloadListener() {
+        wv.setDownloadListener(new DownloadListener() {
             @Override
             public void onDownloadStart(String url, String userAgent,
                                         String contentDisposition,
@@ -271,12 +322,12 @@ public class MainActivity extends Activity {
                     DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED);
                 req.setDestinationInExternalPublicDir(
                     Environment.DIRECTORY_DOWNLOADS, filename);
-                DownloadManager dm = (DownloadManager) getSystemService(DOWNLOAD_SERVICE);
+                DownloadManager dm = (DownloadManager) app.getSystemService(DOWNLOAD_SERVICE);
                 dm.enqueue(req);
             }
         });
 
-        webView.loadUrl("http://100.69.184.113:8090/");
+        return wv;
     }
 
     // Return the picked image Uri(s) to the WebView's file input. Always pass a
@@ -305,7 +356,20 @@ public class MainActivity extends Activity {
     // assets/web by build-app.sh from web/.
     private static final String SHELL_HOST = "100.69.184.113";
 
-    private class OfflineShellWebViewClient extends WebViewClient {
+    // Static (#210): the client lives on the retained WebView, so it must not
+    // capture any activity — assets/connectivity come from the app context, and
+    // the forced-offline latch lives here (it was an activity field).
+    private static class OfflineShellWebViewClient extends WebViewClient {
+        private final android.content.Context app;
+        // Set when the main page failed to load from the network (offline, or
+        // the host is unreachable even though ConnectivityManager reports
+        // "online"). While true, shouldInterceptRequest serves the bundled
+        // shell even if isOnline() is true — so we recover regardless of the
+        // connectivity read. Reset on the next successful page load. (#23)
+        private boolean forcedOfflineReload = false;
+
+        OfflineShellWebViewClient(android.content.Context app) { this.app = app; }
+
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
             try {
@@ -315,7 +379,7 @@ public class MainActivity extends Activity {
                 // Online → load live (preserves live-reload of the web shell) —
                 // unless a prior main-frame load already failed, in which case
                 // we force the bundled shell regardless of the connectivity read.
-                if (isOnline() && !forcedOfflineReload) return null;
+                if (isOnline(app) && !forcedOfflineReload) return null;
                 // Offline → try to serve the request from the bundled shell.
                 // NOTE: the root URL ("http://host:8090") has an EMPTY path, not
                 // "/", so we must treat null/""/"/" all as the offline home.
@@ -325,7 +389,7 @@ public class MainActivity extends Activity {
                 }
                 String assetPath = "web" + path;   // e.g. web/reader.html, web/vendor/pdf.min.js
                 try {
-                    InputStream is = getAssets().open(assetPath);
+                    InputStream is = app.getAssets().open(assetPath);
                     String mime = mimeFor(path);
                     android.util.Log.i("EreaderOffline", "served from bundle: " + path);
                     return new WebResourceResponse(mime, isTextMime(mime) ? "utf-8" : null, is);
@@ -362,7 +426,7 @@ public class MainActivity extends Activity {
                     String path = failed.getPath();
                     if (path != null && !path.isEmpty() && !path.equals("/")) {
                         try {
-                            getAssets().open("web" + path).close();
+                            app.getAssets().open("web" + path).close();
                             target = failed.toString();
                         } catch (IOException notBundled) { /* root fallback */ }
                     }
@@ -370,7 +434,7 @@ public class MainActivity extends Activity {
                 android.util.Log.i("EreaderOffline",
                     "main-frame load failed → bundled shell fallback: " + target);
                 final String t = target;
-                runOnUiThread(() -> view.loadUrl(t));
+                view.post(() -> view.loadUrl(t));
                 return;
             }
             super.onReceivedError(view, request, error);
@@ -385,9 +449,9 @@ public class MainActivity extends Activity {
         }
     }
 
-    private boolean isOnline() {
+    private static boolean isOnline(android.content.Context ctx) {
         try {
-            ConnectivityManager cm = (ConnectivityManager) getSystemService(CONNECTIVITY_SERVICE);
+            ConnectivityManager cm = (ConnectivityManager) ctx.getSystemService(CONNECTIVITY_SERVICE);
             if (cm == null) return true;            // can't tell → assume online (load live)
             Network n = cm.getActiveNetwork();
             if (n == null) return false;
@@ -519,30 +583,43 @@ public class MainActivity extends Activity {
         };
     }
 
-    /** JS bridge surface exposed to the WebView as `window.Android`. */
-    private class JsBridge {
+    /** JS bridge surface exposed to the WebView as `window.Android`.
+     * Static (#210): it lives on the retained WebView and outlives any single
+     * activity — window-bound operations (bars, wake lock, brightness) target
+     * the CURRENT activity via cur(); service intents + file sharing use the
+     * application context. */
+    private static class JsBridge {
+        private final android.content.Context app;
+        private final android.os.Handler main =
+            new android.os.Handler(android.os.Looper.getMainLooper());
+        JsBridge(android.content.Context app) { this.app = app; }
+
         @JavascriptInterface
         public void showSystemBars() {
             systemBarsRequested = true;
-            runOnUiThread(MainActivity.this::releaseImmersive);
+            main.post(() -> { MainActivity a = cur(); if (a != null) a.releaseImmersive(); });
         }
         @JavascriptInterface
         public void hideSystemBars() {
             systemBarsRequested = false;
-            runOnUiThread(MainActivity.this::applyImmersive);
+            main.post(() -> { MainActivity a = cur(); if (a != null) a.applyImmersive(); });
         }
         // Keep the screen on while reading. Honours the "Keep screen awake"
         // toggle in Settings. Sets/clears FLAG_KEEP_SCREEN_ON on the
         // activity window, which is the canonical way to inhibit the OS
         // display timeout (the Web Wake Lock API silently no-ops in many
         // Android WebView configurations, so this is the reliable path).
+        // The wanted state is remembered so a recreated activity (#210 fold)
+        // re-applies it to its fresh window.
         @JavascriptInterface
         public void keepScreenOn(final boolean on) {
-            runOnUiThread(() -> {
+            keepScreenOnWanted = on;
+            main.post(() -> {
+                MainActivity a = cur(); if (a == null) return;
                 if (on) {
-                    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    a.getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 } else {
-                    getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    a.getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                 }
             });
         }
@@ -552,10 +629,12 @@ public class MainActivity extends Activity {
         // only applies while this app is foreground — exactly like a lamp app.
         @JavascriptInterface
         public void setBrightness(final float level) {
-            runOnUiThread(() -> {
-                WindowManager.LayoutParams lp = getWindow().getAttributes();
+            brightnessWanted = level;
+            main.post(() -> {
+                MainActivity a = cur(); if (a == null) return;
+                WindowManager.LayoutParams lp = a.getWindow().getAttributes();
                 lp.screenBrightness = level;
-                getWindow().setAttributes(lp);
+                a.getWindow().setAttributes(lp);
             });
         }
         // ---- Background audiobook playback + media controls ----
@@ -565,13 +644,13 @@ public class MainActivity extends Activity {
         // mediaStart: begin/refresh the session with this book's metadata.
         @JavascriptInterface
         public void mediaStart(String title, String artist, String coverUrl) {
-            Intent i = new Intent(MainActivity.this, PlaybackService.class)
+            Intent i = new Intent(app, PlaybackService.class)
                     .setAction(PlaybackService.ACTION_START);
             i.putExtra("title", title);
             i.putExtra("artist", artist);
             i.putExtra("coverUrl", coverUrl);
             i.putExtra("playing", true);
-            startMediaService(i);
+            startMediaService(app, i);
         }
         // mediaState: push the current play/pause state + book-global position
         // (seconds), total duration (seconds) and playback rate. While the
@@ -580,28 +659,28 @@ public class MainActivity extends Activity {
         @JavascriptInterface
         public void mediaState(final boolean playing, final double position,
                                final double duration, final double rate) {
-            runOnUiThread(() -> {
+            main.post(() -> {
                 if (PlaybackService.isRunning()) {
                     PlaybackService.applyState(playing, position, duration, rate);
                     return;
                 }
-                Intent i = new Intent(MainActivity.this, PlaybackService.class)
+                Intent i = new Intent(app, PlaybackService.class)
                         .setAction(PlaybackService.ACTION_UPDATE);
                 i.putExtra("playing", playing);
                 i.putExtra("position", position);
                 i.putExtra("duration", duration);
                 i.putExtra("rate", rate);
-                startMediaService(i);
+                startMediaService(app, i);
             });
         }
         // mediaStop: tear down the session + notification (player closed).
         @JavascriptInterface
         public void mediaStop() {
-            runOnUiThread(() -> {
+            main.post(() -> {
                 if (PlaybackService.isRunning()) { PlaybackService.stopFromBridge(); return; }
-                Intent i = new Intent(MainActivity.this, PlaybackService.class)
+                Intent i = new Intent(app, PlaybackService.class)
                         .setAction(PlaybackService.ACTION_STOP);
-                startMediaService(i);
+                startMediaService(app, i);
             });
         }
         // Share a PNG image generated client-side (canvas → base64). The
@@ -614,17 +693,17 @@ public class MainActivity extends Activity {
         // Drive, etc.
         @JavascriptInterface
         public void shareImage(final String base64Png, final String chooserTitle) {
-            runOnUiThread(() -> {
+            main.post(() -> {
                 try {
                     byte[] bytes = android.util.Base64.decode(base64Png, android.util.Base64.DEFAULT);
-                    java.io.File dir = new java.io.File(getCacheDir(), "share");
+                    java.io.File dir = new java.io.File(app.getCacheDir(), "share");
                     if (!dir.exists()) dir.mkdirs();
                     java.io.File outFile = new java.io.File(dir,
                         "greatreads-quote-" + System.currentTimeMillis() + ".png");
                     java.io.FileOutputStream fos = new java.io.FileOutputStream(outFile);
                     try { fos.write(bytes); } finally { fos.close(); }
                     android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
-                        MainActivity.this, getPackageName() + ".fileprovider", outFile);
+                        app, app.getPackageName() + ".fileprovider", outFile);
                     Intent send = new Intent(Intent.ACTION_SEND);
                     send.setType("image/png");
                     send.putExtra(Intent.EXTRA_STREAM, uri);
@@ -632,7 +711,7 @@ public class MainActivity extends Activity {
                     Intent chooser = Intent.createChooser(send,
                         chooserTitle != null && !chooserTitle.isEmpty() ? chooserTitle : "Share quote");
                     chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
-                    startActivity(chooser);
+                    app.startActivity(chooser);
                 } catch (Exception e) {
                     android.util.Log.e("Ereader", "shareImage failed", e);
                 }
