@@ -1284,7 +1284,7 @@ async function libbyLoadRich(c) {
     const chips = (b.subjects || []).slice(0, 10).map(s => `<span class="badge bg-light text-dark border me-1 mb-1">${esc(s)}</span>`).join('');
     const desc = (b.description || '').trim();
     const descHtml = desc
-        ? `<div class="small mt-2" style="max-height:9em;overflow:auto;white-space:pre-line;">${esc(desc)}</div>` : '';
+        ? `<div class="small mt-2" style="max-height:9em;overflow:auto;white-space:pre-line;text-align:justify;hyphens:auto;">${esc(desc)}</div>` : '';
     box.innerHTML = (ratings.length ? `<div class="mb-1">${ratings.join(' ')}</div>` : '')
         + (meta.length ? `<div class="small text-muted">${meta.join(' · ')}</div>` : '')
         + (chips ? `<div class="mt-2">${chips}</div>` : '')
