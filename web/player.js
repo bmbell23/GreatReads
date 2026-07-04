@@ -43,6 +43,11 @@ function loadEdition() {
 const $ = (id) => document.getElementById(id);
 const audio = $('audio');
 
+// Mark this audiobook as open so a cold WebView relaunch lands back in the
+// player instead of Home (#198). Cleared on real navigation away, refreshed on
+// backgrounding + periodic saves — see active-book.js.
+if (window.ActiveBook) ActiveBook.trackPage();
+
 // Session state (always reflects the CURRENTLY-loaded part).
 let session = null, sid = null, chapters = [], duration = 0;
 let hls = null, lastSyncAt = 0, syncTimer = null, pendingSeek = 0;
@@ -578,7 +583,13 @@ $('next-ch').addEventListener('click', nextChapter);
 // Speed slider — live update + persist (propagates across books via localStorage).
 $('speed').addEventListener('input', (e) => applySpeed(e.target.value));
 // Leaving the player stops playback (close session + save final position).
-$('back-btn').addEventListener('click', () => { doClose(); history.length > 1 ? history.back() : (location.href = 'index.html'); });
+$('back-btn').addEventListener('click', () => {
+    // Deliberate exit — stop the "/" bootstrap bouncing back into the player
+    // (#198). pagehide also clears; this is the explicit belt-and-braces path.
+    if (window.ActiveBook) ActiveBook.clear();
+    doClose();
+    history.length > 1 ? history.back() : (location.href = 'index.html');
+});
 
 // ---------- In-book reader / search overlay (dual-format works) ----------
 // Hosts reader.html in an iframe so the audio in THIS document keeps playing.
@@ -970,6 +981,9 @@ function saveReadingState() {
 }
 
 function saveProgress() {
+    // Keep the active-book marker fresh during long locked-screen listening so
+    // the "/" bootstrap's staleness check still passes after hours (#198).
+    if (window.ActiveBook) ActiveBook.set();
     // Don't persist until the resume seek has landed — otherwise a save fired
     // during the load window (pause/leave/sync) writes ~0 over the real spot.
     if (!PROGRESS_KEY || !resumeApplied) return;

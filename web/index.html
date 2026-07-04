@@ -842,7 +842,12 @@
     </div>
 
     <script src="quotes.js?v=1"></script>
+    <script src="active-book.js?v=1"></script>
     <script>
+        // Landing on the library means no book is open any more — drop the
+        // active-book marker so the "/" bootstrap stops redirecting into a
+        // book the user already backed out of (#198).
+        if (window.ActiveBook) ActiveBook.clear();
         // Build stamp: YYMMDD-HH:MM, generated fresh each page load so it
         // always reflects when the user last refreshed (also serves as a
         // lightweight cache-bust token). Tapping it navigates to the APK.

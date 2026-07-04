@@ -1287,6 +1287,7 @@
     <script src="vendor/pdf.min.js"></script>
     <script src="vendor/jszip.min.js"></script>
     <script src="quotes.js?v=1"></script>
+    <script src="active-book.js?v=1"></script>
 </head>
 <body>
     <!-- Brightness dim overlay (#50). Fallback dimmer used when the native
@@ -1792,6 +1793,11 @@
         const title = urlParams.get('title') || 'Book';
         const API_URL = 'http://100.69.184.113:8092/api';
 
+        // Mark this book as open so a cold WebView relaunch lands back here
+        // instead of Home (#198). Cleared on real navigation away, refreshed
+        // on backgrounding — see active-book.js.
+        if (window.ActiveBook) ActiveBook.trackPage();
+
         // ---- Ambient reading music (#32) -----------------------------------
         // Single play/pause (top-left), track picker in Reading Options. Track
         // choice + position are remembered per book; loops at the end. Auto-plays
@@ -1956,6 +1962,10 @@
         if (isDualPage) document.body.classList.add('dual-page');
 
         function goBack() {
+            // Leaving the book deliberately — stop the "/" bootstrap from
+            // bouncing back into it (#198). pagehide also clears; this is the
+            // explicit belt-and-braces path.
+            if (window.ActiveBook) ActiveBook.clear();
             // Clear 180° flip before navigating away
             document.body.style.transform = '';
             // Hand brightness back to the OS (auto-brightness) on the way out (#50).

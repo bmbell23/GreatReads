@@ -337,8 +337,28 @@ public class MainActivity extends Activity {
             // IndexedDB cache stays visible). Guard against a reload loop.
             if (request != null && request.isForMainFrame() && !forcedOfflineReload) {
                 forcedOfflineReload = true;
-                android.util.Log.i("EreaderOffline", "main-frame load failed → bundled shell fallback");
-                runOnUiThread(() -> view.loadUrl("http://100.69.184.113:8090/"));
+                // Retry the URL that actually FAILED, not the root — reloading
+                // root dumped the user on Home mid-book whenever a transient
+                // blip (e.g. Tailscale reconnecting right after unlock) broke a
+                // WebView-initiated reload of reader.html/player.html (#198).
+                // Only retry same-URL when the bundled shell can serve that
+                // path; otherwise (API pages, /greatreads/…) fall back to root
+                // as before so the user at least gets the offline home.
+                String target = "http://" + SHELL_HOST + ":8090/";
+                Uri failed = request.getUrl();
+                if (failed != null && SHELL_HOST.equals(failed.getHost())) {
+                    String path = failed.getPath();
+                    if (path != null && !path.isEmpty() && !path.equals("/")) {
+                        try {
+                            getAssets().open("web" + path).close();
+                            target = failed.toString();
+                        } catch (IOException notBundled) { /* root fallback */ }
+                    }
+                }
+                android.util.Log.i("EreaderOffline",
+                    "main-frame load failed → bundled shell fallback: " + target);
+                final String t = target;
+                runOnUiThread(() -> view.loadUrl(t));
                 return;
             }
             super.onReceivedError(view, request, error);
