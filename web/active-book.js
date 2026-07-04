@@ -49,6 +49,27 @@
         trackPage: function () {
             if (!isTop) return;
             this.set();
+            // Back-exit trap (#208): after a cold rehydration this book page is
+            // the WebView's ONLY history entry (the "/" bootstrap navigated with
+            // location.replace), so hardware/gesture back exits the app — which
+            // then relaunches, rehydrates back into the book, and traps the
+            // user. Seed a synthetic "exit to Home" entry beneath us: popping to
+            // it clears the marker and lands on Home instead of exiting. The
+            // reader's overlay back-trap stacks its own sentinel on TOP of ours
+            // and its popstate handler no-ops when no overlay is open, so the
+            // two coexist.
+            if (history.length <= 1) {
+                try {
+                    history.replaceState({ grExitHome: true }, '');
+                    history.pushState({ grBook: true }, '');
+                    window.addEventListener('popstate', function () {
+                        if (history.state && history.state.grExitHome) {
+                            window.ActiveBook.clear();
+                            location.replace('/greatreads/');
+                        }
+                    });
+                } catch (_) {}
+            }
             window.addEventListener('pagehide', function (e) {
                 if (!e.persisted) window.ActiveBook.clear();
             });

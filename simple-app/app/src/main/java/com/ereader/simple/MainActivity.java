@@ -645,7 +645,18 @@ public class MainActivity extends Activity {
         if (webView.canGoBack()) {
             webView.goBack();
         } else {
-            super.onBackPressed();
+            // #208: a cold-rehydrated book page is the WebView's only history
+            // entry, so "back" used to exit the app — which relaunched and
+            // rehydrated straight back into the book (an exit trap). From a
+            // book page with no history, go Home instead. NOT "/": the root
+            // bootstrap would bounce right back into the book via the
+            // still-fresh active-book marker.
+            String u = webView.getUrl();
+            if (u != null && (u.contains("reader.html") || u.contains("player.html"))) {
+                webView.loadUrl("http://100.69.184.113:8090/greatreads/");
+            } else {
+                super.onBackPressed();
+            }
         }
     }
 
