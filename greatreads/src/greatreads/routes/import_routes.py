@@ -340,6 +340,17 @@ async def abs_backfill_word_counts(db: Session = Depends(get_db)):
         raise HTTPException(status_code=500, detail=str(exc))
 
 
+@router.post("/abs/backfill-durations")
+async def abs_backfill_durations(db: Session = Depends(get_db)):
+    """Fill audio_duration_seconds from ABS for imported audiobooks missing it (#213)."""
+    from ..services.import_service import backfill_abs_durations
+    try:
+        result = backfill_abs_durations(db)
+        return {"status": "ok", **result}
+    except Exception as exc:
+        raise HTTPException(status_code=500, detail=str(exc))
+
+
 @router.post("/abs/backfill-narrators")
 async def abs_backfill_narrators(db: Session = Depends(get_db)):
     """One-time: fill Narrator from ABS for already-imported audiobooks missing it (#190).

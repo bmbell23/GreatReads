@@ -56,6 +56,7 @@ def _ensure_columns():
         "books": {
             "description": "TEXT",       # synopsis (#149)
             "public_rating": "REAL",     # community rating, separate from user ratings (#149)
+            "audio_duration_seconds": "INTEGER",   # audiobook length from ABS (#213)
         },
     }
     insp = inspect(engine)

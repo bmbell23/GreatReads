@@ -817,6 +817,52 @@ def backfill_abs_narrators(db: Session) -> dict:
     return {"updated": updated}
 
 
+def backfill_abs_durations(db: Session) -> dict:
+    """Fill ``audio_duration_seconds`` for ABS-imported books missing it (#213).
+
+    Same source + part-summing as the word-count backfill: ABS's own
+    ``b.duration`` (seconds, computed by ABS from the audio files — single- or
+    multi-file items alike); multi-part editions ('id1||id2||id3' external ids)
+    sum across their parts. Never clobbers an existing value.
+    """
+    conn = _ro_connect(settings.abs_db_path)
+    if conn is None:
+        raise RuntimeError("ABS DB not accessible")
+    dur_rows = conn.execute(
+        "SELECT li.id, b.duration FROM libraryItems li"
+        " JOIN books b ON li.mediaId = b.id"
+        " WHERE li.mediaType = 'book'"
+    ).fetchall()
+    conn.close()
+    dur_map: dict[str, float] = {r[0]: r[1] for r in dur_rows if r[1]}
+
+    records = (
+        db.query(ExternalImport)
+        .filter(ExternalImport.source == "audiobookshelf")
+        .all()
+    )
+    # All part ids per book (multi-part groups may span several import rows).
+    ids_by_book: dict[int, set[str]] = {}
+    for rec in records:
+        ids_by_book.setdefault(rec.book_id, set()).update(rec.external_id.split("||"))
+
+    updated = skipped = no_abs_data = 0
+    for book_id, part_ids in ids_by_book.items():
+        book = db.query(Book).get(book_id)
+        if book is None or book.audio_duration_seconds:
+            skipped += 1
+            continue
+        total_seconds = sum(dur_map.get(pid, 0.0) for pid in part_ids)
+        if not total_seconds:
+            no_abs_data += 1
+            continue
+        book.audio_duration_seconds = int(total_seconds)
+        updated += 1
+    if updated:
+        db.commit()
+    return {"updated": updated, "skipped": skipped, "no_abs_data": no_abs_data}
+
+
 def backfill_abs_word_counts(db: Session) -> dict:
     """Estimate and back-fill word counts for ABS-imported books that have none.
 
@@ -1271,6 +1317,7 @@ def import_abs_book(
             "series_number": _parse_seq(row[10]),
             "word_count": estimated_wc,
             "narrator": _parse_narrators(row[12]),   # #190
+            "audio_duration_seconds": int(total_duration_s) if total_duration_s else None,   # #213
             "cover": False,
         }
         if override:
@@ -1313,6 +1360,9 @@ def import_abs_book(
         # Narrator: fill from ABS if we don't have one (never clobber, #190)
         if not getattr(book, "narrator", None):
             book.narrator = _parse_narrators(row[12])
+        # Audio duration: fill from ABS if missing (parts already summed, #213)
+        if total_duration_s and not getattr(book, "audio_duration_seconds", None):
+            book.audio_duration_seconds = int(total_duration_s)
         # Apply explicit user-selected field overrides (take precedence over auto-merge)
         if override:
             for field in ('series', 'series_number', 'universe'):

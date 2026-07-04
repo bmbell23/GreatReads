@@ -1128,6 +1128,12 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     if (book.word_count) lenParts.push(`${Number(book.word_count).toLocaleString()} words`);
     else if (book.page_count) lenParts.push(`≈ ${Math.round(book.page_count * 300 / 1000)}k words (est.)`);
     if (book.page_count) lenParts.push(`${Number(book.page_count).toLocaleString()} pages`);
+    // Audiobook runtime from ABS (#213) — '13h 42m' (or '54m' under an hour).
+    if (book.audio_duration_seconds) {
+        const totMin = Math.round(book.audio_duration_seconds / 60);
+        const h = Math.floor(totMin / 60), m = totMin % 60;
+        lenParts.push(`🎧 ${h ? `${h}h ${m}m` : `${m}m`}`);
+    }
     if (lenParts.length) rows.push(['Length', lenParts.join(' • ')]);
     // Ratings (#150): your private rating (mean of each rated read's overall — the
     // average of the 5 core sub-ratings, EXCLUDING spice/horror — averaged across the

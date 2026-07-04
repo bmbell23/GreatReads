@@ -33,6 +33,7 @@ class Book(Base):
     public_rating = Column(Float)                # community/public rating 0–5, SEPARATE from the
                                                  # user's own ratings (which live on Reading)
     narrator = Column(String)                    # audiobook narrator(s), from ABS / enrichment (#190)
+    audio_duration_seconds = Column(Integer)     # total audiobook length from ABS, parts summed (#213)
 
     # Relationships
     readings = relationship("Reading", back_populates="book", cascade="all, delete-orphan")
@@ -91,6 +92,7 @@ class Book(Base):
             "description": self.description,
             "public_rating": self.public_rating,
             "narrator": self.narrator,
+            "audio_duration_seconds": self.audio_duration_seconds,
         }
 
 
