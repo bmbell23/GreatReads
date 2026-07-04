@@ -2140,18 +2140,19 @@ function renderGoalChart() {
     const metricName = isTime ? 'Time' : 'Words';
     let title;
     if (goalGran === 'today') {
-        // Intraday (#83): 96 fifteen-minute slots midnight→midnight for the selected
-        // day (default today); each session's minutes + words split across the slots
-        // it overlaps, stacked by format. Lazy-loads the day's sessions then re-renders.
+        // Intraday (#83, granularity per #209): 24 one-hour slots midnight→midnight
+        // for the selected day (default today); each session's minutes + words split
+        // across the slots it overlaps, stacked by format. Lazy-loads the day's
+        // sessions then re-renders.
         const chartDate = goalSelected || _todayStr();
         if (sessionsByDate[chartDate] === undefined) {
             ensureDaySessions(chartDate).then(() => { if (goalGran === 'today') renderGoalChart(); });
         }
         const sess = sessionsByDate[chartDate] || [];
-        const SLOTS = 96, SLOT_MS = 15 * 60000;
+        const SLOTS = 24, SLOT_MS = 60 * 60000;
         GOAL_FMTS.forEach(([f]) => { words[f] = new Array(SLOTS).fill(0); mins[f] = new Array(SLOTS).fill(0); });
         for (let s = 0; s < SLOTS; s++) {
-            labels.push((s % 4 === 0) ? String(Math.floor(s / 4)).padStart(2, '0') + ':00' : '');
+            labels.push(String(s).padStart(2, '0') + ':00');
             goalLine.push(0);
         }
         const [yy, mm, dd] = chartDate.split('-').map(Number);
@@ -2262,14 +2263,14 @@ function renderGoalChart() {
 
     // In time mode, label the y-axis in whole hours only (e.g. "5h", not "5h 40m").
     // Snap ticks to an hour step sized so the axis stays uncluttered. EXCEPT the intraday
-    // 'Today' view: its x-axis is 15-min buckets so a bar tops out at ~15 min — label in
-    // minutes with 5-min ticks up to 15 (#138 follow-up), not near-zero hours.
+    // 'Today' view: its x-axis is 1-hour buckets (#209) so a bar tops out at ~60 min —
+    // label in minutes with 15-min ticks up to 60, not near-zero hours.
     const isTodayTime = isTime && goalGran === 'today';
     const yTicks = { callback: v => isTime
         ? (isTodayTime ? Math.round(v) + 'm' : Math.round(v / 60) + 'h')
         : (v >= 1000 ? (v / 1000) + 'k' : v) };
     if (isTodayTime) {
-        yTicks.stepSize = 5;   // 0 / 5 / 10 / 15 minutes
+        yTicks.stepSize = 15;   // 0 / 15 / 30 / 45 / 60 minutes
     } else if (isTime) {
         const maxStack = Math.max(0, ...labels.map((_, i) => GOAL_FMTS.reduce((s, [f]) => s + (mins[f][i] || 0), 0)));
         const stepH = (maxStack / 60) <= 8 ? 1 : Math.ceil((maxStack / 60) / 8);
@@ -2285,7 +2286,7 @@ function renderGoalChart() {
             plugins: { legend: { position: 'top' },
                 tooltip: { mode: 'index', intersect: false, callbacks: { label: tooltipLabel, footer: tooltipFooter } } },
             scales: { x: { stacked: true }, y: { stacked: true, beginAtZero: true, ticks: yTicks,
-                ...(isTodayTime ? { suggestedMax: 15 } : {}) } } }
+                ...(isTodayTime ? { suggestedMax: 60 } : {}) } } }
     });
 }
 
