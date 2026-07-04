@@ -528,11 +528,34 @@ async def libby_download_async(
     }
 
     async def _run():
+        from ..services.event_log_service import log_event
         try:
             async with httpx.AsyncClient(timeout=_DOWNLOAD_TIMEOUT) as client:
-                await client.post(f"{LIBBY_ENGINE_URL}/api/download", json=body)
+                resp = await client.post(f"{LIBBY_ENGINE_URL}/api/download", json=body)
+            try:
+                data = resp.json() or {}
+            except Exception:
+                data = {}
+            # Terminal outcome into the activity log (#214): the failure reason
+            # (library, card, real cause) used to live only in the engine log.
+            if resp.status_code < 400 and data.get("success"):
+                log_event("libby", "borrow", level="success", title=payload.title or "",
+                          detail={"request_id": request_id, "file": data.get("filename"),
+                                  "library": data.get("library"),
+                                  "returned": bool(data.get("returned_now"))})
+            else:
+                log_event("libby", "borrow_failed", level="error", title=payload.title or "",
+                          detail={"request_id": request_id,
+                                  "library": data.get("library"),
+                                  "card_id": data.get("card_id"),
+                                  "error": str(data.get("error") or f"HTTP {resp.status_code}")[:400]})
         except Exception as exc:
             logger.warning("async download %s failed: %s", request_id, exc)
+            try:
+                log_event("libby", "borrow_failed", level="error", title=payload.title or "",
+                          detail={"request_id": request_id, "error": str(exc)[:200]})
+            except Exception:
+                pass
         finally:
             _bg_downloads.discard(task)
 
@@ -568,6 +591,7 @@ async def libby_download_status(request_id: str, current_user: User = Depends(ge
         "found": True, "done": ok or failed, "ok": ok, "failed": failed,
         "status": statuses[-1] if statuses else None,
         "detail": details[-1] if details else None,
+        "library": entry.get("library"),   # #214: name the library in UI feedback
         "returned": "Returned" in statuses,
     }
 

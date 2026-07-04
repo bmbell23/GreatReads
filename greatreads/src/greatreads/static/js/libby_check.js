@@ -193,6 +193,22 @@ const LIBBY_FORMAT_SPECS = [
     { media: 'ebook', label: 'Ebook', icon: 'fa-book', color: '#0d6efd', fn: 'libbyBorrow' },
     { media: 'audiobook', label: 'Audiobook', icon: 'fa-headphones', color: '#FF6600', fn: 'libbyBorrowAudiobook' },
 ];
+// #214: per-format library selection (media → cardId). The old code silently
+// borrowed from `_libbyBestCard` with no visibility or choice — a library with
+// broken website creds (Pueblo) was impossible to route around. Reset per popup.
+let _libbyFmtSel = {};
+function _libbyFmtLibs(fmt) {
+    return (fmt.libraries || []).slice().sort((a, b) => (b.isAvailable ? 1 : 0) - (a.isAvailable ? 1 : 0));
+}
+function _libbyFmtSelected(media, fmt) {
+    const libs = _libbyFmtLibs(fmt);
+    const want = _libbyFmtSel[media];
+    return libs.find(l => String(l.cardId) === String(want)) || libs[0] || null;
+}
+function libbyFmtPick(media, cardId) {
+    _libbyFmtSel[media] = cardId;
+    libbyRenderAction();   // Borrow vs Place-hold follows the chosen library
+}
 function libbyFormatsHtml(c) {
     const f = c.formats || {};
     const owned = libbyIsOwned(c);
@@ -209,21 +225,34 @@ function libbyFormatsHtml(c) {
             }
             continue;
         }
-        const card = _libbyBestCard(fmt);
+        const libs = _libbyFmtLibs(fmt);
+        const sel = _libbyFmtSelected(s.media, fmt);
+        const card = sel ? String(sel.cardId) : '';
         let action, avail;
         if (fmt.onHold) {
             action = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>On hold</span>';
             avail = '<span class="text-info small">On hold</span>';
-        } else if (fmt.isAvailable) {
+        } else if (sel && sel.isAvailable) {
             const cls = owned ? 'btn-outline-secondary' : 'btn-primary';
             action = `<button class="btn btn-sm ${cls}" onclick="${s.fn}('${fmt.titleId}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>${owned ? 'Borrow again' : 'Borrow &amp; Download'}</button>`;
             avail = '<span class="text-success small fw-semibold">Available now</span>';
         } else {
             action = `<button class="btn btn-sm btn-outline-warning" onclick="libbyPlaceHoldFmt('${fmt.titleId}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
-            avail = `<span class="text-warning small">${esc(libbyWaitText(fmt.estimatedWaitDays))}</span>`;
+            avail = `<span class="text-warning small">${esc(libbyWaitText(sel ? sel.estimatedWaitDays : fmt.estimatedWaitDays))}</span>`;
         }
-        rows.push(`<div class="d-flex align-items-center justify-content-between border rounded px-2 py-1 mb-1">
-            <span>${label} · ${avail}</span>${action}</div>`);
+        // Library chooser (#214): always show WHERE this borrow/hold goes — a
+        // select when there's a choice, plain text when there's exactly one.
+        let fromHtml = '';
+        if (libs.length > 1) {
+            const opts = libs.map(l =>
+                `<option value="${esc(String(l.cardId))}"${String(l.cardId) === card ? ' selected' : ''}>${esc((l.key || '').toUpperCase())} — ${l.isAvailable ? 'available now' : esc(libbyWaitText(l.estimatedWaitDays))}</option>`).join('');
+            fromHtml = `<div class="small text-muted mt-1">from <select class="form-select form-select-sm d-inline-block w-auto py-0" style="font-size:.75rem;"
+                onchange="libbyFmtPick('${s.media}', this.value)">${opts}</select></div>`;
+        } else if (sel) {
+            fromHtml = `<div class="small text-muted mt-1">from ${esc((sel.key || '').toUpperCase())}</div>`;
+        }
+        rows.push(`<div class="border rounded px-2 py-1 mb-1">
+            <div class="d-flex align-items-center justify-content-between"><span>${label} · ${avail}</span>${action}</div>${fromHtml}</div>`);
     }
     return rows.length ? rows.join('') : '<div class="small text-muted">Not found on Libby.</div>';
 }
@@ -275,6 +304,7 @@ function libbyRenderAction() {
 // (book.series is blanked so the DB-only series strip doesn't duplicate ours.)
 async function openLibbyDetails(c) {
     libbyActive = c;
+    _libbyFmtSel = {};   // #214: library picks are per-popup
     // Resolve real GreatReads ownership BEFORE rendering so the "In library" state is
     // correct on first paint (no flicker / false positive from a pending match).
     if (c.grOwned == null) { try { await annotateLibbyOwnership([c]); } catch (e) { c.grOwned = false; } }
@@ -432,7 +462,7 @@ async function libbyBorrow(titleId, cardId, btn) {
         try { s = await GreatReads.apiCall('/libby/download-status?request_id=' + encodeURIComponent(reqId), { silent: true }); } catch (e) {}
         if (s && s.done) {
             if (s.ok) {
-                showToast(`“${c.title}” ebook downloaded — importing into GreatReads shortly.`, 'success');
+                showToast(`“${c.title}” ebook downloaded${s.library ? ' from ' + s.library : ''} — importing into GreatReads shortly.`, 'success');
                 if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Downloaded';
                 c.inLibrary = true;
                 if (typeof refreshImportBadge === 'function') refreshImportBadge();   // #137 — Store tray badge
