@@ -5919,6 +5919,16 @@
                 }
             } finally { _handlingPop = false; }
         });
+        // #208: the APK asks the page before routing back-to-Home. Close the
+        // top open overlay (return true = handled); no overlay → false and the
+        // APK navigates Home. Never let an exception read as "handled".
+        window.grHandleBack = function () {
+            try {
+                const top = _topOpenOverlay();
+                if (top) { top.close(); return true; }
+            } catch (_) {}
+            return false;
+        };
 
         async function _proxyJSON(url) {
             const r = await fetch(_proxied(url));

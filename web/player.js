@@ -661,6 +661,16 @@ function closeReader() {
 }
 $('search-btn').addEventListener('click', () => openReader(true));
 $('ro-back').addEventListener('click', closeReader);
+// #208: the APK asks the page before routing back-to-Home. If the dual-format
+// ebook overlay is open, close it (handled — audio unaffected); otherwise
+// unhandled and the APK navigates Home (the normal player exit: saves progress
+// and ends the session, same as the on-screen back button).
+window.grHandleBack = function () {
+    try {
+        if (readerOverlay.classList.contains('open')) { closeReader(); return true; }
+    } catch (_) {}
+    return false;
+};
 
 audio.addEventListener('play', () => { reflectPlayState(); lastSyncAt = Date.now(); startSync(); startAutoBm(); startHb(); });
 audio.addEventListener('pause', () => { reflectPlayState(); sync(); stopSync(); stopAutoBm(); stopHb(); });

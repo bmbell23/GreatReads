@@ -642,21 +642,30 @@ public class MainActivity extends Activity {
 
     @Override
     public void onBackPressed() {
+        // #208: on a book page (reader/player), back ALWAYS goes Home — never
+        // exits the app, never walks WebView history. (History tricks don't
+        // work anyway: Chromium skips history entries added without a user
+        // gesture, so canGoBack() lies on a cold-rehydrated page, and exiting
+        // just rehydrated straight back into the book — an exit trap.)
+        // The page gets first crack via window.grHandleBack() so an OPEN
+        // overlay (dictionary/wiki/ebook-on-player) closes instead; any other
+        // result — false, error, no hook — lands on Home. NOT "/": the root
+        // bootstrap would bounce right back into the book.
+        String u = webView.getUrl();
+        if (u != null && (u.contains("reader.html") || u.contains("player.html"))) {
+            webView.evaluateJavascript(
+                "(function(){try{return !!(window.grHandleBack&&window.grHandleBack());}catch(e){return false;}})()",
+                v -> {
+                    if (!"true".equals(v)) {
+                        webView.loadUrl("http://100.69.184.113:8090/greatreads/");
+                    }
+                });
+            return;
+        }
         if (webView.canGoBack()) {
             webView.goBack();
         } else {
-            // #208: a cold-rehydrated book page is the WebView's only history
-            // entry, so "back" used to exit the app — which relaunched and
-            // rehydrated straight back into the book (an exit trap). From a
-            // book page with no history, go Home instead. NOT "/": the root
-            // bootstrap would bounce right back into the book via the
-            // still-fresh active-book marker.
-            String u = webView.getUrl();
-            if (u != null && (u.contains("reader.html") || u.contains("player.html"))) {
-                webView.loadUrl("http://100.69.184.113:8090/greatreads/");
-            } else {
-                super.onBackPressed();
-            }
+            super.onBackPressed();
         }
     }
 
