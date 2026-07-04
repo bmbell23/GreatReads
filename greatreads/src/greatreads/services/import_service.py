@@ -82,6 +82,19 @@ def _word_tokens(s: str) -> frozenset:
     return frozenset(re.sub(r"[^\w\s]", "", s.lower().replace("&", " and ")).split())
 
 
+def _title_core_tokens(s: str) -> Optional[frozenset]:
+    """Tokens of the pre-subtitle head ('Dark Matter: A Novel' → {dark, matter}),
+    or None when the title has no ':' subtitle.
+
+    Used one-sidedly (#204): a subtitled title may match a bare title's full token
+    set, but two DIFFERENT subtitles ('Foo: Part One' vs 'Foo: Part Two') never
+    collapse to their shared head — both sides having a subtitle disables the rule."""
+    head, sep, tail = (s or "").partition(":")
+    if not sep or not head.strip() or not tail.strip():
+        return None
+    return _word_tokens(head)
+
+
 def _get_calibre_universe_map(conn: sqlite3.Connection) -> dict[int, str]:
     """Return {book_id: universe_name} from Calibre's custom Universe column."""
     try:
@@ -223,6 +236,7 @@ def _best_match(
       < 0.65 = not returned
     """
     in_title_tok = _word_tokens(title)
+    in_core_tok = _title_core_tokens(title)
     in_author_tok = _word_tokens(author)
     in_series_norm = (series or "").strip().lower()
     in_year = (year or "")[:4]
@@ -240,6 +254,18 @@ def _best_match(
         # --- Title similarity (Jaccard) — primary gate ---
         t_union = len(in_title_tok | book_title_tok)
         title_sim = len(in_title_tok & book_title_tok) / t_union if t_union else 0.0
+        # Subtitle tolerance (#204): 'Dark Matter: A Novel' vs 'Dark Matter' scores
+        # only 0.5 on full tokens (the subtitle inflates the union) and evaded the
+        # strong-identity floor, creating a duplicate. When exactly ONE side has a
+        # subtitle, also try its head against the other's full title.
+        if title_sim < 1.0:
+            book_core_tok = _title_core_tokens(book_title)
+            if in_core_tok is not None and book_core_tok is None:
+                u = len(in_core_tok | book_title_tok)
+                title_sim = max(title_sim, len(in_core_tok & book_title_tok) / u if u else 0.0)
+            elif book_core_tok is not None and in_core_tok is None:
+                u = len(in_title_tok | book_core_tok)
+                title_sim = max(title_sim, len(in_title_tok & book_core_tok) / u if u else 0.0)
         if title_sim < 0.5:
             continue  # titles are too different
 

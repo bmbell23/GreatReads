@@ -894,6 +894,15 @@ function _afRender(cfg) {
         } else {
             log.innerHTML = '';
         }
+        // Parked holds (#201): repeated identical failures back off to one retry per
+        // cooldown — surface them so a stuck hold is visible, not silently skipped.
+        const parked = cfg.parked || {};
+        const pk = Object.keys(parked);
+        if (pk.length) {
+            log.innerHTML += `<div class="mt-1 text-warning">Parked (retrying ~daily): ` +
+                pk.map(id => `${_afEsc(parked[id].title || id)} <span class="text-muted">— ${_afEsc(parked[id].error || '')}</span>`).join('; ') +
+                `</div>`;
+        }
     }
 }
 async function loadAutofulfill() {

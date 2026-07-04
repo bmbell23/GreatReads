@@ -124,11 +124,21 @@ async def libby_status(current_user: User = Depends(get_current_user)):
     """
     engine_reachable = True
     raw: dict = {}
+    ready_holds = None
     try:
         async with httpx.AsyncClient(timeout=15.0) as client:
             resp = await client.get(f"{LIBBY_ENGINE_URL}/api/status")
             resp.raise_for_status()
             raw = resp.json()
+            # Ready-hold count for the notification badge (#203). Engine-cached;
+            # best-effort — the health widget must not fail on a holds hiccup.
+            try:
+                hresp = await client.get(f"{LIBBY_ENGINE_URL}/api/holds")
+                if hresp.status_code < 400:
+                    holds = (hresp.json() or {}).get("holds", [])
+                    ready_holds = sum(1 for h in holds if h.get("isAvailable"))
+            except Exception:
+                pass
     except Exception as exc:
         logger.warning("libby_status: engine unreachable at %s: %s", LIBBY_ENGINE_URL, exc)
         engine_reachable = False
@@ -137,6 +147,7 @@ async def libby_status(current_user: User = Depends(get_current_user)):
     return {
         "engine_reachable": engine_reachable,
         "state": state,
+        "ready_holds": ready_holds,
         # `stale` == the Libby button should show a warning badge (§5).
         "stale": state in {"unreachable", "dead", "critical", "warn"},
         "linked": bool(raw.get("linked")),
@@ -361,6 +372,64 @@ async def libby_download(
     except Exception:
         pass
     return resp
+
+
+class BorrowRequest(BaseModel):
+    title_id: str
+    card_id: str
+    title: str | None = None
+    author: str | None = None
+
+
+@router.post("/borrow")
+async def libby_borrow(
+    payload: BorrowRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Claim a ready hold on ITS OWN card (#203) and hand the loan to the
+    auto-fulfill pipeline: the engine borrows with no card remap, then we enqueue
+    the loan (confirm-import → return) and fire the .acsm download in the
+    background. The UI gets the borrow result immediately; the download/import
+    progress lands in the Newly-Imported tray + activity log as usual."""
+    if not payload.title_id or not payload.card_id:
+        raise HTTPException(status_code=400, detail="title_id and card_id are required.")
+    resp = await _engine_post("/api/borrow", {
+        "title_id": payload.title_id,
+        "card_id": payload.card_id,
+    }, timeout=60.0)
+    if resp.status_code >= 400:
+        try:
+            from ..services.event_log_service import log_event
+            log_event("libby", "borrow_failed", level="error", title=payload.title or "",
+                      detail={"title_id": payload.title_id, "manual": True})
+        except Exception:
+            pass
+        return resp
+
+    from ..services.event_log_service import log_event
+    from ..services.libby_autofulfill_service import enqueue_borrowed, kick_download
+    title = payload.title or ""
+    log_event("libby", "hold_claimed", level="success", title=title,
+              detail={"title_id": payload.title_id, "card_id": payload.card_id, "manual": True})
+    enqueue_borrowed(db, title_id=payload.title_id, card_id=payload.card_id,
+                     title=title, author=payload.author or "")
+
+    async def _kick():
+        ok, detail = await asyncio.to_thread(kick_download, payload.title_id, payload.card_id, title)
+        log_event("libby", "acsm_download" if ok else "download_failed",
+                  level="info" if ok else "warn", title=title,
+                  detail={"file" if ok else "error": detail, "after_ui_borrow": True})
+
+    asyncio.get_running_loop().create_task(_kick())
+    return resp
+
+
+@router.post("/refresh-chip")
+async def libby_refresh_chip(current_user: User = Depends(get_current_user)):
+    """Manually trigger the engine's authenticated chip refresh (#202). The engine
+    also self-refreshes on a schedule; this is the Settings-panel button."""
+    return await _engine_post("/api/refresh-chip", {}, timeout=90.0)
 
 
 @router.get("/downloads")
@@ -638,6 +707,30 @@ def _tokens(s: str) -> frozenset:
     return frozenset(re.sub(r"[^\w\s]", " ", (s or "").lower()).split())
 
 
+def _core_tokens(s: str) -> frozenset | None:
+    """Tokens of the pre-subtitle head, or None when there's no ':' subtitle.
+    One-sided use only (#204): 'Dark Matter: A Novel' may match bare 'Dark Matter',
+    but 'Foo: Part One' / 'Foo: Part Two' never collapse to their shared head."""
+    head, sep, tail = (s or "").partition(":")
+    if not sep or not head.strip() or not tail.strip():
+        return None
+    return _tokens(head)
+
+
+def _title_sim(in_t: frozenset, in_core: frozenset | None, tt: frozenset, core: frozenset | None) -> float:
+    """Jaccard over full token sets, subtitle-tolerant when exactly one side has one."""
+    union = len(in_t | tt)
+    sim = len(in_t & tt) / union if union else 0.0
+    if sim < 1.0:
+        if in_core is not None and core is None:
+            u = len(in_core | tt)
+            sim = max(sim, len(in_core & tt) / u if u else 0.0)
+        elif core is not None and in_core is None:
+            u = len(in_t | core)
+            sim = max(sim, len(in_t & core) / u if u else 0.0)
+    return sim
+
+
 def _build_owned_index(db: Session) -> list[dict]:
     """One row per GreatReads book that is owned in some format, with title/author
     tokens + the Calibre external id (for a future 'Read in app' link)."""
@@ -657,6 +750,7 @@ def _build_owned_index(db: Session) -> list[dict]:
         index.append({
             "book_id": b.id,
             "tt": _tokens(b.title),
+            "core": _core_tokens(b.title),
             "at": _tokens(b.author or ""),
             "calibre_id": calibre.get(b.id),
         })
@@ -665,14 +759,15 @@ def _build_owned_index(db: Session) -> list[dict]:
 
 def _match_owned(title: str, author: str, index: list[dict]) -> dict | None:
     """Return the best owned-book match for a (title, author), or None. Title Jaccard
-    ≥ 0.6 with some author overlap, or a very strong title match (≥ 0.9) on its own."""
+    ≥ 0.6 with some author overlap, or a very strong title match (≥ 0.9) on its own.
+    Subtitle-tolerant (#204): 'Dark Matter: A Novel' matches an owned 'Dark Matter'."""
     in_t, in_a = _tokens(title), _tokens(author)
+    in_core = _core_tokens(title)
     if not in_t:
         return None
     best, best_sim = None, 0.0
     for b in index:
-        union = len(in_t | b["tt"])
-        sim = len(in_t & b["tt"]) / union if union else 0.0
+        sim = _title_sim(in_t, in_core, b["tt"], b.get("core"))
         if sim < 0.6:
             continue
         if in_a and b["at"]:
@@ -714,7 +809,7 @@ async def libby_ownership(
 def _build_all_index(db: Session) -> list[dict]:
     """title/author tokens for EVERY book (owned or Wishlist), so we find-or-create
     without spawning duplicates."""
-    return [{"book_id": b.id, "tt": _tokens(b.title), "at": _tokens(b.author or "")}
+    return [{"book_id": b.id, "tt": _tokens(b.title), "core": _core_tokens(b.title), "at": _tokens(b.author or "")}
             for b in db.query(Book).filter(Book.title.isnot(None)).all()]
 
 
@@ -828,7 +923,7 @@ async def libby_holds_to_wishlist(
             if h.get("cover") and await _save_cover(book.id, h["cover"]):
                 book.cover = True
                 db.commit()
-            index.append({"book_id": book.id, "tt": _tokens(book.title), "at": _tokens(book.author or "")})
+            index.append({"book_id": book.id, "tt": _tokens(book.title), "core": _core_tokens(book.title), "at": _tokens(book.author or "")})
         else:
             existing += 1
     return {"added": added, "existing": existing, "total": len(holds)}

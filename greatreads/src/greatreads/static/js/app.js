@@ -2191,3 +2191,15 @@ window.GreatReads = {
     setEmojiRating,
     updateEmojiDisplay
 };
+
+// #205: every page gets a Check Libby action in the shared popup. The Store page
+// defines the full in-page implementation (search → borrow/hold panel), which
+// overrides this when its script runs; everywhere else (Library, series/author
+// strips, Home, TBR, Journal) this fallback jumps to the Store with the check
+// pre-armed via query params (handled by _maybeCheckLibbyFromUrl on /books).
+if (typeof window.grCheckLibby !== 'function') {
+    window.grCheckLibby = function (titleEnc, authorEnc) {
+        window.location.href = (window.APP_BASE_PATH || '') + '/books?check_libby='
+            + (titleEnc || '') + '&cl_author=' + (authorEnc || '');
+    };
+}

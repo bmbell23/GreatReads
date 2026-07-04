@@ -37,7 +37,7 @@ from sqlalchemy.orm import Session
 
 from ..models.book import Book
 from ..models.external_import import ExternalImport
-from ..routes.libby import LIBBY_ENGINE_URL, _tokens, _match_owned
+from ..routes.libby import LIBBY_ENGINE_URL, _core_tokens, _match_owned, _tokens
 from .event_log_service import log_event
 
 logger = logging.getLogger(__name__)
@@ -48,6 +48,7 @@ SETTING_INTERVAL = "libby_autofulfill_interval_min"
 SETTING_MAX = "libby_autofulfill_max_per_run"
 SETTING_PENDING = "libby_autofulfill_pending"
 SETTING_LAST_RUN = "libby_autofulfill_last_run"
+SETTING_FAILS = "libby_autofulfill_failures"
 
 DEFAULT_INTERVAL_MIN = int(os.environ.get("LIBBY_AUTOFULFILL_INTERVAL_MIN", "30"))
 DEFAULT_MAX_PER_RUN = int(os.environ.get("LIBBY_AUTOFULFILL_MAX_PER_RUN", "2"))
@@ -55,6 +56,11 @@ DEFAULT_MAX_PER_RUN = int(os.environ.get("LIBBY_AUTOFULFILL_MAX_PER_RUN", "2"))
 # loan in place). The chain is usually minutes; allow generous slack for a stuck
 # Adobe fulfillment / watcher.
 CONFIRM_TIMEOUT_HOURS = float(os.environ.get("LIBBY_AUTOFULFILL_CONFIRM_TIMEOUT_H", "12"))
+# Back-off (#201): after this many consecutive borrow/download failures for the
+# same title, park it for the cooldown instead of retrying every run forever
+# (Dark Matter failed identically 12+ times in one evening).
+MAX_CONSECUTIVE_FAILS = int(os.environ.get("LIBBY_AUTOFULFILL_MAX_FAILS", "3"))
+FAIL_COOLDOWN_HOURS = float(os.environ.get("LIBBY_AUTOFULFILL_FAIL_COOLDOWN_H", "24"))
 
 _ENGINE_TIMEOUT = 25.0
 _DOWNLOAD_TIMEOUT = 180.0
@@ -118,6 +124,10 @@ def get_config(db: Session) -> dict:
         "pending": pending,
         "pending_count": len(pending),
         "last_run": _get_json(db, SETTING_LAST_RUN, None),
+        "parked": {
+            tid: f for tid, f in _get_json(db, SETTING_FAILS, {}).items()
+            if int(f.get("count", 0)) >= MAX_CONSECUTIVE_FAILS
+        },
     }
 
 
@@ -154,7 +164,7 @@ def _imported_since(db: Session, title: str, author: str, since: datetime) -> bo
     if not ids:
         return False
     index = [
-        {"book_id": b.id, "tt": _tokens(b.title), "at": _tokens(b.author or "")}
+        {"book_id": b.id, "tt": _tokens(b.title), "core": _core_tokens(b.title), "at": _tokens(b.author or "")}
         for b in db.query(Book).filter(Book.id.in_(ids)).all()
     ]
     return _match_owned(title or "", author or "", index) is not None
@@ -222,6 +232,11 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
         return pending
 
     queued_ids = {str(p.get("title_id")) for p in pending}
+    fails = _get_json(db, SETTING_FAILS, {})
+    hold_ids = {str(h.get("id", "")) for h in holds}
+    # Drop failure history for holds that no longer exist (cancelled/claimed).
+    fails = {tid: f for tid, f in fails.items() if tid in hold_ids}
+    now = datetime.utcnow()
     taken = 0
     for h in holds:
         if taken >= max_new:
@@ -238,6 +253,11 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
         card_id = str(h.get("cardId", ""))
         if not title_id or not card_id or title_id in queued_ids:
             continue
+        # Parked after repeated identical failures (#201) — retry once per cooldown.
+        prior = fails.get(title_id)
+        if prior and int(prior.get("count", 0)) >= MAX_CONSECUTIVE_FAILS:
+            if now - _parse_dt(prior.get("last_at", "")) < timedelta(hours=FAIL_COOLDOWN_HOURS):
+                continue
         title = h.get("title", "")
         author = h.get("author", "")
         try:
@@ -247,9 +267,9 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
                 timeout=_DOWNLOAD_TIMEOUT,
             )
         except Exception as exc:
-            log.append({"title": title, "event": "download_error", "detail": str(exc)})
-            continue
+            status, data = 599, {"error": str(exc)}
         if status < 400 and (data or {}).get("success"):
+            fails.pop(title_id, None)
             item = {
                 "title_id": title_id, "card_id": card_id,
                 "title": title, "author": author,
@@ -265,8 +285,25 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
             log_event("libby", "acsm_download", level="info", title=title, detail={"file": fname})
         else:
             err = (data or {}).get("error", f"HTTP {status}")
+            entry = fails.get(title_id) or {"count": 0}
+            entry.update({
+                "count": int(entry.get("count", 0)) + 1,
+                "last_at": now.isoformat(),
+                "error": err,
+                "title": title,
+            })
+            fails[title_id] = entry
             log.append({"title": title, "event": "download_failed", "detail": err})
-            log_event("libby", "borrow_failed", level="error", title=title, detail={"error": err})
+            if entry["count"] == MAX_CONSECUTIVE_FAILS:
+                log_event("libby", "autofulfill_parked", level="warn", title=title,
+                          detail={"error": err, "fails": entry["count"],
+                                  "cooldown_hours": FAIL_COOLDOWN_HOURS,
+                                  "card_id": card_id})
+                log.append({"title": title, "event": "parked",
+                            "detail": f"{entry['count']} straight failures — retrying every {FAIL_COOLDOWN_HOURS:g}h"})
+            else:
+                log_event("libby", "borrow_failed", level="error", title=title, detail={"error": err})
+    _set(db, SETTING_FAILS, json.dumps(fails))
     return pending
 
 
@@ -296,3 +333,40 @@ def run_autofulfill(db: Session, *, force: bool = False) -> dict:
     if log:
         logger.info("Libby auto-fulfill: %s", {k: v for k, v in summary.items() if k != "events"})
     return summary
+
+
+# ── UI-borrow takeover (#203) ─────────────────────────────────────────────────
+
+def enqueue_borrowed(db: Session, *, title_id: str, card_id: str, title: str, author: str = "") -> bool:
+    """Hand an already-borrowed loan to the confirm→return pipeline.
+
+    Used by the UI Borrow button (#203): the user (or the borrow route) claimed
+    the hold; from here the normal machinery downloads the .acsm, waits for the
+    watcher import, and only then returns the loan. Returns False if the title
+    is already queued."""
+    pending = _get_json(db, SETTING_PENDING, [])
+    if any(str(p.get("title_id")) == str(title_id) for p in pending):
+        return False
+    pending.append({
+        "title_id": str(title_id), "card_id": str(card_id),
+        "title": title, "author": author,
+        "borrowed_at": datetime.utcnow().isoformat(),
+    })
+    _set(db, SETTING_PENDING, json.dumps(pending))
+    return True
+
+
+def kick_download(title_id: str, card_id: str, title: str = "") -> tuple[bool, str]:
+    """Fire the engine download for an EXISTING loan (no_return — loan is kept;
+    the pipeline returns it after the import confirms). Returns (ok, detail)."""
+    try:
+        status, data = _engine_post(
+            "/api/download",
+            {"title_id": str(title_id), "card_id": str(card_id), "title": title, "no_return": True},
+            timeout=_DOWNLOAD_TIMEOUT,
+        )
+    except Exception as exc:
+        return False, str(exc)
+    if status < 400 and (data or {}).get("success"):
+        return True, (data or {}).get("filename", "")
+    return False, (data or {}).get("error", f"HTTP {status}")

@@ -364,6 +364,14 @@
         <div id="libbyHealth" class="border rounded p-3 mb-3">
           <div class="text-muted small">Checking Libby status…</div>
         </div>
+        <!-- #202: the engine also refreshes itself on a schedule (~every 3–4 days);
+             this button forces a refresh now, no phone needed while the token lives. -->
+        <div class="mb-3">
+          <button class="btn btn-sm btn-outline-primary" id="libbyRefreshChipBtn" onclick="libbyRefreshChip()"
+                  title="Renew the token without the phone step (works while it's still valid)">
+            <i class="fas fa-arrows-rotate me-1"></i>Refresh token now</button>
+          <span id="libbyRefreshChipMsg" class="small ms-2"></span>
+        </div>
 
         <!-- Re-link -->
         <h6 class="mb-1"><i class="fas fa-link me-1 text-primary"></i>Re-link the chip</h6>
@@ -467,9 +475,10 @@ document.addEventListener('DOMContentLoaded', async () => {
     setupInfiniteScroll();
     setupDetailSwipe();
     refreshImportBadge();          // #137 Newly-Imported badge
-    loadLibbyBadge();              // #142 Libby token-health warning badge
+    loadLibbyBadge();              // #142 Libby token-health warning badge + #203 ready-holds chip
     updateReleaseChipCounts();     // #188 New (N) / Upcoming (N) chip counts
     _maybeOpenMergeFromUrl();      // #131 deep-link: /books?merge=a,b
+    _maybeCheckLibbyFromUrl();     // #205 deep-link: /books?check_libby=<title>&cl_author=<author>
     // the shared Edit Book module (book_edit.js) wires autocomplete + preloads lists
 });
 
@@ -941,6 +950,15 @@ function grPickLibbyMatch(rows, title) {
     }
     return bestScore >= 0.6 ? best : null;   // guard against a wrong-title top hit
 }
+// #205: another page's Check Libby (the app.js fallback) landed here with the book
+// in the query string — run the check now, then clean the URL so refresh is safe.
+function _maybeCheckLibbyFromUrl() {
+    const qp = new URLSearchParams(location.search);
+    const t = qp.get('check_libby');
+    if (!t) return;
+    history.replaceState(null, '', location.pathname);
+    grCheckLibby(encodeURIComponent(t), encodeURIComponent(qp.get('cl_author') || ''));
+}
 async function grCheckLibby(titleEnc, authorEnc) {
     const title = decodeURIComponent(titleEnc || ''), author = decodeURIComponent(authorEnc || '');
     if (!title) return;
@@ -1066,7 +1084,14 @@ function libbyLoanHoldCard(it, kind) {
         const wait = it.isAvailable ? '<span class="text-success fw-semibold">Ready to borrow</span>'
             : `${it.holdPosition != null ? `#${it.holdPosition}${it.holdsCount ? ' of ' + it.holdsCount : ''}` : ''}${it.estimatedWaitDays != null ? ` · ${esc(libbyWaitText(it.estimatedWaitDays))}` : ''}`;
         meta = `<div class="small text-muted text-truncate">${lib}</div><div class="small">${wait}</div>${it.placedDate ? `<div class="small text-muted">Placed ${esc(String(it.placedDate).slice(0, 10))}</div>` : ''}`;
-        action = `<button class="btn btn-sm btn-outline-danger w-100 mt-1" onclick="libbyCancelHold('${tid}','${cid}',this)"><i class="fas fa-xmark me-1"></i>Cancel hold</button>`;
+        // Ready holds get a Borrow button (#203): claims on the hold's OWN card
+        // (no remap), then the pipeline downloads, confirms the import, and
+        // returns the loan automatically.
+        const cancelBtn = `<button class="btn btn-sm btn-outline-danger w-100 mt-1" onclick="libbyCancelHold('${tid}','${cid}',this)"><i class="fas fa-xmark me-1"></i>Cancel hold</button>`;
+        action = it.isAvailable
+            ? `<button class="btn btn-sm btn-success w-100 mt-1" data-title="${esc(it.title || '')}" data-author="${esc(it.author || '')}"
+                   onclick="libbyBorrowHold('${tid}','${cid}',this)"><i class="fas fa-book-open me-1"></i>Borrow &amp; Download</button>` + cancelBtn
+            : cancelBtn;
     } else {
         const due = it.expireDate || it.dueDate || it.expires;
         const left = (it.daysLeft != null) ? `${it.daysLeft} day${it.daysLeft === 1 ? '' : 's'} left` : (due ? `Due ${esc(String(due).slice(0, 10))}` : '');
@@ -1079,6 +1104,22 @@ function libbyLoanHoldCard(it, kind) {
             <div style="min-width:0;flex:1;"><div class="fw-semibold small text-truncate">${esc(dispTitle(it.title))}</div>
                 <div class="small text-muted text-truncate">${esc(it.author || '')}</div>${meta}</div>
         </div>${action}</div></div>`;
+}
+async function libbyBorrowHold(titleId, cardId, btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Borrowing…'; }
+    try {
+        await GreatReads.apiCall('/libby/borrow', { method: 'POST', data: {
+            title_id: titleId, card_id: cardId,
+            title: (btn && btn.dataset.title) || '', author: (btn && btn.dataset.author) || '',
+        }, silent: true });
+    } catch (e) {
+        showToast(libbyErrMsg(e, 'borrow'), 'danger');
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-book-open me-1"></i>Borrow &amp; Download'; }
+        return;
+    }
+    showToast('Borrowed! Downloading in the background — the loan returns itself once the import is confirmed.', 'success');
+    loadLibbyLoansHolds('holds');   // the hold just became a loan
+    loadLibbyBadge();
 }
 async function libbyCancelHold(titleId, cardId, btn) {
     if (!confirm('Cancel this hold?')) return;
@@ -1974,6 +2015,13 @@ function libbyUpdateBadge(s) {
         badge.classList.toggle('bg-danger', !!hard);
         badge.classList.toggle('bg-warning', !hard);
     });
+    // Ready-hold notification (#203): label the Holds chip like the #188 counts
+    // so a claimable hold is visible without opening the shelf.
+    const chip = document.querySelector('#stHolds span');
+    if (chip) {
+        const n = (s && s.ready_holds) || 0;
+        chip.innerHTML = n > 0 ? `Holds <span class="badge bg-success rounded-pill">${n} ready</span>` : 'Holds';
+    }
 }
 
 async function loadLibbyStatus() {
@@ -1988,6 +2036,23 @@ async function loadLibbyStatus() {
         box.className = 'border rounded p-3 mb-3 border-secondary';
         box.innerHTML = '<div class="small text-muted">Could not reach GreatReads to check Libby status.</div>';
     }
+}
+
+// #202: manual authenticated token refresh (the engine self-refreshes too).
+async function libbyRefreshChip() {
+    const btn = document.getElementById('libbyRefreshChipBtn'), msg = document.getElementById('libbyRefreshChipMsg');
+    btn.disabled = true; msg.className = 'small ms-2 text-muted'; msg.textContent = 'Refreshing…';
+    try {
+        const r = await GreatReads.apiCall('/libby/refresh-chip', { method: 'POST', silent: true });
+        const days = r && r.seconds_left ? (r.seconds_left / 86400).toFixed(1) : '?';
+        msg.className = 'small ms-2 text-success';
+        msg.textContent = `Token refreshed — ${days} days left.`;
+        loadLibbyStatus();
+    } catch (e) {
+        msg.className = 'small ms-2 text-danger';
+        msg.textContent = (e && e.message) || 'Refresh failed — if the token is fully expired, use Re-link below.';
+    }
+    btn.disabled = false;
 }
 
 // Lightweight status poll for the toolbar warning badge (no modal).
@@ -2391,12 +2456,40 @@ function renderImportList(items) {
     }).join('');
 }
 // Open a Newly-Imported row in the shared book-details popup. Hide the tray first so
-// there's a single modal (reopen the tray from the toolbar afterwards).
+// there's a single modal; closing the popup restores the tray where you left it (#206).
+let _niReturn = false, _niScroll = 0;
 function niOpen(bookId) {
     if (bookId == null) return;
-    bootstrap.Modal.getInstance(document.getElementById('newImportModal'))?.hide();
+    const el = document.getElementById('newImportModal');
+    const body = el && el.querySelector('.modal-body');
+    _niScroll = body ? body.scrollTop : 0;
+    _niReturn = true;
+    bootstrap.Modal.getInstance(el)?.hide();
     GreatReads.openBookById(bookId);
 }
+// #206: Esc / click-off / ✕ on the book popup goes back to the Newly Imported list
+// instead of dumping to the Store. Rendered instantly from _niCache (scroll intact),
+// then refreshed in place so dismissals made via the popup show through.
+document.addEventListener('DOMContentLoaded', () => {
+    const pop = document.getElementById('openBookModal');
+    if (!pop) return;
+    pop.addEventListener('hidden.bs.modal', () => {
+        if (!_niReturn) return;
+        // An editor (Edit Book / Edit Reading) hid the popup and will reopen it —
+        // stay armed and wait for the real close.
+        if (typeof grReturnToPopup !== 'undefined' && grReturnToPopup) return;
+        _niReturn = false;
+        const el = document.getElementById('newImportModal');
+        bootstrap.Modal.getOrCreateInstance(el).show();
+        renderImportList(_niCache);
+        const body = el.querySelector('.modal-body');
+        if (body) body.scrollTop = _niScroll;
+        _niFetch().then(items => {
+            renderImportList(items);
+            if (body) body.scrollTop = _niScroll;
+        }).catch(() => {});
+    });
+});
 async function dismissImport(importId, btn) {
     // Persist server-side first so a refresh (any device) keeps it dismissed (#181).
     try { await GreatReads.apiCall('/import/dismiss', { method: 'POST', data: { import_ids: [importId] } }); } catch (e) {}

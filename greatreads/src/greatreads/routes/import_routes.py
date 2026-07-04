@@ -142,8 +142,8 @@ async def recent_imports(limit: int = 50, db: Session = Depends(get_db)):
 
     Reviewed (dismissed) rows are excluded server-side so the tray stays cleared
     across refreshes and devices (#181)."""
-    from sqlalchemy import func
     from ..models.inventory import Inventory
+    from ..services.import_service import _title_core_tokens, _word_tokens
 
     dismissed = _get_dismissed(db)
     rows = (
@@ -152,6 +152,31 @@ async def recent_imports(limit: int = 50, db: Session = Depends(get_db)):
         .limit(max(1, min(limit, 200)))
         .all()
     )
+    # Token index over the whole library for the duplicate flag (#204): built once
+    # per request. The old exact-title SQL missed subtitle variants entirely —
+    # 'Dark Matter' vs 'Dark Matter: A Novel' showed Created with no flag.
+    dup_index = [
+        {
+            "id": b.id, "title": b.title,
+            "tt": _word_tokens(b.title or ""),
+            "core": _title_core_tokens(b.title or ""),
+            "at": _word_tokens(((b.author_name_first or "") + " " + (b.author_name_second or "")).strip()),
+        }
+        for b in db.query(Book).all()
+        if (b.title or "").strip()
+    ]
+
+    def _same_title(tt_a, core_a, tt_b, core_b) -> bool:
+        if tt_a and tt_a == tt_b:
+            return True
+        # One-sided subtitle rule (#204): a subtitled title equals a bare one when
+        # its head matches; two DIFFERENT subtitles never collapse together.
+        if core_a is not None and core_b is None and core_a == tt_b:
+            return True
+        if core_b is not None and core_a is None and core_b == tt_a:
+            return True
+        return False
+
     out = []
     for e in rows:
         if e.id in dismissed:
@@ -169,17 +194,15 @@ async def recent_imports(limit: int = 50, db: Session = Depends(get_db)):
             if inv.owned_physical:
                 media.append("Physical")
         dup = None
-        if bk.title and (bk.title or "").strip():
-            t = (bk.title or "").strip().lower()
-            a = ((bk.author_name_first or "") + " " + (bk.author_name_second or "")).strip().lower()
-            for other in (
-                db.query(Book)
-                .filter(Book.id != bk.id, func.lower(func.trim(Book.title)) == t)
-                .all()
-            ):
-                oa = ((other.author_name_first or "") + " " + (other.author_name_second or "")).strip().lower()
-                if oa == a:
-                    dup = {"id": other.id, "title": other.title}
+        if (bk.title or "").strip():
+            tt = _word_tokens(bk.title)
+            core = _title_core_tokens(bk.title)
+            at = _word_tokens(((bk.author_name_first or "") + " " + (bk.author_name_second or "")).strip())
+            for other in dup_index:
+                if other["id"] == bk.id:
+                    continue
+                if other["at"] == at and _same_title(tt, core, other["tt"], other["core"]):
+                    dup = {"id": other["id"], "title": other["title"]}
                     break
         out.append({
             "import_id": e.id,
