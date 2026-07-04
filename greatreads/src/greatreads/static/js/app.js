@@ -1283,12 +1283,14 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
                     <i class="fas fa-pen-to-square me-2 text-primary"></i>Edit Book
                 </button>` : '';
 
-    // Check Libby (#154): for a book you don't own, search Libby by title+author and
-    // open Borrow/Hold. Only where the Libby feature is present (grCheckLibby exists →
-    // the Store page) and only for non-owned books, so owned/Library books never show it.
-    const grNotOwned = !grOwnsFormat('owned_ebook') && !grOwnsFormat('owned_audio')
-        && !grOwnsFormat('owned_physical') && !book.is_owned;
-    const libbyCheckLink = (grNotOwned && book.title && typeof grCheckLibby === 'function') ? `
+    // Check Libby (#154, widened #215): show whenever a DIGITAL format is still
+    // missing — owning the audiobook must not hide the path to borrow the ebook
+    // (and vice versa; physical-only ownership doesn't hide it either). The Libby
+    // panel it opens shows BOTH format rows — the owned one as 'Borrow again',
+    // the missing one as Borrow & Download. Hidden only when ebook AND audiobook
+    // are both owned.
+    const grDigitallyComplete = grOwnsFormat('owned_ebook') && grOwnsFormat('owned_audio');
+    const libbyCheckLink = (!grDigitallyComplete && book.title && typeof grCheckLibby === 'function') ? `
                 <button type="button" class="btn btn-sm btn-outline-info"
                         onclick="grCheckLibby('${titleEnc}','${authorEnc}')">
                     <i class="fas fa-building-columns me-2"></i>Check Libby
