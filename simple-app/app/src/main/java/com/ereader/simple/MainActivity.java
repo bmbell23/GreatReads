@@ -96,6 +96,18 @@ public class MainActivity extends Activity {
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
 
+        // #207: a fold-posture/display switch could spawn a SECOND MainActivity
+        // while the first stayed alive — its WebView kept playing audio (the
+        // foreground PlaybackService keeps the process hot) while this new one
+        // rehydrated into a paused player at a stale position. launchMode=
+        // singleTask (manifest) prevents the second instance; this guard
+        // finishes any older survivor (and with it, its WebView's audio) if one
+        // slips through anyway.
+        MainActivity prev = (sRef != null) ? sRef.get() : null;
+        if (prev != null && prev != this && !prev.isFinishing()) {
+            prev.finish();
+        }
+
         sRef = new WeakReference<>(this);
 
         // Android 13+ gates notifications (incl. the media-control notification

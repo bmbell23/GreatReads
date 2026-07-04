@@ -25,6 +25,35 @@ const HAS_EBOOK = params.get('hasEbook') === '1' && !!EBOOK_ID;
 const PROGRESS_KEY = HAS_EBOOK && EBOOK_ID ? EBOOK_ID : (ABS_ID ? ('abs:' + ABS_ID) : '');
 const SPEED_KEY = 'ereader.audio.speed';
 
+// Cross-instance heartbeat (#207). A fold-close can spawn a SECOND WebView whose
+// rehydrated player boots paused at the last periodic save while the old
+// instance's audio keeps playing (localStorage is shared across instances, so
+// they can see each other). A PLAYING player stamps its live position every few
+// seconds; a BOOTING player that finds a fresh playing heartbeat for the same
+// book adopts the live position instead of the stale save. The real fix (one
+// activity instance, APK singleTask) prevents the ghost; this makes any residual
+// ghost harmless.
+const HB_KEY = 'gr.playerHeartbeat';
+let hbTimer = null;
+function stampHeartbeat(playing) {
+    if (!PROGRESS_KEY) return;
+    try {
+        localStorage.setItem(HB_KEY, JSON.stringify({
+            key: PROGRESS_KEY, pos: globalTime(), playing: !!playing, at: Date.now(),
+        }));
+    } catch (_) {}
+}
+function readLiveHeartbeat() {
+    try {
+        const h = JSON.parse(localStorage.getItem(HB_KEY) || 'null');
+        if (h && h.key === PROGRESS_KEY && h.playing && h.pos > 0
+                && (Date.now() - h.at) < 20000) return h;
+    } catch (_) {}
+    return null;
+}
+function startHb() { stampHeartbeat(true); if (!hbTimer) hbTimer = setInterval(() => stampHeartbeat(!audio.paused && !audio.ended), 5000); }
+function stopHb() { if (hbTimer) { clearInterval(hbTimer); hbTimer = null; } stampHeartbeat(false); }
+
 // Multi-part edition (e.g. a dramatized adaptation split across 2 ABS items, or
 // a long unabridged audiobook split into 5). The library stashes the chosen
 // edition in localStorage before navigating here; we then play its parts
@@ -263,6 +292,15 @@ async function init() {
         const total = bookTotal();
         if (total > 0) savedPos = resume.value * total;
         else resumePercent = resume.value;
+    }
+    // #207: another live instance may still be PLAYING this book right now (fold
+    // ghost). Its heartbeat beats any periodic save — adopt the live position so
+    // pressing play here continues from where the audio actually is.
+    const live = readLiveHeartbeat();
+    if (live && live.pos > savedPos) {
+        savedPos = live.pos;
+        resumeChapter = null;
+        resumePercent = null;
     }
     let startPart = 0, localSeek = savedPos;
     if (editionDuration > 0 && savedPos > 0) {
@@ -624,8 +662,8 @@ function closeReader() {
 $('search-btn').addEventListener('click', () => openReader(true));
 $('ro-back').addEventListener('click', closeReader);
 
-audio.addEventListener('play', () => { reflectPlayState(); lastSyncAt = Date.now(); startSync(); startAutoBm(); });
-audio.addEventListener('pause', () => { reflectPlayState(); sync(); stopSync(); stopAutoBm(); });
+audio.addEventListener('play', () => { reflectPlayState(); lastSyncAt = Date.now(); startSync(); startAutoBm(); startHb(); });
+audio.addEventListener('pause', () => { reflectPlayState(); sync(); stopSync(); stopAutoBm(); stopHb(); });
 audio.addEventListener('ended', () => {
     reflectPlayState(); sync();
     // Auto-advance to the next part of a multi-part edition.
@@ -1051,6 +1089,7 @@ function doClose() {
     closed = true;
     stopSync();
     stopAutoBm();
+    stopHb();   // #207: a really-exiting player must not leave a 'playing' heartbeat
     saveProgress();
     closePartSession(sid);
     NativeMedia.stop();  // tear down the foreground service + notification
