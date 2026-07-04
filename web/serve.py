@@ -95,42 +95,17 @@ class NoCacheHandler(http.server.SimpleHTTPRequestHandler):
             except Exception:
                 pass
 
-    # "/" bootstrap (#198): the Android app hard-loads "/" whenever the OS
-    # recreates the activity, so instead of blindly 302-ing to Home we serve a
-    # tiny page that checks localStorage['gr.activeBook'] (maintained by
-    # web/active-book.js in reader.html / player.html). If a book page was
-    # open recently, jump straight back into it; otherwise land on the
-    # GreatReads Home page exactly as before (#65). location.replace keeps the
-    # bootstrap out of history so Back from the restored book still exits.
-    ROOT_BOOTSTRAP = b"""<!doctype html>
-<html><head><meta charset="utf-8"><title>GreatReads</title><script>
-(function () {
-    var dest = '/greatreads/';
-    try {
-        var m = JSON.parse(localStorage.getItem('gr.activeBook') || 'null');
-        var FRESH_MS = 48 * 3600 * 1000;
-        if (m && typeof m.url === 'string'
-              && /^\\/(reader|player)\\.html\\?/.test(m.url)
-              && Date.now() - (m.ts || 0) < FRESH_MS) {
-            dest = m.url;
-        }
-    } catch (e) {}
-    location.replace(dest);
-})();
-</script></head><body>
-<noscript><meta http-equiv="refresh" content="0;url=/greatreads/"></noscript>
-</body></html>
-"""
-
     def do_GET(self):
         if self._is_greatreads():
             return self._proxy_greatreads()
         if self.path == "/":
-            self.send_response(200)
-            self.send_header("Content-Type", "text/html; charset=utf-8")
-            self.send_header("Content-Length", str(len(self.ROOT_BOOTSTRAP)))
+            # A fresh start ALWAYS lands on Home (#211; retires #198's
+            # rehydrate-into-book bootstrap — a wedged book page plus
+            # rehydration was an inescapable trap, and the retained WebView
+            # (#210) already carries the live page across warm relaunches).
+            self.send_response(302)
+            self.send_header("Location", "/greatreads/")
             self.end_headers()
-            self.wfile.write(self.ROOT_BOOTSTRAP)
             return
         # Bare /index.html (no query) still lands on the GreatReads Home page
         # (#65); the library grid is reached as index.html?v=… from the pages.

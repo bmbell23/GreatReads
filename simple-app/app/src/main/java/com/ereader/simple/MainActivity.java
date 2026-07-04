@@ -355,6 +355,30 @@ public class MainActivity extends Activity {
     // IndexedDB fallbacks take over. The bundled shell is staged into
     // assets/web by build-app.sh from web/.
     private static final String SHELL_HOST = "100.69.184.113";
+    private static final String HOME_URL = "http://" + SHELL_HOST + ":8090/greatreads/";
+
+    // #211: the WebView's render process died (fold/OOM). The retained view is
+    // now a frozen brick — it ignores taps, JS, even loadUrl — and the OS
+    // default for an unhandled renderer death is to kill the whole app (which
+    // then relaunched into the same trap). Drop the corpse, build a fresh
+    // retained WebView, and land on Home.
+    static void recoverFromRenderGone(WebView dead) {
+        try {
+            android.view.ViewParent p = dead.getParent();
+            if (p instanceof android.view.ViewGroup) ((android.view.ViewGroup) p).removeView(dead);
+        } catch (Exception ignored) {}
+        try { dead.destroy(); } catch (Exception ignored) {}
+        if (sWebView == dead) sWebView = null;
+        MainActivity a = cur();
+        if (a == null || a.isFinishing()) return;   // next onCreate builds fresh → "/" → Home
+        if (sWebCtx == null) sWebCtx = new android.content.MutableContextWrapper(a);
+        sWebCtx.setBaseContext(a);
+        WebView wv = createRetainedWebView(sWebCtx);
+        sWebView = wv;
+        a.webView = wv;
+        a.setContentView(wv);
+        wv.loadUrl(HOME_URL);
+    }
 
     // Static (#210): the client lives on the retained WebView, so it must not
     // capture any activity — assets/connectivity come from the app context, and
@@ -446,6 +470,14 @@ public class MainActivity extends Activity {
             // next navigation tries the network (live) again.
             forcedOfflineReload = false;
             super.onPageFinished(view, url);
+        }
+
+        @Override
+        public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
+            android.util.Log.e("Ereader", "WebView renderer gone (didCrash="
+                + (detail != null && detail.didCrash()) + ") — rebuilding on Home (#211)");
+            MainActivity.recoverFromRenderGone(view);
+            return true;   // handled — do NOT let the OS kill the whole app
         }
     }
 
@@ -732,12 +764,21 @@ public class MainActivity extends Activity {
         // bootstrap would bounce right back into the book.
         String u = webView.getUrl();
         if (u != null && (u.contains("reader.html") || u.contains("player.html"))) {
+            // Watchdog (#211): grHandleBack needs the page's JS to be ALIVE. A
+            // wedged/dead page never answers — back must go Home regardless, so
+            // if no verdict lands within 300ms we navigate anyway.
+            final boolean[] settled = { false };
+            final Runnable goHome = () -> {
+                if (settled[0]) return;
+                settled[0] = true;
+                webView.loadUrl(HOME_URL);
+            };
+            webView.postDelayed(goHome, 300);
             webView.evaluateJavascript(
                 "(function(){try{return !!(window.grHandleBack&&window.grHandleBack());}catch(e){return false;}})()",
                 v -> {
-                    if (!"true".equals(v)) {
-                        webView.loadUrl("http://100.69.184.113:8090/greatreads/");
-                    }
+                    if ("true".equals(v)) settled[0] = true;   // overlay closed — handled
+                    else goHome.run();
                 });
             return;
         }
