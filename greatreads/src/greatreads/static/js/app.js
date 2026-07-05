@@ -1132,7 +1132,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     if (book.audio_duration_seconds) {
         const totMin = Math.round(book.audio_duration_seconds / 60);
         const h = Math.floor(totMin / 60), m = totMin % 60;
-        lenParts.push(`🎧 ${h ? `${h}h ${m}m` : `${m}m`}`);
+        lenParts.push(h ? `${h}h ${m}m` : `${m}m`);
     }
     if (lenParts.length) rows.push(['Length', lenParts.join(' • ')]);
     // Ratings (#150): your private rating (mean of each rated read's overall — the
