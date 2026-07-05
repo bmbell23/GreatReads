@@ -1,6 +1,7 @@
 """Book management API routes."""
 
 import os
+from datetime import date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Body
 from sqlalchemy.orm import Session
@@ -637,6 +638,7 @@ class BulkUpdateRequest(BaseModel):
     series_number: Optional[float] = None
     universe: Optional[str] = None
     genre: Optional[str] = None
+    date_published: Optional[date] = None   # #221 — bulk-set the release date
     # Genres as a set (#160): union into each book's genres ('add') or overwrite them
     # ('replace'). Sent alongside/instead of the scalar fields.
     genres: Optional[List[str]] = None

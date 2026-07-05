@@ -102,7 +102,7 @@
         if (!sel.size) return;
         const ids = [...sel];
         ['grBulkAuthorFirst', 'grBulkAuthorLast', 'grBulkNarratorFirst', 'grBulkNarratorLast',
-         'grBulkSeries', 'grBulkSeriesNum', 'grBulkUniverse', 'grBulkGenreInput']
+         'grBulkSeries', 'grBulkSeriesNum', 'grBulkUniverse', 'grBulkDate', 'grBulkGenreInput']
             .forEach(id => { const el = $(id); if (el) el.value = ''; });
         ['grBulkAddAuthorsBox', 'grBulkAddNarratorsBox'].forEach(b => { const el = $(b); if (el) el.innerHTML = ''; });
         genres = []; renderGenres();
@@ -131,6 +131,15 @@
         const s = v('grBulkSeries'); if (s) payload.series = s;
         const snEl = $('grBulkSeriesNum'); if (snEl && snEl.value !== '') payload.series_number = parseFloat(snEl.value);
         const u = v('grBulkUniverse'); if (u) payload.universe = u;
+        // Release date (#221): typed YYYY / YYYY-MM / YYYY-MM-DD, normalized like
+        // Edit Book's field (#219 — the native date picker has no year jump).
+        const normDate = (x) => {
+            let m = x.match(/^(\d{4})$/); if (m) return `${m[1]}-01-01`;
+            m = x.match(/^(\d{4})-(\d{1,2})$/); if (m) return `${m[1]}-${m[2].padStart(2, '0')}-01`;
+            m = x.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/); if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+            return x;
+        };
+        const dt = v('grBulkDate'); if (dt) payload.date_published = normDate(dt);
         const mode = (document.querySelector('input[name=grBulkMode]:checked') || {}).value || 'add';
         if (mode === 'replace' || genres.length) { payload.genres = genres.slice(); payload.genres_mode = mode; }
         // Primary author/narrator → set-primary; the +Add rows → bulk-add (additional).
@@ -169,6 +178,7 @@
         if (payload.series !== undefined) patch.series = payload.series;
         if (payload.series_number !== undefined) patch.series_number = payload.series_number;
         if (payload.universe !== undefined) patch.universe = payload.universe;
+        if (payload.date_published !== undefined) patch.date_published = payload.date_published;
         const pa = setPrimary.find(x => x.role === 'author');
         if (pa && pa.first && pa.last) patch.author = pa.first + ' ' + pa.last;
         if (payload.genres_mode === 'replace' && payload.genres.length) patch.genre = payload.genres[0];

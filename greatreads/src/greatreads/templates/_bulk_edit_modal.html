@@ -36,9 +36,16 @@
                         <datalist id="grBulkSeriesList"></datalist></div>
                     <div class="col-4"><label class="form-label small mb-0">Series #</label>
                         <input class="form-control form-control-sm" id="grBulkSeriesNum" type="number" step="0.1"></div>
-                    <div class="col-12"><label class="form-label small mb-0">Universe</label>
+                    <div class="col-6"><label class="form-label small mb-0">Universe</label>
                         <input class="form-control form-control-sm" id="grBulkUniverse" list="grBulkUniverseList" autocomplete="off">
                         <datalist id="grBulkUniverseList"></datalist></div>
+                    {# Typed date, not type="date" (#219/#221): the WebView's native
+                       calendar has no usable year jump. YYYY / YYYY-MM / YYYY-MM-DD. #}
+                    <div class="col-6"><label class="form-label small mb-0">Release date</label>
+                        <input class="form-control form-control-sm" id="grBulkDate" type="text"
+                               inputmode="numeric" autocomplete="off"
+                               placeholder="YYYY-MM-DD or YYYY"
+                               title="Type the date: YYYY, YYYY-MM, or YYYY-MM-DD"></div>
                     <div class="col-12">
                         <label class="form-label small mb-0">Genres</label>
                         <div id="grBulkGenreCommon" class="small text-muted mb-1"></div>
