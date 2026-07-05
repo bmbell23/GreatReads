@@ -134,7 +134,13 @@ async function annotateLibbyOwnership(list) {
     try { r = await GreatReads.apiCall('/libby/ownership', { method: 'POST', data: { items: libs.map(c => ({ title: c.title, author: c.author })) } }); }
     catch (e) { return; }
     const res = (r && r.results) || [];
-    libs.forEach((c, i) => { const o = res[i]; if (o) { c.grOwned = o.owned; c.grBookId = o.book_id; c.calibreId = o.calibre_id; } });
+    libs.forEach((c, i) => {
+        const o = res[i];
+        if (o) {
+            c.grOwned = o.owned; c.grBookId = o.book_id; c.calibreId = o.calibre_id;
+            c.grOwnedEbook = o.owned_ebook; c.grOwnedAudio = o.owned_audio;   // #225 per-format
+        }
+    });
     // Store-page hook: re-render the Libby search shelf if it's showing (other
     // pages have no shelf — the popup reads grOwned directly).
     if (typeof shelfStatus !== 'undefined' && shelfStatus === 'libby' && typeof renderLibby === 'function')
@@ -228,13 +234,18 @@ function libbyFormatsHtml(c) {
         const libs = _libbyFmtLibs(fmt);
         const sel = _libbyFmtSelected(s.media, fmt);
         const card = sel ? String(sel.cardId) : '';
+        // Per-format ownership (#225): show "In Library" for a format you own
+        // instead of "Borrow again", and hide its library chooser.
+        const ownThis = (s.media === 'ebook' && c.grOwnedEbook) || (s.media === 'audiobook' && c.grOwnedAudio);
         let action, avail;
-        if (fmt.onHold) {
+        if (ownThis) {
+            action = '<span class="badge bg-success"><i class="fas fa-check me-1"></i>In Library</span>';
+            avail = '<span class="text-success small">In your library</span>';
+        } else if (fmt.onHold) {
             action = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>On hold</span>';
             avail = '<span class="text-info small">On hold</span>';
         } else if (sel && sel.isAvailable) {
-            const cls = owned ? 'btn-outline-secondary' : 'btn-primary';
-            action = `<button class="btn btn-sm ${cls}" onclick="${s.fn}('${fmt.titleId}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>${owned ? 'Borrow again' : 'Borrow &amp; Download'}</button>`;
+            action = `<button class="btn btn-sm btn-primary" onclick="${s.fn}('${fmt.titleId}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>Borrow &amp; Download</button>`;
             avail = '<span class="text-success small fw-semibold">Available now</span>';
         } else {
             action = `<button class="btn btn-sm btn-outline-warning" onclick="libbyPlaceHoldFmt('${fmt.titleId}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
@@ -242,8 +253,11 @@ function libbyFormatsHtml(c) {
         }
         // Library chooser (#214): always show WHERE this borrow/hold goes — a
         // select when there's a choice, plain text when there's exactly one.
+        // Owned formats (#225) don't need it.
         let fromHtml = '';
-        if (libs.length > 1) {
+        if (ownThis) {
+            fromHtml = '';
+        } else if (libs.length > 1) {
             const opts = libs.map(l =>
                 `<option value="${esc(String(l.cardId))}"${String(l.cardId) === card ? ' selected' : ''}>${esc((l.key || '').toUpperCase())} — ${l.isAvailable ? 'available now' : esc(libbyWaitText(l.estimatedWaitDays))}</option>`).join('');
             fromHtml = `<div class="small text-muted mt-1">from <select class="form-select form-select-sm d-inline-block w-auto py-0" style="font-size:.75rem;"
@@ -317,15 +331,15 @@ async function openLibbyDetails(c) {
     };
     // NOTE: the shared popup ignores opts.extraInfoHtml (retired in #120) — only
     // opts.actionsHtml renders. So the whole Libby panel goes through actionsHtml.
-    const owned = libbyIsOwned(c)
-        ? '<div class="alert alert-success py-1 px-2 small mb-2 w-100"><i class="fas fa-check-circle me-1"></i>Already in your GreatReads library.</div>' : '';
+    // No top banner (#225): ownership is shown per-format in the action rows below
+    // ("In Library" vs Borrow/Hold) — that's where it's actionable.
     // Add-to-Wishlist for titles you don't already have (#170) — handy when a title is
     // only holdable, or you just want to track it.
     const wishBtn = libbyIsOwned(c) ? ''
         : `<button class="btn btn-sm btn-outline-primary w-100 mb-2" id="libbyWishBtn" onclick="grLibbyAddWishlist(libbyActive)"><i class="fas fa-bookmark me-2"></i>Add to Wishlist</button>`;
     // Unified results carry per-format cards, so skip the single-card chooser (#197).
     const chooser = c.formats ? '' : libbyLibraryChooser(c);
-    const actionsHtml = `${owned}${wishBtn}<div id="libbyRich" class="mb-2 w-100"></div>${chooser}<div id="libbyAction" class="mt-1 mb-2 w-100"></div><div id="libbySeries" class="w-100"></div>`;
+    const actionsHtml = `${wishBtn}<div id="libbyRich" class="mb-2 w-100"></div>${chooser}<div id="libbyAction" class="mt-1 mb-2 w-100"></div><div id="libbySeries" class="w-100"></div>`;
 
     GreatReads.openBookActions(book, {
         title: c.title, actionsHtml,

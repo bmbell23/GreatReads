@@ -758,11 +758,14 @@ def _title_sim(in_t: frozenset, in_core: frozenset | None, tt: frozenset, core: 
 def _build_owned_index(db: Session) -> list[dict]:
     """One row per GreatReads book that is owned in some format, with title/author
     tokens + the Calibre external id (for a future 'Read in app' link)."""
-    owned_ids = {
-        r[0] for r in db.query(Inventory.book_id).filter(
-            (Inventory.owned_ebook == True) | (Inventory.owned_physical == True) | (Inventory.owned_audio == True)  # noqa: E712
-        ).all()
+    # Per-format ownership (#225): carry each format flag so the UI can label the
+    # exact formats owned ("In Library") vs still borrowable.
+    inv_by_book = {
+        r[0]: (bool(r[1]), bool(r[2]), bool(r[3]))
+        for r in db.query(Inventory.book_id, Inventory.owned_ebook,
+                          Inventory.owned_audio, Inventory.owned_physical).all()
     }
+    owned_ids = {bid for bid, (e, a, p) in inv_by_book.items() if e or a or p}
     if not owned_ids:
         return []
     calibre = {
@@ -771,12 +774,16 @@ def _build_owned_index(db: Session) -> list[dict]:
     }
     index = []
     for b in db.query(Book).filter(Book.id.in_(owned_ids)).all():
+        e, a, p = inv_by_book.get(b.id, (False, False, False))
         index.append({
             "book_id": b.id,
             "tt": _tokens(b.title),
             "core": _core_tokens(b.title),
             "at": _tokens(b.author or ""),
             "calibre_id": calibre.get(b.id),
+            "owned_ebook": e,
+            "owned_audio": a,
+            "owned_physical": p,
         })
     return index
 
@@ -825,6 +832,9 @@ async def libby_ownership(
             "owned": bool(m),
             "book_id": m["book_id"] if m else None,
             "calibre_id": m["calibre_id"] if m else None,
+            "owned_ebook": bool(m and m.get("owned_ebook")),   # #225 per-format
+            "owned_audio": bool(m and m.get("owned_audio")),
+            "owned_physical": bool(m and m.get("owned_physical")),
         })
     return {"results": results}
 
