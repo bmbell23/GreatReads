@@ -961,19 +961,28 @@ function libbyLoanHoldCard(it, kind) {
         ? `<img src="${esc(it.cover)}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><div style="display:none;width:100%;height:100%;align-items:center;justify-content:center;"><i class="fas fa-book text-muted"></i></div>`
         : `<div style="display:flex;width:100%;height:100%;align-items:center;justify-content:center;"><i class="fas fa-book text-muted"></i></div>`;
     const tid = esc(String(it.id)), cid = esc(String(it.cardId)), lib = esc(it.libraryName || '');
+    // Format marker (#217): now that audiobook loans/holds show too, mark which
+    // is which (app-wide convention: orange headphones / blue book).
+    const isAudio = (it.loanType || it.holdType) === 'audiobook';
+    const fmtIcon = isAudio
+        ? '<i class="fas fa-headphones me-1" style="color:#FF6600;"></i>'
+        : '<i class="fas fa-book me-1" style="color:#0d6efd;"></i>';
     let meta, action;
     if (kind === 'holds') {
         const wait = it.isAvailable ? '<span class="text-success fw-semibold">Ready to borrow</span>'
             : `${it.holdPosition != null ? `#${it.holdPosition}${it.holdsCount ? ' of ' + it.holdsCount : ''}` : ''}${it.estimatedWaitDays != null ? ` · ${esc(libbyWaitText(it.estimatedWaitDays))}` : ''}`;
         meta = `<div class="small text-muted text-truncate">${lib}</div><div class="small">${wait}</div>${it.placedDate ? `<div class="small text-muted">Placed ${esc(String(it.placedDate).slice(0, 10))}</div>` : ''}`;
-        // Ready holds get a Borrow button (#203): claims on the hold's OWN card
-        // (no remap), then the pipeline downloads, confirms the import, and
-        // returns the loan automatically.
+        // Ready holds get a Borrow button: ebooks (#203) claim on the hold's OWN
+        // card then ride the acsm pipeline (download → confirm import → return);
+        // audiobooks (#217) ride the #191 borrow+harvest flow (chip borrow, MP3
+        // harvest into Audiobookshelf, auto-return — no website creds involved).
         const cancelBtn = `<button class="btn btn-sm btn-outline-danger w-100 mt-1" onclick="libbyCancelHold('${tid}','${cid}',this)"><i class="fas fa-xmark me-1"></i>Cancel hold</button>`;
-        action = it.isAvailable
-            ? `<button class="btn btn-sm btn-success w-100 mt-1" data-title="${esc(it.title || '')}" data-author="${esc(it.author || '')}"
-                   onclick="libbyBorrowHold('${tid}','${cid}',this)"><i class="fas fa-book-open me-1"></i>Borrow &amp; Download</button>` + cancelBtn
-            : cancelBtn;
+        const borrowBtn = isAudio
+            ? `<button class="btn btn-sm btn-success w-100 mt-1" data-title="${esc(it.title || '')}"
+                   onclick="libbyBorrowHoldAudio('${tid}','${cid}',this)"><i class="fas fa-headphones me-1"></i>Borrow &amp; Download</button>`
+            : `<button class="btn btn-sm btn-success w-100 mt-1" data-title="${esc(it.title || '')}" data-author="${esc(it.author || '')}"
+                   onclick="libbyBorrowHold('${tid}','${cid}',this)"><i class="fas fa-book-open me-1"></i>Borrow &amp; Download</button>`;
+        action = it.isAvailable ? borrowBtn + cancelBtn : cancelBtn;
     } else {
         const due = it.expireDate || it.dueDate || it.expires;
         const left = (it.daysLeft != null) ? `${it.daysLeft} day${it.daysLeft === 1 ? '' : 's'} left` : (due ? `Due ${esc(String(due).slice(0, 10))}` : '');
@@ -983,7 +992,7 @@ function libbyLoanHoldCard(it, kind) {
     return `<div class="col-6 col-md-4 col-lg-3 mb-3"><div class="card h-100 p-2">
         <div class="d-flex gap-2">
             <div style="width:54px;height:81px;flex:0 0 54px;align-self:flex-start;background:#e9ecef;border-radius:4px;overflow:hidden;">${cover}</div>
-            <div style="min-width:0;flex:1;"><div class="fw-semibold small text-truncate">${esc(dispTitle(it.title))}</div>
+            <div style="min-width:0;flex:1;"><div class="fw-semibold small text-truncate">${fmtIcon}${esc(dispTitle(it.title))}</div>
                 <div class="small text-muted text-truncate">${esc(it.author || '')}</div>${meta}</div>
         </div>${action}</div></div>`;
 }
@@ -1001,6 +1010,24 @@ async function libbyBorrowHold(titleId, cardId, btn) {
     }
     showToast('Borrowed! Downloading in the background — the loan returns itself once the import is confirmed.', 'success');
     loadLibbyLoansHolds('holds');   // the hold just became a loan
+    loadLibbyBadge();
+}
+// Audiobook ready hold (#217): borrow + harvest in one engine job (#191 flow) —
+// chip borrow on the hold's card, MP3 harvest into Audiobookshelf, auto-return.
+async function libbyBorrowHoldAudio(titleId, cardId, btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Starting…'; }
+    try {
+        await GreatReads.apiCall('/libby/audiobook/download', { method: 'POST', data: {
+            title_id: titleId, card_id: cardId, title: (btn && btn.dataset.title) || '',
+            borrow: true, return_after: true,
+        }, silent: true });
+    } catch (e) {
+        showToast(libbyErrMsg(e, 'borrow'), 'danger');
+        if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-headphones me-1"></i>Borrow &amp; Download'; }
+        return;
+    }
+    showToast('Borrowing + downloading the audiobook in the background (several minutes) — Audiobookshelf picks it up, then the loan returns itself.', 'success');
+    loadLibbyLoansHolds('holds');
     loadLibbyBadge();
 }
 async function libbyCancelHold(titleId, cardId, btn) {
