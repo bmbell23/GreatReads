@@ -84,7 +84,13 @@
                             <div class="col-6"><label class="form-label small mb-0">Universe</label>
                                 <input class="form-control form-control-sm" id="bkeUniverse" autocomplete="off"></div>
                             <div class="col-6"><label class="form-label small mb-0">Release date</label>
-                                <input class="form-control form-control-sm" id="bkeDate" type="date"></div>
+                                <!-- Typed, not type="date" (#219): the Android WebView's native
+                                     calendar has no usable year jump — a 3-years-ago date took
+                                     36 taps. YYYY / YYYY-MM / YYYY-MM-DD, normalized on save. -->
+                                <input class="form-control form-control-sm" id="bkeDate" type="text"
+                                       inputmode="numeric" autocomplete="off"
+                                       placeholder="YYYY-MM-DD or YYYY"
+                                       title="Type the date: YYYY, YYYY-MM, or YYYY-MM-DD"></div>
                             <div class="col-3"><label class="form-label small mb-0">Pages</label>
                                 <input class="form-control form-control-sm" id="bkePages" type="number" min="0"></div>
                             <div class="col-3"><label class="form-label small mb-0">Words</label>

@@ -24,6 +24,21 @@
     const bkeSug = { first: [], last: [], series: [], universe: [], genre: [], title: [] };
     let bkeGenres = [];   // #156: the book's genres, edited as pills
 
+    // Release date is a TYPED field (#219 — the WebView's native picker has no
+    // usable year jump). Accept YYYY (→ Jan 1), YYYY-MM (→ 1st), or YYYY-MM-DD;
+    // anything else passes through for the server to validate.
+    function bkeNormDate(v) {
+        v = String(v || '').trim();
+        if (!v) return null;
+        let m = v.match(/^(\d{4})$/);
+        if (m) return `${m[1]}-01-01`;
+        m = v.match(/^(\d{4})-(\d{1,2})$/);
+        if (m) return `${m[1]}-${m[2].padStart(2, '0')}-01`;
+        m = v.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+        if (m) return `${m[1]}-${m[2].padStart(2, '0')}-${m[3].padStart(2, '0')}`;
+        return v;
+    }
+
     async function bkeLoadLists() {
         if (bkeListsLoaded) return;
         bkeListsLoaded = true;
@@ -356,7 +371,7 @@
             tags: bkeGenres.slice(), genre: bkeGenres[0] || null,
             description: v('bkeDescription'),
             series_number: num('bkeSeriesNum', parseFloat),
-            date_published: document.getElementById('bkeDate').value || null,
+            date_published: bkeNormDate(document.getElementById('bkeDate').value),
             page_count: num('bkePages', parseInt), word_count: num('bkeWords', parseInt),
             isbn_id: num('bkeIsbn', parseInt),
         };
