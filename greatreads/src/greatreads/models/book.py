@@ -93,7 +93,22 @@ class Book(Base):
             "public_rating": self.public_rating,
             "narrator": self.narrator,
             "audio_duration_seconds": self.audio_duration_seconds,
+            "cover_version": self.cover_version,
         }
+
+    @property
+    def cover_version(self) -> int:
+        """Cover file mtime for cache-busting (#220): image URLs append
+        ?v=<this> so an updated cover is a NEW URL — Chromium's in-memory image
+        cache otherwise re-serves the old bitmap until an app restart. 0 = no cover."""
+        if not self.cover:
+            return 0
+        try:
+            from ..config import settings
+            import os
+            return int(os.path.getmtime(settings.covers_dir / f"{self.id}.jpg"))
+        except OSError:
+            return 0
 
 
 # Pydantic models for API

@@ -440,7 +440,7 @@ function showEditModal(reading) {
     const coverImg = document.getElementById('editBookCoverImg');
     const fallbackIcon = document.querySelector('#editBookCover .book-cover-fallback');
 
-    coverImg.src = `${window.APP_BASE_PATH}/static/covers/${reading.book.id}.jpg`;
+    coverImg.src = `${window.APP_BASE_PATH}/static/covers/${reading.book.id}.jpg?v=${reading.book.cover_version || 0}`;
     coverImg.style.display = 'block';
     fallbackIcon.style.display = 'none';
 
@@ -907,7 +907,7 @@ async function grInjectAuthorReads(author) {
     const base = window.APP_BASE_PATH || '';
     const rows = d.books.map(b => {
         const cover = b.has_cover
-            ? `<img src="${base}/static/covers/${b.id}.jpg" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
+            ? `<img src="${base}/static/covers/${b.id}.jpg?v=${b.cover_version || 0}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
             : `<i class="fas fa-book" style="color:#adb5bd;"></i>`;
         const sub = b.series ? `<div class="text-muted text-truncate" style="font-size:.7rem;">${grEsc(b.series)}${b.series_number != null ? ' #' + b.series_number : ''}</div>` : '';
         // Click a read book to open its details in the same popup (#120 Phase 2).

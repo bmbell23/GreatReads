@@ -1377,7 +1377,7 @@ async function injectAuthorReads(author) {
         const base = window.APP_BASE_PATH || '';
         const rows = d.books.map(b => {
             const cover = b.has_cover
-                ? `<img src="${base}/static/covers/${b.id}.jpg" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
+                ? `<img src="${base}/static/covers/${b.id}.jpg?v=${b.cover_version || 0}" alt="" loading="lazy" style="width:100%;height:100%;object-fit:cover;" onerror="this.style.display='none';this.nextElementSibling.style.display='flex';"><i class="fas fa-book" style="display:none;color:#adb5bd;"></i>`
                 : `<i class="fas fa-book" style="color:#adb5bd;"></i>`;
             const sub = b.series ? `<div class="text-muted text-truncate" style="font-size:.7rem;">${b.series}${b.series_number != null ? ' #' + b.series_number : ''}</div>` : '';
             return `<div class="col-6 col-md-4"><div class="d-flex align-items-center gap-2 mb-1">
@@ -1927,7 +1927,7 @@ function renderImportList(items) {
     const base = window.APP_BASE_PATH || '';
     box.innerHTML = items.map(i => {
         const cover = i.cover
-            ? `<img src="${base}/static/covers/${i.book_id}.jpg?v=1" style="width:40px;height:60px;object-fit:cover;border-radius:3px;">`
+            ? `<img src="${base}/static/covers/${i.book_id}.jpg?v=${Date.now()}" style="width:40px;height:60px;object-fit:cover;border-radius:3px;">`
             : `<div style="width:40px;height:60px;background:#e9ecef;border-radius:3px;"></div>`;
         const src = i.source === 'calibre' ? 'Calibre' : (i.source === 'audiobookshelf' ? 'Audiobookshelf' : i.source);
         const actBadge = i.action === 'created' ? '<span class="badge bg-success">Created</span>' : '<span class="badge bg-info text-dark">Linked</span>';

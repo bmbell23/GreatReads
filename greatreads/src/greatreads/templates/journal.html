@@ -616,7 +616,7 @@ function createReadingCard(reading, index) {
                 <div class="d-flex gap-3">
                     <div class="tbr-book-cover tbr-book-cover-large flex-shrink-0">
                         ${book.cover ?
-                            `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg"
+                            `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg?v=${book.cover_version || 0}"
                                  alt="${book.title} cover"
                                  class="tbr-book-cover-img"
                                  onerror="this.style.display='none'; this.nextElementSibling.style.display='block';">
@@ -1280,7 +1280,7 @@ function createReportBookCard(book) {
                     <div class="d-flex gap-2">
                         <div class="flex-shrink-0">
                             ${book.cover ?
-                                `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg"
+                                `<img src="${window.APP_BASE_PATH}/static/covers/${book.id}.jpg?v=${book.cover_version || 0}"
                                      alt="${book.title} cover"
                                      style="width: 60px; height: 90px; object-fit: cover; border-radius: 4px;"
                                      onerror="this.style.display='none'; this.nextElementSibling.style.display='flex';">

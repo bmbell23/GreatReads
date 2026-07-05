@@ -343,7 +343,7 @@ async function loadCurrentlyReading() {
             // Theme by the DERIVED primary format; fall back to declared media.
             const primary = stat.primary_format || reading.media || 'Ebook';
             const mediaStyle = getMediaStyle(primary);
-            const coverUrl = `${window.APP_BASE_PATH}/static/covers/${book.id}.jpg`;
+            const coverUrl = `${window.APP_BASE_PATH}/static/covers/${book.id}.jpg?v=${book.cover_version || 0}`;
             const progress = reading.current_progress_percent || 0;
             const targetPage = reading.current_progress_page || 0;
             const startMD = formatMD(reading.date_started);
