@@ -52,7 +52,7 @@
            turns it into a real column beside the cover. */
         .stage-main { display: contents; }
         .cover {
-            width: min(78vw, 340px); max-height: 46vh; aspect-ratio: 1/1; border-radius: 16px;
+            width: min(78vw, 340px); max-height: 60vh; aspect-ratio: 2/3; border-radius: 16px;
             object-fit: cover; box-shadow: 0 12px 40px rgba(134,64,192,0.20),
                 0 0 0 1px rgba(0,0,0,0.06);
             background: var(--brand-grad);
@@ -215,7 +215,7 @@
             }
             .cover {
                 /* Size to the available height instead of width; aspect-ratio
-                   keeps it square. Overrides the portrait width/max-height. */
+                   (2:3, #224) sets the width. Overrides the portrait width/max-height. */
                 width: auto;
                 height: 100%;
                 max-height: min(82vh, 300px);
