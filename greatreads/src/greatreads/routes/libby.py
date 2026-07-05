@@ -705,6 +705,7 @@ class CardCredentialsRequest(BaseModel):
     username: str
     password: str
     website_id: str | None = None
+    card_id: str | None = None   # #189: save per-card (card:<id>) for multi-card libraries
 
 
 @router.post("/cards/credentials")
@@ -720,6 +721,8 @@ async def libby_set_card_credentials(
     body = {"advantage_key": payload.advantage_key, "username": payload.username, "password": payload.password}
     if payload.website_id:
         body["website_id"] = payload.website_id
+    if payload.card_id:
+        body["card_id"] = payload.card_id
     return await _engine_post("/api/cards/credentials", body)
 
 
