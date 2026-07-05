@@ -238,7 +238,18 @@ async function init() {
     if (PROGRESS_KEY) initSession();
     // Saved-highlight quotes while we resolve resume + spin up the ABS session.
     setLoading();
-    if (ABS_ID) $('cover').src = `${API_URL}/audiobooks/${encodeURIComponent(ABS_ID)}/cover`;
+    // #223: ALWAYS prefer the GreatReads cover (matched by title+author) — ABS
+    // artwork is only the fallback when we have no stored cover for this book.
+    {
+        const cov = $('cover');
+        const absCover = ABS_ID ? `${API_URL}/audiobooks/${encodeURIComponent(ABS_ID)}/cover` : '';
+        if (TITLE) {
+            cov.onerror = () => { cov.onerror = null; if (absCover) cov.src = absCover; };
+            cov.src = `${API_URL}/books/cover-by-title?title=${encodeURIComponent(TITLE)}&author=${encodeURIComponent(AUTHOR)}`;
+        } else if (absCover) {
+            cov.src = absCover;
+        }
+    }
     // Always offer search. It opens the matching ebook to search; for audio-only
     // books (no linked ebook) the handler explains there's nothing to search.
     $('search-btn').classList.remove('hidden');

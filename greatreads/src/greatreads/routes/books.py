@@ -324,6 +324,40 @@ async def genres_delete_multi(
     return {"genres_deleted": deleted}
 
 
+@router.get("/cover-by-title")
+async def cover_by_title(title: str, author: str = "", db: Session = Depends(get_db)):
+    """Resolve (title, author) to OUR stored cover image (#223). Lets the
+    audiobook player always show the GreatReads cover regardless of ABS artwork
+    (subtitle-tolerant matching per #204). 404 when no confident match/cover —
+    the caller falls back to its own art. Unauthenticated by design, like the
+    /static/covers files it serves."""
+    from .libby import _core_tokens, _title_sim, _tokens
+    in_t, in_a, in_core = _tokens(title), _tokens(author or ""), _core_tokens(title)
+    if not in_t:
+        raise HTTPException(status_code=404, detail="No title")
+    best, best_sim = None, 0.0
+    for b in db.query(Book).filter(Book.cover == True).all():  # noqa: E712
+        sim = _title_sim(in_t, in_core, _tokens(b.title), _core_tokens(b.title))
+        if sim < 0.6:
+            continue
+        if in_a:
+            at = _tokens(((b.author_name_first or "") + " " + (b.author_name_second or "")).strip())
+            if at:
+                au = len(in_a | at)
+                asim = len(in_a & at) / au if au else 0.0
+                if asim < 0.34 and sim < 0.9:
+                    continue   # title-only coincidence without author agreement
+        if sim > best_sim:
+            best, best_sim = b, sim
+    if best is None:
+        raise HTTPException(status_code=404, detail="No matching cover")
+    p = settings.covers_dir / f"{best.id}.jpg"
+    if not p.exists():
+        raise HTTPException(status_code=404, detail="Cover file missing")
+    from fastapi.responses import FileResponse
+    return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
+
+
 @router.get("/{book_id}")
 async def get_book(
     request: Request,
