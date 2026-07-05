@@ -1021,6 +1021,34 @@ function applyFilters() {
         return (a.series_number || 0) - (b.series_number || 0);
     };
 
+    // Author sort orders an author's SERIES chronologically (#218): by the
+    // earliest publication date among the series' books we have — career order,
+    // not alphabetical. Books within a series stay in series-number order;
+    // standalones still sort after the series. Alphabetical breaks date ties.
+    const seriesStart = {};
+    if (sort === 'author') {
+        for (const bk of (typeof books !== 'undefined' ? books : filteredBooks)) {
+            if (!bk.series) continue;
+            const k = (bk.universe || '') + ' ' + bk.series;
+            const d = bk.date_published ? new Date(bk.date_published).getTime() : Infinity;
+            if (!(k in seriesStart) || d < seriesStart[k]) seriesStart[k] = d;
+        }
+    }
+    const seriesCompareChrono = (a, b) => {
+        if (!a.series && !b.series) return a.title.localeCompare(b.title);
+        if (!a.series) return 1;
+        if (!b.series) return -1;
+        const au = a.universe || '', bu = b.universe || '';
+        if (au !== bu) return au.localeCompare(bu);
+        if (a.series !== b.series) {
+            const sa = seriesStart[au + ' ' + a.series], sb = seriesStart[bu + ' ' + b.series];
+            const da = (sa == null ? Infinity : sa), db = (sb == null ? Infinity : sb);
+            if (da !== db) return da - db;
+            return a.series.localeCompare(b.series);
+        }
+        return (a.series_number || 0) - (b.series_number || 0);
+    };
+
     // Apply sorting
     filteredBooks.sort((a, b) => {
         let result = 0;
@@ -1033,7 +1061,7 @@ function applyFilters() {
                 // Author direction flips with the toggle; the series tiebreaker stays
                 // ascending (book order), so return directly and skip the outer flip.
                 if (byAuthor !== 0) return sortAscending ? byAuthor : -byAuthor;
-                return seriesCompare(a, b);
+                return seriesCompareChrono(a, b);   // #218: series in career order
             }
             case 'date_published':
                 result = new Date(a.date_published || 0) - new Date(b.date_published || 0);
