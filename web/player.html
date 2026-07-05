@@ -51,7 +51,7 @@
            direct flex children of .stage (unchanged layout). Landscape (below)
            turns it into a real column beside the cover. */
         .stage-main { display: contents; }
-        /* Cover is HEIGHT-driven with aspect-ratio computing the width (#224/#227):
+        /* Cover is HEIGHT-driven with aspect-ratio computing the width (#224/#226):
            constraining both axes plus aspect-ratio lets a max-* clamp distort the
            ratio (the "2.5:3" bug). Only height is capped; max-width is a generous
            safety that won't bind in normal cases, so the 2:3 shape always holds.
@@ -221,7 +221,7 @@
             }
             .cover {
                 /* Height-driven; aspect-ratio (2:3) sets width. Cap height only —
-                   max-width stays generous so the ratio can't be clamped (#227). */
+                   max-width stays generous so the ratio can't be clamped (#226). */
                 height: min(80vh, 300px);
                 max-width: 42vw;
             }
@@ -256,7 +256,7 @@
             .stage { gap: 10px; padding: 6px 24px; }
             /* Height-driven so the near-square foldable keeps an EXACT 2:3 (the old
                width + max-height clamp produced ~2.5:3). Smaller so the full stack
-               fits the ~1:1 viewport. (#227) */
+               fits the ~1:1 viewport. (#226) */
             .cover { height: min(38vh, 300px); max-width: 44vw; }
             .meta .title { font-size: 18px; }
             .bars { gap: 8px; }
