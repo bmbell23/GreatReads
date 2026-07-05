@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive-icon background: the app-icon gradient (pink TL -> purple -> blue BR)
+     sampled from greatreads_icon.png, so the extracted bookmark foreground sits on
+     a matching gradient and reads as one seamless icon. -->
+<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">
+    <gradient
+        android:type="linear"
+        android:angle="315"
+        android:startColor="#F75AA3"
+        android:centerColor="#AA59D7"
+        android:endColor="#5B5BF1"/>
+</shape>
