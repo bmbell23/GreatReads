@@ -1,119 +1,145 @@
 #!/usr/bin/env python3
-"""Regenerate EVERY app icon from ONE master file: assets/app-icon.png.
+"""Regenerate every app icon from a master image.
 
-Change that single file and run:  python3 scripts/gen-icons.py
-It updates: the APK launcher (all densities + adaptive foreground), the web-shell
-favicons (web/icon-*.png), and the FastAPI app favicons (static/favicon*.png).
-Black rounded corners in the master are cropped to transparent (every platform
-masks the corners anyway), so the icon reads clean on tab, home screen, and launcher.
+Usage:
+  python3 scripts/gen-icons.py             # LIVE: assets/app-icon.png -> web + app favicons + APK launcher
+  python3 scripts/gen-icons.py --variants  # every assets/app-icon-<name>.png -> assets/generated/<name>/ set + preview
+  python3 scripts/gen-icons.py --preview    # contact sheet of the live icon + all variants (no writes to app)
+
+Approach (#243): the design (bookmark + its icons/shadow) sits on a solid background
+and is centred. We sample that background from the border (the bookmark is centred,
+so the edges are pure background), then EXTRACT the design as everything that differs
+from the background — dropping the near-black rounded corners. The design is composited
+onto a clean solid background inside Android's safe zone. No per-colour assumptions, so
+it works for a white / coloured / multi-colour bookmark on a solid background. (A
+gradient background — e.g. the *inverse* variant — is an unsupported edge case here and
+will look approximate; those want a full-bleed background bitmap instead.)
 """
 from PIL import Image, ImageDraw
-import numpy as np, os
-from collections import deque
+import numpy as np, os, sys, glob
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MASTER = os.path.join(ROOT, 'assets', 'app-icon.png')
-im = Image.open(MASTER).convert('RGB'); W, H = im.size
-maxc = np.array(im).astype(int).max(axis=2)
-alpha = np.clip((maxc - 14) * 10, 0, 255).astype('uint8')      # crop near-black corners
-cropped = Image.fromarray(np.dstack([np.array(im), alpha]), 'RGBA')
+ASSETS = os.path.join(ROOT, 'assets')
+
+# ── core image ops ───────────────────────────────────────────────────────────
+def clean_bg(a):
+    """Median background colour from the border, skipping near-black corners."""
+    H, W, _ = a.shape
+    px = []
+    for g in np.linspace(0.2, 0.8, 13):
+        for (x, y) in ((4, int(H*g)), (W-5, int(H*g)), (int(W*g), 4), (int(W*g), H-5)):
+            r, gg, b = a[y, x]
+            if min(r, gg, b) > 60:
+                px.append((r, gg, b))
+    return np.median(np.array(px), axis=0) if px else np.array([255, 255, 255])
+
+def extract_design(a, bg):
+    """The design on transparent: everything that differs from the background, minus
+    the near-black rounded corners. Cropped to the design's real mass (denoised)."""
+    H, W, _ = a.shape
+    dist = np.sqrt(((a - bg) ** 2).sum(axis=2))
+    yy, xx = np.mgrid[0:H, 0:W]
+    near = (np.minimum(xx, W-1-xx) < W*0.20) & (np.minimum(yy, H-1-yy) < H*0.20)
+    black_corner = (a.min(axis=2) < 45) & near
+    alpha = np.clip((dist - 22) * 7, 0, 255).astype('uint8')
+    alpha[black_corner] = 0
+    rgba = np.dstack([a, alpha]).astype('uint8')
+    strong = alpha > 110
+    cc, rc = strong.sum(0), strong.sum(1)
+    if cc.max() == 0:
+        return Image.fromarray(rgba, 'RGBA')
+    ct, rt = max(8, int(cc.max()*0.03)), max(8, int(rc.max()*0.03))
+    cols, rows = np.where(cc > ct)[0], np.where(rc > rt)[0]
+    return Image.fromarray(rgba, 'RGBA').crop((cols.min(), rows.min(), cols.max()+1, rows.max()+1))
+
+def prep(master):
+    a = np.array(Image.open(master).convert('RGB')).astype(int)
+    bg = clean_bg(a)
+    return extract_design(a, bg), tuple(int(v) for v in bg)
+
+def tile(size, design, bg, hfrac=0.66, transparent=False):
+    """Design centred at hfrac of the tile height, on a solid background (or
+    transparent, for the adaptive foreground layer whose background is the bg drawable)."""
+    base = Image.new('RGBA', (size, size), (0, 0, 0, 0) if transparent else bg + (255,))
+    th = int(size * hfrac)
+    bw, bh = design.size
+    nw = max(1, int(round(bw * th / bh)))
+    base.alpha_composite(design.resize((nw, th), Image.LANCZOS), ((size - nw)//2, (size - th)//2))
+    return base
 
 def circle(img):
     s = min(img.size); img = img.resize((s, s), Image.LANCZOS)
     m = Image.new('L', (s, s), 0); ImageDraw.Draw(m).ellipse((0, 0, s-1, s-1), fill=255)
     o = Image.new('RGBA', (s, s), (0, 0, 0, 0)); o.paste(img, (0, 0), m); return o
 
-# --- Sample the icon's OWN background colour (its base/parchment fill) --------
-# The adaptive-icon BACKGROUND layer is set to this solid colour (ic_launcher_bg.xml
-# is (re)written below), so the masked bleed area matches the ICON'S own background
-# instead of a hard-coded gradient. Sampled from the border ring, skipping the dark
-# rounded corners and the saturated central design. (#241)
-def sample_bg():
-    a = np.array(im).astype(int); H, W, _ = a.shape
-    vals = []
-    for fx in (0.05, 0.10, 0.90, 0.95):
-        for fy in (0.10, 0.30, 0.50, 0.70, 0.90):
-            for (x, y) in ((int(W*fx), int(H*fy)), (int(W*fy), int(H*fx))):
-                r, g, b = a[y, x]
-                if min(r, g, b) > 110:           # skip dark corners + colourful design
-                    vals.append((r, g, b))
-    if not vals:
-        return (240, 218, 170)
-    return tuple(int(v) for v in np.median(np.array(vals), axis=0))
+# ── output sets ──────────────────────────────────────────────────────────────
+LEG = {'mdpi': 48, 'hdpi': 72, 'xhdpi': 96, 'xxhdpi': 144, 'xxxhdpi': 192}
+FG  = {'mdpi': 108, 'hdpi': 162, 'xhdpi': 216, 'xxhdpi': 324, 'xxxhdpi': 432}
 
-BG_RGB = sample_bg()
-BG_HEX = '#%02X%02X%02X' % BG_RGB
+def write_launcher(res, design, bg, quiet=False):
+    bg_hex = '#%02X%02X%02X' % bg
+    for d in LEG:
+        o = f'{res}/mipmap-{d}'; os.makedirs(o, exist_ok=True)
+        tile(LEG[d], design, bg).convert('RGB').save(f'{o}/ic_launcher.png')
+        circle(tile(LEG[d], design, bg)).save(f'{o}/ic_launcher_round.png')
+        # Adaptive foreground: design on transparent (safe zone); background = bg drawable.
+        tile(FG[d], design, bg, transparent=True).save(f'{o}/ic_launcher_foreground.png')
+    os.makedirs(f'{res}/drawable', exist_ok=True)
+    with open(f'{res}/drawable/ic_launcher_bg.xml', 'w') as f:
+        f.write('<?xml version="1.0" encoding="utf-8"?>\n'
+                '<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">\n'
+                f'    <solid android:color="{bg_hex}"/>\n</shape>\n')
+    if not quiet:
+        print('   launcher mipmaps + drawable/ic_launcher_bg.xml (solid', bg_hex + ')')
 
-# --- Extract just the gradient bookmark on transparent -----------------------
-# The bookmark is the only region where blue > green: the parchment background is
-# warm (G > B) and the dark corners are neutral (B ≈ G), so `B - G` isolates the
-# pink→purple→blue bookmark cleanly — no flood-fill, no black-corner ring. The
-# bookmark's interior cut-outs (headphones/tablet/book) are parchment-coloured, so
-# they fall out of the mask and simply show the parchment BACKGROUND layer through
-# — reproducing the original look exactly. (#241)
-def extract_bookmark():
-    a = np.array(im).astype(int)
-    alpha = np.clip((a[:, :, 2] - a[:, :, 1] - 6) * 25, 0, 255).astype('uint8')
-    rgba = np.dstack([np.array(im), alpha])
-    # Crop to the bookmark's real mass. A few isolated texture specks also pass the
-    # blue>green test; ignore columns/rows carrying <3% of the peak count, else the
-    # bbox drifts left and the centred bookmark ends up off-centre. (#241)
-    strong = alpha > 120
-    cc, rc = strong.sum(0), strong.sum(1)
-    ct, rt = max(8, int(cc.max() * 0.03)), max(8, int(rc.max() * 0.03))
-    cols, rows = np.where(cc > ct)[0], np.where(rc > rt)[0]
-    return Image.fromarray(rgba, 'RGBA').crop((cols.min(), rows.min(), cols.max() + 1, rows.max() + 1))
+def masked_preview(design, bg, S=384, kind='squircle'):
+    t = tile(S, design, bg)
+    m = Image.new('L', (S, S), 0); dr = ImageDraw.Draw(m)
+    (dr.ellipse if kind == 'circle' else
+     (lambda box, fill: dr.rounded_rectangle(box, radius=int(S*0.22), fill=fill)))((0, 0, S-1, S-1), fill=255)
+    out = Image.new('RGBA', (S, S), (0, 0, 0, 0)); out.paste(t, (0, 0), m); return out
 
-BOOKMARK = extract_bookmark()
+def gen_live():
+    design, bg = prep(f'{ASSETS}/app-icon.png')
+    print('web shell (:8090):')
+    for sz, f in ((32, 'icon-32'), (192, 'icon-192'), (512, 'icon-512')):
+        tile(sz, design, bg).convert('RGB').save(f'{ROOT}/web/{f}.png'); print('  ', f'web/{f}.png')
+    print('FastAPI app (:8092):')
+    tile(512, design, bg).convert('RGB').save(f'{ROOT}/greatreads/src/greatreads/static/favicon.png')
+    tile(192, design, bg).convert('RGB').save(f'{ROOT}/greatreads/src/greatreads/static/favicon_app_icon.png')
+    print('   static/favicon.png + favicon_app_icon.png')
+    print('APK launcher:')
+    write_launcher(f'{ROOT}/simple-app/app/src/main/res', design, bg)
+    print('Done. (APK needs ./build-app.sh; web/app favicons live on next load — bump ?v= in the HTML to bust cache.)')
 
-def foreground(size):
-    """Adaptive foreground: the gradient bookmark alone, scaled to Android's safe
-    zone (~66% of the layer) and centred on transparent. The icon's own parchment
-    is the BACKGROUND layer (ic_launcher_bg.xml), so the launcher composites the
-    whole bookmark over parchment — no crop, no foreign gradient, no dark ring.
-    (#241 — replaces the flood-fill extraction that stripped the background.)"""
-    canvas = Image.new('RGBA', (size, size), (0, 0, 0, 0))
-    target_h = int(round(size * 0.66))
-    bw, bh = BOOKMARK.size
-    nw = max(1, int(round(bw * target_h / bh)))
-    d = BOOKMARK.resize((nw, target_h), Image.LANCZOS)
-    canvas.alpha_composite(d, ((size - nw) // 2, (size - target_h) // 2))
-    return canvas
+def gen_variants():
+    out_root = f'{ASSETS}/generated'
+    for path in sorted(glob.glob(f'{ASSETS}/app-icon-*.png')):
+        name = os.path.basename(path)[len('app-icon-'):-4]
+        design, bg = prep(path)
+        vdir = f'{out_root}/{name}'
+        write_launcher(f'{vdir}/res', design, bg, quiet=True)
+        tile(192, design, bg).convert('RGB').save(f'{vdir}/favicon.png')
+        masked_preview(design, bg).convert('RGB').save(f'{vdir}/preview.png')
+        print('  variant', name, '->', os.path.relpath(vdir, ROOT), '(bg #%02X%02X%02X)' % bg)
+    print('Done. Variant sets staged under assets/generated/<name>/ (wired into the app by the icon-switch work).')
 
-def save(img, path, size):
-    os.makedirs(os.path.dirname(path), exist_ok=True)
-    img.resize((size, size), Image.LANCZOS).save(path)
-    print('  ', os.path.relpath(path, ROOT))
+def gen_preview():
+    names = [('app-icon.png', 'MAIN')] + [(os.path.basename(p), os.path.basename(p)[len('app-icon-'):-4])
+                                           for p in sorted(glob.glob(f'{ASSETS}/app-icon-*.png'))]
+    S, pad = 300, 18
+    cols = 4; rows = (len(names) + cols - 1)//cols
+    canvas = Image.new('RGB', (cols*(S+pad)+pad, rows*(S+pad+22)+pad), (150, 152, 158))
+    d = ImageDraw.Draw(canvas)
+    for i, (fn, lbl) in enumerate(names):
+        design, bg = prep(f'{ASSETS}/{fn}')
+        p = masked_preview(design, bg, S)
+        x = pad+(i % cols)*(S+pad); y = pad+(i//cols)*(S+pad+22)
+        canvas.paste(p.convert('RGB'), (x, y), p); d.text((x+4, y+S+4), lbl, fill=(0, 0, 0))
+    canvas.save('/tmp/icons_all.png'); print('saved /tmp/icons_all.png')
 
-print('web shell (:8090):')
-save(cropped, f'{ROOT}/web/icon-32.png', 32)
-save(cropped, f'{ROOT}/web/icon-192.png', 192)
-save(cropped, f'{ROOT}/web/icon-512.png', 512)
-print('FastAPI app (:8092):')
-save(cropped, f'{ROOT}/greatreads/src/greatreads/static/favicon.png', 512)
-save(cropped, f'{ROOT}/greatreads/src/greatreads/static/favicon_app_icon.png', 192)
-print('APK launcher:')
-RES = f'{ROOT}/simple-app/app/src/main/res'
-LEG = {'mdpi':48,'hdpi':72,'xhdpi':96,'xxhdpi':144,'xxxhdpi':192}
-FG  = {'mdpi':108,'hdpi':162,'xhdpi':216,'xxhdpi':324,'xxxhdpi':432}
-for d in LEG:
-    o = f'{RES}/mipmap-{d}'
-    save(cropped, f'{o}/ic_launcher.png', LEG[d])
-    save(circle(cropped), f'{o}/ic_launcher_round.png', LEG[d])
-    # Adaptive foreground: design in the safe zone (not full-bleed) so Android's
-    # mask/zoom doesn't crop it; the gradient is the background drawable.
-    foreground(FG[d]).save(f'{o}/ic_launcher_foreground.png')
-    print('  ', os.path.relpath(f'{o}/ic_launcher_foreground.png', ROOT))
-# Adaptive-icon BACKGROUND = the icon's OWN sampled background colour (#241),
-# replacing the old hard-coded pink→purple→blue gradient so the launcher tile
-# matches the icon's parchment instead of a foreign gradient.
-BG_XML = (
-    '<?xml version="1.0" encoding="utf-8"?>\n'
-    '<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">\n'
-    f'    <solid android:color="{BG_HEX}"/>\n'
-    '</shape>\n'
-)
-with open(f'{RES}/drawable/ic_launcher_bg.xml', 'w') as f:
-    f.write(BG_XML)
-print('  ', f'drawable/ic_launcher_bg.xml (solid {BG_HEX})')
-print(f'Done. Adaptive background = {BG_HEX}. (APK needs ./build-app.sh to take effect; web/app icons are live on next load.)')
+if __name__ == '__main__':
+    arg = sys.argv[1] if len(sys.argv) > 1 else ''
+    if arg == '--variants': gen_variants()
+    elif arg == '--preview': gen_preview()
+    else: gen_live()
