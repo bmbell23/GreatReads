@@ -33,9 +33,18 @@ def clean_bg(a):
                 px.append((r, gg, b))
     return np.median(np.array(px), axis=0) if px else np.array([255, 255, 255])
 
+# The bookmark's bounds as fractions of the master, shared by the whole icon family
+# (every variant is the same artwork recoloured). Cropping to this FIXED region — not
+# a per-variant auto-detected bbox — keeps all variants identical in size and position.
+# Auto-detect can't do this uniformly: a white-on-white bookmark (the MAIN variant) has
+# no detectable body, so its bbox collapses to the coloured icons + stray edge pixels
+# and the design ends up smaller. (Arbitrary uploads with different geometry — #244 —
+# would need detection or their own region.)
+DESIGN_REGION = (0.332, 0.098, 0.672, 0.923)   # left, top, right, bottom
+
 def extract_design(a, bg):
     """The design on transparent: everything that differs from the background, minus
-    the near-black rounded corners. Cropped to the design's real mass (denoised)."""
+    the near-black rounded corners, cropped to the shared bookmark region."""
     H, W, _ = a.shape
     dist = np.sqrt(((a - bg) ** 2).sum(axis=2))
     yy, xx = np.mgrid[0:H, 0:W]
@@ -44,13 +53,9 @@ def extract_design(a, bg):
     alpha = np.clip((dist - 22) * 7, 0, 255).astype('uint8')
     alpha[black_corner] = 0
     rgba = np.dstack([a, alpha]).astype('uint8')
-    strong = alpha > 110
-    cc, rc = strong.sum(0), strong.sum(1)
-    if cc.max() == 0:
-        return Image.fromarray(rgba, 'RGBA')
-    ct, rt = max(8, int(cc.max()*0.03)), max(8, int(rc.max()*0.03))
-    cols, rows = np.where(cc > ct)[0], np.where(rc > rt)[0]
-    return Image.fromarray(rgba, 'RGBA').crop((cols.min(), rows.min(), cols.max()+1, rows.max()+1))
+    l, t, r, b = (int(W*DESIGN_REGION[0]), int(H*DESIGN_REGION[1]),
+                  int(W*DESIGN_REGION[2]), int(H*DESIGN_REGION[3]))
+    return Image.fromarray(rgba, 'RGBA').crop((l, t, r, b))
 
 def prep(master):
     a = np.array(Image.open(master).convert('RGB')).astype(int)
