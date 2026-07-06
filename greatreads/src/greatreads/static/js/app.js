@@ -2001,7 +2001,27 @@ function grSessionResume() {
 }
 
 // Screen lock / app background → auto-pause; the Resume button shows on return.
-function _sessVis() { if (document.hidden && _sess && _sess.running) grSessionPause(); }
+// A fold is NOT a background: folding the device briefly fires
+// visibilitychange:hidden while the physical display switches, then goes visible
+// again immediately (#210 keeps the SAME WebView alive across the fold). Debounce
+// so a transient fold-hide doesn't pause the timer — only a hide that PERSISTS
+// past the grace window (a real screen-lock / app-switch) pauses. (#239)
+let _sessVisTid = null;
+const _SESS_HIDE_GRACE_MS = 2000;
+function _sessVis() {
+    if (document.hidden) {
+        if (_sessVisTid || !_sess || !_sess.running) return;
+        _sessVisTid = setTimeout(() => {
+            _sessVisTid = null;
+            if (document.hidden && _sess && _sess.running) grSessionPause();
+        }, _SESS_HIDE_GRACE_MS);
+    } else if (_sessVisTid) {
+        // Visible again within the grace window → it was a fold, not a
+        // background. Cancel the pending auto-pause.
+        clearTimeout(_sessVisTid);
+        _sessVisTid = null;
+    }
+}
 
 function grSessionDone() {
     if (!_sess) return;
@@ -2014,6 +2034,7 @@ function grSessionDone() {
     const session = { startMs: _sess.origStartMs, seconds: _sessElapsedSec(), startPct: _sess.startPct || 0 };
     if (_sess.tid) clearInterval(_sess.tid);
     document.removeEventListener('visibilitychange', _sessVis);
+    if (_sessVisTid) { clearTimeout(_sessVisTid); _sessVisTid = null; }  // (#239) drop any pending fold-grace pause
     _grForceWake = false;             // session over → revert to the global setting
     grApplyGlobalWakeLock();
     _sess = null;

@@ -178,16 +178,12 @@ public class MainActivity extends Activity {
             getWindow().setAttributes(layoutParams);
         }
 
-        // #210: re-apply page-driven window state that lived on the previous
-        // activity's window (recreation gets a fresh window with default flags).
-        if (keepScreenOnWanted) {
-            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
-        }
-        if (brightnessWanted >= 0f) {
-            WindowManager.LayoutParams blp = getWindow().getAttributes();
-            blp.screenBrightness = brightnessWanted;
-            getWindow().setAttributes(blp);
-        }
+        // #210/#240: re-apply page-driven window state that lived on the previous
+        // activity's window (recreation gets a fresh window with default flags) —
+        // keep-awake + the physical-session screen brightness — BEFORE the WebView
+        // attaches, so a fold-triggered recreate doesn't flash to system/auto
+        // brightness. Also re-asserted in onResume + onConfigurationChanged.
+        applyWindowPowerState();
 
         // #210: adopt the retained WebView if one exists (fold/recreation) —
         // NO reload, the live page carries over. Only a truly fresh process
@@ -790,9 +786,37 @@ public class MainActivity extends Activity {
     }
 
     @Override
+    protected void onResume() {
+        super.onResume();
+        // #240: re-assert brightness / keep-awake on every resume — covers fold
+        // paths that stop→resume the activity without a full recreate, so the
+        // physical-session screen brightness never drops back to system default.
+        applyWindowPowerState();
+    }
+
+    @Override
     protected void onDestroy() {
         if (sRef != null && sRef.get() == this) sRef = null;
         super.onDestroy();
+    }
+
+    // #240: (re)apply the page-driven window POWER state — FLAG_KEEP_SCREEN_ON and
+    // the physical-session screen brightness — to THIS activity's window. A fold
+    // can tear down + recreate the activity (a physical display switch) with a
+    // fresh window at default brightness; without a prompt re-apply the screen
+    // visibly flashes to system/auto brightness and back. Idempotent; safe to call
+    // from onCreate (pre-attach), onResume, and onConfigurationChanged.
+    private void applyWindowPowerState() {
+        if (keepScreenOnWanted) {
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        } else {
+            getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+        }
+        if (brightnessWanted >= 0f) {
+            WindowManager.LayoutParams blp = getWindow().getAttributes();
+            blp.screenBrightness = brightnessWanted;
+            getWindow().setAttributes(blp);
+        }
     }
 
     // Foldable posture changes (fold <-> unfold) fire onConfigurationChanged
@@ -802,6 +826,7 @@ public class MainActivity extends Activity {
     @Override
     public void onConfigurationChanged(Configuration newConfig) {
         super.onConfigurationChanged(newConfig);
+        applyWindowPowerState();   // #240: a posture change must not drop brightness/keep-awake
         if (systemBarsRequested) {
             releaseImmersive();
         } else {
