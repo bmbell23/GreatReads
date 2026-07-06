@@ -233,7 +233,6 @@ async function loadLocalSession(absId) {
 async function init() {
     $('title').textContent = TITLE;
     $('author').textContent = AUTHOR;
-    $('now-playing').textContent = TITLE;
     // Start (or coalesce) the listening session for this sitting (#57).
     if (PROGRESS_KEY) initSession();
     // Saved-highlight quotes while we resolve resume + spin up the ABS session.

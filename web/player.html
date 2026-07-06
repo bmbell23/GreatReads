@@ -43,8 +43,11 @@
         }
         .icon-btn:active { background: var(--border); }
         .icon-btn.hidden { display: none; }
+        /* Minimize affordance (Audible-style): a clean, centred down-chevron.
+           Behaviour is still back/Home until the persistent mini-player lands. */
+        #back-btn { font-size: 30px; line-height: 0.7; padding: 2px 8px 8px; }
         .top-bar .now { font-size: 13px; color: var(--muted); overflow: hidden;
-            text-overflow: ellipsis; white-space: nowrap; flex: 1; }
+            text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: center; }
         .stage { flex: 1; display: flex; flex-direction: column; align-items: center;
             justify-content: center; padding: 8px 24px 4px; gap: 16px; min-height: 0; }
         /* Portrait: the wrapper is transparent so meta/bars/controls remain
@@ -269,8 +272,8 @@
 </head>
 <body>
     <div class="top-bar">
-        <button class="icon-btn" id="back-btn" title="Back">‹</button>
-        <span class="now" id="now-playing">Loading…</span>
+        <button class="icon-btn" id="back-btn" title="Minimize" aria-label="Minimize">⌄</button>
+        <span class="now" id="chapter-title"></span>
         <button class="icon-btn hidden" id="search-btn" title="Search the book"><img src="assets/search.png" alt="Search" class="icon-png"></button>
         <button class="icon-btn" id="bm-list-btn" title="Bookmarks"><img src="assets/bookmark.png" alt="Bookmarks" class="icon-png"></button>
     </div>
@@ -284,7 +287,6 @@
         <div class="meta">
             <div class="title" id="title"></div>
             <div class="author" id="author"></div>
-            <div class="chapter" id="chapter-title"></div>
         </div>
 
         <div class="bars">
