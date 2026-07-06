@@ -26,10 +26,10 @@
         </div>
         <script>
         (function () {
-            const VARIANTS = [['red','Red'],['blue','Blue'],['purple','Purple'],['pride','Pride'],['lesbian','Lesbian'],['bi_pride','Bi Pride'],['white','Minimal']];
+            const VARIANTS = [['default','Default'],['red','Red'],['blue','Blue'],['purple','Purple'],['pride','Pride'],['lesbian','Lesbian'],['bi_pride','Bi Pride'],['white','Minimal']];
             const grid = document.getElementById('app-icon-grid');
             const iconUrl = (rn) => `${window.APP_BASE_PATH || ''}/static/app-icons/${rn}.png?v=${rn}`;
-            let active = 'red';
+            let active = 'default';
             function render() {
                 grid.innerHTML = VARIANTS.map(([rn, label]) => `
                     <button type="button" class="ai-tile" data-rn="${rn}"

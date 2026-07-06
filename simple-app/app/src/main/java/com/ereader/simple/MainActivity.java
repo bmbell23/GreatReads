@@ -114,7 +114,7 @@ public class MainActivity extends Activity {
     // rest via PackageManager — no rebuild. Names must match the manifest aliases
     // (Icon + CamelCase(variant)); the resource/variant form uses underscores.
     private static final String[] ICON_VARIANTS =
-        {"red", "blue", "purple", "pride", "lesbian", "bi_pride", "white"};
+        {"default", "red", "blue", "purple", "pride", "lesbian", "bi_pride", "white"};
 
     private static String aliasFor(String v) {
         StringBuilder sb = new StringBuilder("Icon");
