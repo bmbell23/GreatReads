@@ -102,7 +102,7 @@ def prep(master):
 # fixes that everywhere. 0.56 looked too small in the switcher, 0.80 too big — 0.68 is
 # the middle.
 HFRAC_FLAT = 0.80   # favicons + legacy square icons (shown whole)
-HFRAC_FG   = 0.68   # adaptive foreground (opaque, bg baked in)
+HFRAC_FG   = 0.62   # adaptive foreground (opaque, bg baked in) — 0.68 was a tad too zoomed on-device
 
 def tile(size, design, bg, hfrac=HFRAC_FLAT, transparent=False):
     """Design centred at hfrac of the tile height, on a solid background (or

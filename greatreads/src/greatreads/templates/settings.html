@@ -34,7 +34,7 @@
                 grid.innerHTML = VARIANTS.map(([rn, label]) => `
                     <button type="button" class="ai-tile" data-rn="${rn}"
                         style="border:2px solid ${rn===active?'#6f2da3':'#dee2e6'};border-radius:14px;background:#fff;width:92px;padding:8px 6px;cursor:pointer;text-align:center;">
-                        <img src="${iconUrl(rn)}" alt="${label}" style="width:64px;height:64px;border-radius:14px;display:block;margin:0 auto;">
+                        <div style="width:64px;height:64px;border-radius:14px;margin:0 auto;background:#f2f2f2 center/contain no-repeat url('${iconUrl(rn)}');"></div>
                         <div class="small mt-1" style="${rn===active?'font-weight:700;':''}">${label}</div>
                     </button>`).join('');
                 grid.querySelectorAll('.ai-tile').forEach(b => b.onclick = () => choose(b.dataset.rn));
