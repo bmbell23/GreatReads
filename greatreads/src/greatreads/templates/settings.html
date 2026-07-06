@@ -28,7 +28,7 @@
         (function () {
             const VARIANTS = [['default','Default'],['red','Red'],['blue','Blue'],['purple','Purple'],['pride','Pride'],['lesbian','Lesbian'],['bi_pride','Bi Pride'],['white','Minimal']];
             const grid = document.getElementById('app-icon-grid');
-            const iconUrl = (rn) => `${window.APP_BASE_PATH || ''}/static/app-icons/${rn}.png?v=${rn}`;
+            const iconUrl = (rn) => `${window.APP_BASE_PATH || ''}/static/app-icons/${rn}.png?v=${rn}-2`;
             let active = 'default';
             function render() {
                 grid.innerHTML = VARIANTS.map(([rn, label]) => `

@@ -58,20 +58,24 @@ def bookmark_mask():
     if _MASK is not None:
         return _MASK
     S = _MASK_S
-    ref = np.array(Image.open(f'{ASSETS}/app-icon-red.png').convert('RGB').resize((S, S), Image.LANCZOS))
-    nearwhite = ref.min(axis=2) > 200
+    ref = np.array(Image.open(f'{ASSETS}/app-icon-red.png').convert('RGB').resize((S, S), Image.LANCZOS)).astype(int)
+    # Exterior = DESATURATED pixels: the white background AND the black rounded corners
+    # (both near-grey) — but NOT the saturated colour bookmark. Flooding only near-white
+    # left the black corners un-flooded, so they leaked into the silhouette (black corner
+    # blobs) and blew up the crop bbox (tiny bookmark). Saturation separates them cleanly.
+    exterior = (ref.max(axis=2) - ref.min(axis=2)) < 40
     vis = np.zeros((S, S), bool); dq = deque()
     for x in range(S):
         for y in (0, S-1):
-            if nearwhite[y, x] and not vis[y, x]: vis[y, x] = True; dq.append((y, x))
+            if exterior[y, x] and not vis[y, x]: vis[y, x] = True; dq.append((y, x))
     for y in range(S):
         for x in (0, S-1):
-            if nearwhite[y, x] and not vis[y, x]: vis[y, x] = True; dq.append((y, x))
+            if exterior[y, x] and not vis[y, x]: vis[y, x] = True; dq.append((y, x))
     while dq:
         y, x = dq.popleft()
         for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
             ny, nx = y+dy, x+dx
-            if 0 <= ny < S and 0 <= nx < S and nearwhite[ny, nx] and not vis[ny, nx]:
+            if 0 <= ny < S and 0 <= nx < S and exterior[ny, nx] and not vis[ny, nx]:
                 vis[ny, nx] = True; dq.append((ny, nx))
     _MASK = ~vis
     return _MASK
