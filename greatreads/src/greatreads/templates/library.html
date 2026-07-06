@@ -521,6 +521,12 @@
 }
 
 /* ---- Compact, icon-forward library cards ---- */
+/* Scroll perf (#229): the Library renders the WHOLE library at once (no paging,
+   unlike the Store). content-visibility:auto lets the browser skip layout/paint
+   for off-screen cells — near-virtualization, no JS. contain-intrinsic-size gives
+   a placeholder height so the scrollbar stays stable; `auto` remembers the real
+   size once a cell has rendered. */
+.lib-cell { content-visibility: auto; contain-intrinsic-size: auto 240px; }
 .lib-card {
     min-height: 0;
     border: 1px solid #e9ecef;
@@ -802,7 +808,7 @@ function createBookCard(book) {
         ? `onclick="libCardToggle(${book.id})"`
         : `onclick="openBookActions(${book.id})"`;
     return `
-        <div class="col-4 col-sm-3 col-md-3 col-lg-2 mb-3">
+        <div class="col-4 col-sm-3 col-md-3 col-lg-2 mb-3 lib-cell">
             <div class="card h-100 book-card lib-card ${book.is_read ? 'is-read' : 'is-unread'}${isSel ? ' lib-card-selected' : ''}" data-bid="${book.id}">
                 <div class="lib-cover-wrap" ${clickAttr}>
                     ${checkOverlay}
