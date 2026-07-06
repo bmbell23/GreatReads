@@ -59,6 +59,7 @@
         color: transparent; font-size: .7rem; box-shadow: 0 1px 3px rgba(0,0,0,.3); }
     .sel-check.on { background: #0d6efd; color: #fff; }
     .books-card.sel-on { box-shadow: 0 0 0 3px rgba(13,110,253,.45); }
+    .books-card.long-pressing { transform: scale(0.95); transition: transform .12s ease; }
 </style>
 
 <!-- Header -->
@@ -190,6 +191,9 @@
         <i class="fas fa-magnifying-glass me-1"></i>Fetch metadata</button>
     <button class="btn btn-sm btn-primary" id="bulkEditBtn" onclick="bulkOpen()" disabled>
         <i class="fas fa-pen-to-square me-1"></i>Edit selected</button>
+    <button class="btn btn-sm btn-outline-primary" id="bulkMergeBtn" onclick="mergeSelected()" disabled
+            title="Merge two selected books into one">
+        <i class="fas fa-code-branch me-1"></i>Merge selected</button>
     <button class="btn btn-sm btn-outline-danger" id="bulkDeleteBtn" onclick="bulkDelete()" disabled>
         <i class="fas fa-trash me-1"></i>Delete selected</button>
 </div>
@@ -479,6 +483,7 @@ document.addEventListener('DOMContentLoaded', async () => {
     updateReleaseChipCounts();     // #188 New (N) / Upcoming (N) chip counts
     _maybeOpenMergeFromUrl();      // #131 deep-link: /books?merge=a,b
     _maybeCheckLibbyFromUrl();     // #205 deep-link: /books?check_libby=<title>&cl_author=<author>
+    storeWireSelectGestures();     // #228 long-press / right-click to select
     // the shared Edit Book module (book_edit.js) wires autocomplete + preloads lists
 });
 
@@ -783,7 +788,7 @@ function cardHtml(c) {
     // Format chips (ebook/audiobook) top-left for unowned Libby results (#197).
     const libbyFmtChips = (c.kind === 'libby' && !libbyIsOwned(c)) ? libbyFormatChips(c) : '';
     return `<div class="col-4 col-sm-3 col-lg-2 mb-3">
-        <div class="card books-card status-${c.status}${isSel ? ' sel-on' : ''}" style="cursor:pointer;" onclick="${click}" title="${esc(dispTitle(c.title))}">
+        <div class="card books-card status-${c.status}${isSel ? ' sel-on' : ''}" data-key="${key}" style="cursor:pointer;" onclick="${click}" title="${esc(dispTitle(c.title))}">
             <div class="books-cover">${cover}
                 ${tl || libbyOwned}${libbyFmtChips}
                 ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
@@ -1126,6 +1131,44 @@ function updateBulkBar() {
     document.getElementById('bulkEditBtn').disabled = n === 0;
     document.getElementById('bulkDeleteBtn').disabled = n === 0;
     const en = document.getElementById('bulkEnrichBtn'); if (en) en.disabled = n === 0;
+    const mg = document.getElementById('bulkMergeBtn'); if (mg) mg.disabled = _selLocalIds().length !== 2;
+}
+// Local (DB) book ids among the selected cardKeys ('L'+book_id). #228
+function _selLocalIds() {
+    return [...selected].filter(k => k[0] === 'L').map(k => parseInt(k.slice(1), 10));
+}
+// Merge exactly two selected books (#228) → the #131 compare on this page.
+function mergeSelected() {
+    const ids = _selLocalIds();
+    if (ids.length !== 2) { showToast('Select exactly two of your books to merge.', 'info'); return; }
+    const base = window.APP_BASE_PATH || '';
+    window.location.href = `${base}/books?merge=${ids[0]},${ids[1]}`;
+}
+// Long-press (mobile) / right-click (desktop) → enter select mode + select a local
+// book, then keep selecting (#228). Delegated so it survives re-renders.
+function storeSelectFromGesture(key) {
+    if (key[0] !== 'L') return;   // only your own (DB) books are selectable
+    if (!selectMode) { toggleSelectMode(); }   // enters + renders checkboxes
+    if (!selected.has(key)) { selected.add(key); renderAll(); }
+    if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+}
+function storeWireSelectGestures() {
+    const grid = document.getElementById('booksGrid'); if (!grid || grid._gestWired) return;
+    grid._gestWired = true;
+    const keyFromEvent = (e) => { const card = e.target.closest('.books-card'); return card ? card.getAttribute('data-key') : null; };
+    grid.addEventListener('contextmenu', (e) => { const k = keyFromEvent(e); if (!k || k[0] !== 'L') return; e.preventDefault(); storeSelectFromGesture(k); });
+    let timer = null, pc = null;
+    const clear = () => { if (timer) clearTimeout(timer); timer = null; if (pc) pc.classList.remove('long-pressing'); pc = null; };
+    grid.addEventListener('touchstart', (e) => {
+        const card = e.target.closest('.books-card'); if (!card) return;
+        const k = card.getAttribute('data-key'); if (!k || k[0] !== 'L') return;
+        pc = card; card.classList.add('long-pressing');
+        timer = setTimeout(() => { card.classList.remove('long-pressing'); storeSelectFromGesture(k); timer = null; }, 450);
+    }, { passive: true });
+    grid.addEventListener('touchmove', clear, { passive: true });
+    grid.addEventListener('touchend', clear, { passive: true });
+    grid.addEventListener('touchcancel', clear, { passive: true });
+    window.addEventListener('scroll', clear, { passive: true });
 }
 
 // Bulk "Fetch metadata" (#159): backfill empty fields on the selected local books.

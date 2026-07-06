@@ -27,6 +27,7 @@
         const e = $('grBulkEditBtn'); if (e) e.disabled = n === 0;
         const d = $('grBulkDeleteBtn'); if (d) d.disabled = n === 0;
         const en = $('grBulkEnrichBtn'); if (en) en.disabled = n === 0;
+        const mg = $('grBulkMergeBtn'); if (mg) mg.disabled = n !== 2;   // #228: merge needs exactly 2
     }
     function setModeUI(on) {
         const btn = $('grBulkModeBtn');
@@ -42,6 +43,7 @@
     window.grBulkInit = h => { hooks = h || {}; };
     window.grBulkActive = () => active;
     window.grBulkHas = id => sel.has(id);
+    window.grBulkSelectedIds = () => [...sel];   // #228: for Merge selected
 
     window.grBulkToggleMode = function () {
         active = !active;

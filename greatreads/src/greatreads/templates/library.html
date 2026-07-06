@@ -35,23 +35,36 @@
         </button>
         <ul class="dropdown-menu dropdown-menu-end" id="sortMenu"></ul>
     </div>
-    <!-- Multi-select for bulk edit/delete (#162). -->
+    <!-- Multi-select for bulk edit/delete (#162/#228). Long-press or right-click a
+         book also enters select mode, so this button is a secondary affordance. -->
     <button class="btn btn-outline-secondary flex-shrink-0" id="grBulkModeBtn" type="button"
-            onclick="grBulkToggleMode()" title="Select multiple books"><i class="fas fa-check-square me-1"></i>Select</button>
+            onclick="grBulkToggleMode()" title="Select multiple books (or long-press / right-click a book)"><i class="fas fa-check-square me-1"></i>Select</button>
+    <!-- Settings access on Library (#228). -->
+    <a class="btn btn-outline-secondary flex-shrink-0" href="{{ url_for('settings_page') }}" title="Settings"><i class="fas fa-gear"></i></a>
 </div>
 
-<!-- Bulk action bar (#162): shown only in select mode. -->
-<div id="grBulkBar" class="d-none align-items-center flex-wrap gap-2 mb-2 p-2 border rounded bg-light">
-    <span class="fw-medium small"><span id="grBulkCount">0</span> selected</span>
-    <button class="btn btn-sm btn-outline-secondary" onclick="grBulkSelectAllLoaded()">Select all loaded</button>
-    <button class="btn btn-sm btn-outline-secondary" onclick="grBulkClearSel()">Clear</button>
-    <button class="btn btn-sm btn-outline-info ms-auto" id="grBulkEnrichBtn" onclick="grBulkFetchMeta()" disabled
-            title="Fill empty synopsis / genres / rating / date / pages from Apple / Google / OpenLibrary">
-        <i class="fas fa-magnifying-glass me-1"></i>Fetch metadata</button>
-    <button class="btn btn-sm btn-primary" id="grBulkEditBtn" onclick="grBulkOpen()" disabled>
-        <i class="fas fa-pen-to-square me-1"></i>Edit selected</button>
-    <button class="btn btn-sm btn-outline-danger" id="grBulkDeleteBtn" onclick="grBulkDelete()" disabled>
-        <i class="fas fa-trash me-1"></i>Delete selected</button>
+<!-- Floating bulk action panel (#228): fixed top-right, shown only in select mode. -->
+<div id="grBulkBar" class="d-none">
+    <div class="gr-bulkbar-inner">
+        <div class="d-flex align-items-center gap-2 mb-2">
+            <span class="fw-semibold small flex-grow-1"><span id="grBulkCount">0</span> selected</span>
+            <button class="btn btn-sm btn-link text-muted p-0 me-1" onclick="grBulkSelectAllLoaded()" title="Select all loaded">All</button>
+            <button class="btn btn-sm btn-link text-muted p-0" onclick="grBulkToggleMode()" title="Exit select mode"><i class="fas fa-xmark"></i></button>
+        </div>
+        <div class="d-grid gap-1">
+            <button class="btn btn-sm btn-primary" id="grBulkEditBtn" onclick="grBulkOpen()" disabled>
+                <i class="fas fa-pen-to-square me-1"></i>Edit selected</button>
+            <button class="btn btn-sm btn-outline-primary" id="grBulkMergeBtn" onclick="grBulkMerge()" disabled
+                    title="Merge two selected books into one">
+                <i class="fas fa-code-branch me-1"></i>Merge selected</button>
+            <button class="btn btn-sm btn-outline-info" id="grBulkEnrichBtn" onclick="grBulkFetchMeta()" disabled
+                    title="Fill empty synopsis / genres / rating / date / pages from Apple / Google / OpenLibrary">
+                <i class="fas fa-magnifying-glass me-1"></i>Fetch metadata</button>
+            <button class="btn btn-sm btn-outline-danger" id="grBulkDeleteBtn" onclick="grBulkDelete()" disabled>
+                <i class="fas fa-trash me-1"></i>Delete selected</button>
+            <button class="btn btn-sm btn-outline-secondary" onclick="grBulkClearSel()">Clear</button>
+        </div>
+    </div>
 </div>
 
 <!-- Stat / format filter chips (one tight row) -->
@@ -518,6 +531,16 @@
 .lib-card:hover { box-shadow: 0 6px 18px rgba(0,0,0,0.12); transform: translateY(-2px); }
 /* Bulk-select (#162): checkbox overlay + selected highlight. */
 .lib-card-selected { border-color: #0d6efd; box-shadow: 0 0 0 2px #0d6efd inset; }
+.lib-card.long-pressing { transform: scale(0.95); transition: transform .12s ease; }
+
+/* Floating bulk action panel (#228): fixed top-right in select mode. */
+#grBulkBar { position: fixed; top: calc(64px + env(safe-area-inset-top, 0px)); right: 12px;
+    z-index: 1045; width: 210px; max-width: calc(100vw - 24px); }
+#grBulkBar .gr-bulkbar-inner { width: 100%; background: var(--bs-body-bg, #fff); border: 1px solid rgba(13,110,253,.35);
+    border-radius: 12px; padding: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.18); }
+@media (max-width: 575.98px) {
+    #grBulkBar { top: auto; bottom: calc(12px + env(safe-area-inset-bottom, 0px)); right: 12px; width: 190px; }
+}
 .lib-select-check {
     position: absolute; top: 6px; left: 6px; z-index: 3;
     background: rgba(255,255,255,0.9); border-radius: 4px; padding: 1px 3px; line-height: 1;
@@ -773,9 +796,11 @@ function createBookCard(book) {
         ? `<span class="lib-select-check"><input type="checkbox" ${isSel ? 'checked' : ''}
                onclick="event.stopPropagation();libCardToggle(${book.id})"></span>`
         : '';
+    // Not selecting: tap opens details; long-press / right-click enters select mode
+    // (handled by the delegated gesture wiring, #228). Selecting: tap toggles.
     const clickAttr = selecting
         ? `onclick="libCardToggle(${book.id})"`
-        : `onclick="openBookActions(${book.id})" oncontextmenu="openBookActions(${book.id}); return false;"`;
+        : `onclick="openBookActions(${book.id})"`;
     return `
         <div class="col-4 col-sm-3 col-md-3 col-lg-2 mb-3">
             <div class="card h-100 book-card lib-card ${book.is_read ? 'is-read' : 'is-unread'}${isSel ? ' lib-card-selected' : ''}" data-bid="${book.id}">
@@ -805,6 +830,54 @@ function libCardToggle(id) {
         if (cb) cb.checked = on;
     }
 }
+
+// Long-press (mobile) / right-click (desktop) to enter select mode and select a
+// book, then keep selecting more (#228). Delegated so it survives grid re-renders.
+function libSelectFromGesture(id) {
+    if (typeof grBulkActive !== 'function') return;
+    if (!grBulkActive()) {
+        grBulkToggleMode();          // enter select mode (re-renders with checkboxes)
+        if (!grBulkHas(id)) grBulkToggle(id);   // select the pressed book
+        displayBooks(filteredBooks); // repaint so its checkbox/highlight shows
+    } else if (!grBulkHas(id)) {
+        libCardToggle(id);
+    }
+    if (navigator.vibrate) { try { navigator.vibrate(15); } catch (_) {} }
+}
+function libWireSelectGestures() {
+    const grid = document.getElementById('books-grid') || document.body;
+    if (grid._gestWired) return; grid._gestWired = true;
+    // Right-click → select (not the details popup).
+    grid.addEventListener('contextmenu', (e) => {
+        const card = e.target.closest('.lib-card'); if (!card) return;
+        e.preventDefault();
+        libSelectFromGesture(parseInt(card.dataset.bid, 10));
+    });
+    // Long-press → select. Cancel on move/scroll or an early release.
+    let timer = null, pressedCard = null;
+    const clear = () => { if (timer) clearTimeout(timer); timer = null;
+        if (pressedCard) pressedCard.classList.remove('long-pressing'); pressedCard = null; };
+    grid.addEventListener('touchstart', (e) => {
+        const card = e.target.closest('.lib-card'); if (!card) return;
+        pressedCard = card; card.classList.add('long-pressing');
+        const id = parseInt(card.dataset.bid, 10);
+        timer = setTimeout(() => { card.classList.remove('long-pressing'); libSelectFromGesture(id); timer = null; }, 450);
+    }, { passive: true });
+    grid.addEventListener('touchmove', clear, { passive: true });
+    grid.addEventListener('touchend', clear, { passive: true });
+    grid.addEventListener('touchcancel', clear, { passive: true });
+    window.addEventListener('scroll', clear, { passive: true });
+}
+
+// Merge exactly two selected books (#228) → the shared #131 merge compare on the
+// Store page (deep-link). survivor = the first selected id.
+function grBulkMerge() {
+    if (typeof grBulkSelectedIds !== 'function') return;
+    const ids = grBulkSelectedIds();
+    if (ids.length !== 2) { if (typeof showToast === 'function') showToast('Select exactly two books to merge.', 'info'); return; }
+    const base = window.APP_BASE_PATH || '';
+    window.location.href = `${base}/books?merge=${ids[0]},${ids[1]}`;
+}
 // Wire the shared bulk controller to Library's data + grid once GreatReads is ready.
 function libInitBulk() {
     // Popup prev/next nav keeps Library's custom actions (#2).
@@ -833,6 +906,7 @@ function libInitBulk() {
             if (typeof loadLibraryData === 'function') loadLibraryData();
         },
     });
+    libWireSelectGestures();   // #228: long-press / right-click to select
 }
 
 // Click a cover → the shared cover-tap popup (GreatReads.openBookActions): big
