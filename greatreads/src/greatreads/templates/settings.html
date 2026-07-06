@@ -28,13 +28,15 @@
         (function () {
             const VARIANTS = [['default','Default'],['red','Red'],['blue','Blue'],['purple','Purple'],['pride','Pride'],['lesbian','Lesbian'],['bi_pride','Bi Pride'],['white','Minimal']];
             const grid = document.getElementById('app-icon-grid');
-            const iconUrl = (rn) => `${window.APP_BASE_PATH || ''}/static/app-icons/${rn}.png?v=${rn}-2`;
+            const iconUrl = (rn) => `${window.APP_BASE_PATH || ''}/static/app-icons/${rn}.png?v=${rn}-3`;
             let active = 'default';
             function render() {
                 grid.innerHTML = VARIANTS.map(([rn, label]) => `
                     <button type="button" class="ai-tile" data-rn="${rn}"
                         style="border:2px solid ${rn===active?'#6f2da3':'#dee2e6'};border-radius:14px;background:#fff;width:92px;padding:8px 6px;cursor:pointer;text-align:center;">
-                        <div style="width:64px;height:64px;border-radius:14px;margin:0 auto;background:#f2f2f2 center/contain no-repeat url('${iconUrl(rn)}');"></div>
+                        <span style="display:block;width:64px;height:64px;border-radius:14px;margin:0 auto;background:#f2f2f2;overflow:hidden;">
+                            <img src="${iconUrl(rn)}" alt="" style="width:64px;height:64px;display:block;opacity:0;transition:opacity .15s;" onload="this.style.opacity=1">
+                        </span>
                         <div class="small mt-1" style="${rn===active?'font-weight:700;':''}">${label}</div>
                     </button>`).join('');
                 grid.querySelectorAll('.ai-tile').forEach(b => b.onclick = () => choose(b.dataset.rn));
