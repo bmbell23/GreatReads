@@ -46,9 +46,9 @@
                 if (window.grApplyFavicon) window.grApplyFavicon(rn);
                 if (window.GreatReads && GreatReads.showToast) GreatReads.showToast('App icon updated', 'success');
             }
-            (async () => {
-                try { const d = await GreatReads.apiCall('/settings/app_icon'); if (d && d.setting_value) active = d.setting_value; } catch (_) {}
-                render();
+            render();   // render the grid immediately so thumbnails load right away
+            (async () => {   // then update the active highlight once we know the saved choice
+                try { const d = await GreatReads.apiCall('/settings/app_icon'); if (d && d.setting_value && d.setting_value !== active) { active = d.setting_value; render(); } } catch (_) {}
             })();
         })();
         </script>

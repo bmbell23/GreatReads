@@ -92,13 +92,13 @@ def prep(master):
     bg = clean_bg(a)
     return extract_design(a, bg), tuple(int(v) for v in bg)
 
-# Two different sizes (#242): the browser/legacy favicon shows the WHOLE tile, so the
-# design fills ~0.80. The Android ADAPTIVE foreground is magnified by the launcher
-# (it shows only the central ~72/108 of the layer and zooms in), so the design must be
-# smaller — ~0.56 — or it looks zoomed-in/cropped on the phone. 0.80 fg = "too big";
-# 0.66 fg (with the old nested-round bug) looked "tiny".
+# Design sizes (#242). The adaptive foreground is now OPAQUE (bg baked in): Samsung's
+# recents/app-switcher renders the foreground WITHOUT the background layer, so a
+# transparent foreground showed black corners around a small design. Baking the bg in
+# fixes that everywhere. 0.56 looked too small in the switcher, 0.80 too big — 0.68 is
+# the middle.
 HFRAC_FLAT = 0.80   # favicons + legacy square icons (shown whole)
-HFRAC_FG   = 0.56   # adaptive foreground (launcher magnifies)
+HFRAC_FG   = 0.68   # adaptive foreground (opaque, bg baked in)
 
 def tile(size, design, bg, hfrac=HFRAC_FLAT, transparent=False):
     """Design centred at hfrac of the tile height, on a solid background (or
@@ -126,7 +126,7 @@ def write_launcher(res, design, bg, quiet=False):
         tile(LEG[d], design, bg).convert('RGB').save(f'{o}/ic_launcher.png')
         circle(tile(LEG[d], design, bg)).save(f'{o}/ic_launcher_round.png')
         # Adaptive foreground: design on transparent (safe zone); background = bg drawable.
-        tile(FG[d], design, bg, hfrac=HFRAC_FG, transparent=True).save(f'{o}/ic_launcher_foreground.png')
+        tile(FG[d], design, bg, hfrac=HFRAC_FG).convert('RGB').save(f'{o}/ic_launcher_foreground.png')
     os.makedirs(f'{res}/drawable', exist_ok=True)
     with open(f'{res}/drawable/ic_launcher_bg.xml', 'w') as f:
         f.write('<?xml version="1.0" encoding="utf-8"?>\n'
@@ -136,19 +136,14 @@ def write_launcher(res, design, bg, quiet=False):
         print('   launcher mipmaps + drawable/ic_launcher_bg.xml (solid', bg_hex + ')')
 
 def masked_preview(design, bg, S=384, kind='squircle'):
-    """Device-accurate launcher preview: the adaptive foreground (HFRAC_FG) over the
-    bg, then only the central ~72/108 viewport the launcher magnifies to fill the tile
-    — so the preview matches the phone instead of the un-zoomed full tile (#242)."""
-    VIEW = 0.667
-    L = int(round(S / VIEW))
-    base = Image.new('RGBA', (L, L), bg + (255,))
-    base.alpha_composite(tile(L, design, bg, hfrac=HFRAC_FG, transparent=True))
-    off = (L - S) // 2
-    view = base.crop((off, off, off + S, off + S))
+    """App-switcher-accurate: the OPAQUE adaptive foreground (bg baked in, HFRAC_FG),
+    masked — matches Samsung recents, which shows the foreground ~1:1 (no black
+    corners now that the bg is baked in). (#242)"""
+    t = tile(S, design, bg, hfrac=HFRAC_FG)
     m = Image.new('L', (S, S), 0); dr = ImageDraw.Draw(m)
     (dr.ellipse if kind == 'circle' else
      (lambda box, fill: dr.rounded_rectangle(box, radius=int(S*0.22), fill=fill)))((0, 0, S-1, S-1), fill=255)
-    out = Image.new('RGBA', (S, S), (0, 0, 0, 0)); out.paste(view, (0, 0), m); return out
+    out = Image.new('RGBA', (S, S), (0, 0, 0, 0)); out.paste(t, (0, 0), m); return out
 
 def gen_live():
     design, bg = prep(f'{ASSETS}/app-icon.png')
@@ -201,7 +196,7 @@ def write_named_launcher(res, name, design, bg):
         o = f'{res}/mipmap-{d}'; os.makedirs(o, exist_ok=True)
         tile(LEG[d], design, bg).convert('RGB').save(f'{o}/ic_launcher_{rn}.png')
         circle(tile(LEG[d], design, bg)).save(f'{o}/ic_launcher_{rn}_round.png')
-        tile(FG[d], design, bg, hfrac=HFRAC_FG, transparent=True).save(f'{o}/ic_launcher_{rn}_foreground.png')
+        tile(FG[d], design, bg, hfrac=HFRAC_FG).convert('RGB').save(f'{o}/ic_launcher_{rn}_foreground.png')
     os.makedirs(f'{res}/mipmap-anydpi-v26', exist_ok=True)
     adaptive = ('<?xml version="1.0" encoding="utf-8"?>\n'
                 '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
