@@ -17,6 +17,7 @@ will look approximate; those want a full-bleed background bitmap instead.)
 """
 from PIL import Image, ImageDraw
 import numpy as np, os, sys, glob
+from collections import deque
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 ASSETS = os.path.join(ROOT, 'assets')
@@ -42,20 +43,49 @@ def clean_bg(a):
 # would need detection or their own region.)
 DESIGN_REGION = (0.332, 0.098, 0.672, 0.923)   # left, top, right, bottom
 
+_MASK_S = 512
+_MASK = None
+def bookmark_mask():
+    """FILLED bookmark silhouette (the shape, incl. the icon areas), derived ONCE from
+    a high-contrast reference (red bookmark on white): flood-fill the near-white
+    exterior from the border; whatever the flood can't reach — the bookmark body plus
+    its enclosed icon cut-outs — is the silhouette. Every variant is the same artwork
+    recoloured, so this shape is shared. Applying it as alpha to each variant's OWN
+    pixels preserves that variant's colours/interior (cream, colour icons, cut-outs)
+    with a clean bookmark edge — no rectangle, and low-contrast bookmarks aren't
+    erased. (#242)"""
+    global _MASK
+    if _MASK is not None:
+        return _MASK
+    S = _MASK_S
+    ref = np.array(Image.open(f'{ASSETS}/app-icon-red.png').convert('RGB').resize((S, S), Image.LANCZOS))
+    nearwhite = ref.min(axis=2) > 200
+    vis = np.zeros((S, S), bool); dq = deque()
+    for x in range(S):
+        for y in (0, S-1):
+            if nearwhite[y, x] and not vis[y, x]: vis[y, x] = True; dq.append((y, x))
+    for y in range(S):
+        for x in (0, S-1):
+            if nearwhite[y, x] and not vis[y, x]: vis[y, x] = True; dq.append((y, x))
+    while dq:
+        y, x = dq.popleft()
+        for dy, dx in ((1, 0), (-1, 0), (0, 1), (0, -1)):
+            ny, nx = y+dy, x+dx
+            if 0 <= ny < S and 0 <= nx < S and nearwhite[ny, nx] and not vis[ny, nx]:
+                vis[ny, nx] = True; dq.append((ny, nx))
+    _MASK = ~vis
+    return _MASK
+
 def extract_design(a, bg):
-    """The design on transparent: everything that differs from the background, minus
-    the near-black rounded corners, cropped to the shared bookmark region."""
-    H, W, _ = a.shape
-    dist = np.sqrt(((a - bg) ** 2).sum(axis=2))
-    yy, xx = np.mgrid[0:H, 0:W]
-    near = (np.minimum(xx, W-1-xx) < W*0.20) & (np.minimum(yy, H-1-yy) < H*0.20)
-    black_corner = (a.min(axis=2) < 45) & near
-    alpha = np.clip((dist - 22) * 7, 0, 255).astype('uint8')
-    alpha[black_corner] = 0
-    rgba = np.dstack([a, alpha]).astype('uint8')
-    l, t, r, b = (int(W*DESIGN_REGION[0]), int(H*DESIGN_REGION[1]),
-                  int(W*DESIGN_REGION[2]), int(H*DESIGN_REGION[3]))
-    return Image.fromarray(rgba, 'RGBA').crop((l, t, r, b))
+    """Each variant's own pixels cut to the shared bookmark silhouette (transparent
+    outside), tight-cropped to the bookmark. Preserves cream-on-tan / white-on-white
+    bookmarks that a difference-from-bg test would erase. (#242)"""
+    S = _MASK_S
+    mask = bookmark_mask()
+    src = np.array(Image.fromarray(a.astype('uint8')).resize((S, S), Image.LANCZOS))
+    rgba = np.dstack([src, np.where(mask, 255, 0).astype('uint8')])
+    ys, xs = np.where(mask)
+    return Image.fromarray(rgba, 'RGBA').crop((xs.min(), ys.min(), xs.max()+1, ys.max()+1))
 
 def prep(master):
     a = np.array(Image.open(master).convert('RGB')).astype(int)
