@@ -730,6 +730,15 @@ function updateReadingOverTimeChart() {
                 legend: {
                     display: true,
                     position: 'top'
+                },
+                tooltip: {
+                    callbacks: {
+                        // All-formats total for the hovered year/month (#245).
+                        footer: (items) => {
+                            const total = items.reduce((s, it) => s + (it.parsed.y || 0), 0);
+                            return 'Total: ' + Math.round(total).toLocaleString();
+                        }
+                    }
                 }
             },
             scales: {

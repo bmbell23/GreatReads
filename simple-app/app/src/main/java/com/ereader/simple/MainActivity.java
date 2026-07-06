@@ -108,6 +108,45 @@ public class MainActivity extends Activity {
     private static boolean keepScreenOnWanted = false;
     private static float brightnessWanted = -1f;
 
+    // #242: launcher-icon variants exposed as <activity-alias> in the manifest.
+    // Exactly one is enabled at a time; the web UI swaps by calling
+    // JsBridge.setLauncherIcon(), which enables the chosen alias and disables the
+    // rest via PackageManager — no rebuild. Names must match the manifest aliases
+    // (Icon + CamelCase(variant)); the resource/variant form uses underscores.
+    private static final String[] ICON_VARIANTS =
+        {"red", "blue", "purple", "pride", "lesbian", "bi_pride", "white"};
+
+    private static String aliasFor(String v) {
+        StringBuilder sb = new StringBuilder("Icon");
+        for (String part : v.split("_")) {
+            if (part.isEmpty()) continue;
+            sb.append(Character.toUpperCase(part.charAt(0))).append(part.substring(1));
+        }
+        return sb.toString();
+    }
+
+    static void applyLauncherIcon(android.content.Context ctx, String variant) {
+        if (ctx == null || variant == null) return;
+        final String v0 = variant.replace('-', '_').toLowerCase();
+        boolean known = false;
+        for (String v : ICON_VARIANTS) if (v.equals(v0)) known = true;
+        if (!known) return;
+        PackageManager pm = ctx.getPackageManager();
+        String pkg = ctx.getPackageName();
+        // Enable the target FIRST so a launcher component always exists, then disable the rest.
+        try {
+            pm.setComponentEnabledSetting(new android.content.ComponentName(pkg, pkg + "." + aliasFor(v0)),
+                PackageManager.COMPONENT_ENABLED_STATE_ENABLED, PackageManager.DONT_KILL_APP);
+        } catch (Exception e) { android.util.Log.e("Ereader", "enable icon " + v0, e); }
+        for (String v : ICON_VARIANTS) {
+            if (v.equals(v0)) continue;
+            try {
+                pm.setComponentEnabledSetting(new android.content.ComponentName(pkg, pkg + "." + aliasFor(v)),
+                    PackageManager.COMPONENT_ENABLED_STATE_DISABLED, PackageManager.DONT_KILL_APP);
+            } catch (Exception e) { android.util.Log.e("Ereader", "disable icon " + v, e); }
+        }
+    }
+
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
@@ -744,6 +783,13 @@ public class MainActivity extends Activity {
                     android.util.Log.e("Ereader", "shareImage failed", e);
                 }
             });
+        }
+
+        @JavascriptInterface
+        public void setLauncherIcon(final String variant) {
+            // #242: swap the launcher icon among the pre-baked variant aliases.
+            // Uses the application context, so it works even mid-recreation.
+            main.post(() -> applyLauncherIcon(app, variant));
         }
     }
 

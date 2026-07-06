@@ -62,7 +62,15 @@ def prep(master):
     bg = clean_bg(a)
     return extract_design(a, bg), tuple(int(v) for v in bg)
 
-def tile(size, design, bg, hfrac=0.66, transparent=False):
+# Two different sizes (#242): the browser/legacy favicon shows the WHOLE tile, so the
+# design fills ~0.80. The Android ADAPTIVE foreground is magnified by the launcher
+# (it shows only the central ~72/108 of the layer and zooms in), so the design must be
+# smaller — ~0.56 — or it looks zoomed-in/cropped on the phone. 0.80 fg = "too big";
+# 0.66 fg (with the old nested-round bug) looked "tiny".
+HFRAC_FLAT = 0.80   # favicons + legacy square icons (shown whole)
+HFRAC_FG   = 0.56   # adaptive foreground (launcher magnifies)
+
+def tile(size, design, bg, hfrac=HFRAC_FLAT, transparent=False):
     """Design centred at hfrac of the tile height, on a solid background (or
     transparent, for the adaptive foreground layer whose background is the bg drawable)."""
     base = Image.new('RGBA', (size, size), (0, 0, 0, 0) if transparent else bg + (255,))
@@ -88,7 +96,7 @@ def write_launcher(res, design, bg, quiet=False):
         tile(LEG[d], design, bg).convert('RGB').save(f'{o}/ic_launcher.png')
         circle(tile(LEG[d], design, bg)).save(f'{o}/ic_launcher_round.png')
         # Adaptive foreground: design on transparent (safe zone); background = bg drawable.
-        tile(FG[d], design, bg, transparent=True).save(f'{o}/ic_launcher_foreground.png')
+        tile(FG[d], design, bg, hfrac=HFRAC_FG, transparent=True).save(f'{o}/ic_launcher_foreground.png')
     os.makedirs(f'{res}/drawable', exist_ok=True)
     with open(f'{res}/drawable/ic_launcher_bg.xml', 'w') as f:
         f.write('<?xml version="1.0" encoding="utf-8"?>\n'
@@ -98,11 +106,19 @@ def write_launcher(res, design, bg, quiet=False):
         print('   launcher mipmaps + drawable/ic_launcher_bg.xml (solid', bg_hex + ')')
 
 def masked_preview(design, bg, S=384, kind='squircle'):
-    t = tile(S, design, bg)
+    """Device-accurate launcher preview: the adaptive foreground (HFRAC_FG) over the
+    bg, then only the central ~72/108 viewport the launcher magnifies to fill the tile
+    — so the preview matches the phone instead of the un-zoomed full tile (#242)."""
+    VIEW = 0.667
+    L = int(round(S / VIEW))
+    base = Image.new('RGBA', (L, L), bg + (255,))
+    base.alpha_composite(tile(L, design, bg, hfrac=HFRAC_FG, transparent=True))
+    off = (L - S) // 2
+    view = base.crop((off, off, off + S, off + S))
     m = Image.new('L', (S, S), 0); dr = ImageDraw.Draw(m)
     (dr.ellipse if kind == 'circle' else
      (lambda box, fill: dr.rounded_rectangle(box, radius=int(S*0.22), fill=fill)))((0, 0, S-1, S-1), fill=255)
-    out = Image.new('RGBA', (S, S), (0, 0, 0, 0)); out.paste(t, (0, 0), m); return out
+    out = Image.new('RGBA', (S, S), (0, 0, 0, 0)); out.paste(view, (0, 0), m); return out
 
 def gen_live():
     design, bg = prep(f'{ASSETS}/app-icon.png')
@@ -143,8 +159,66 @@ def gen_preview():
         canvas.paste(p.convert('RGB'), (x, y), p); d.text((x+4, y+S+4), lbl, fill=(0, 0, 0))
     canvas.save('/tmp/icons_all.png'); print('saved /tmp/icons_all.png')
 
+# ── #242: per-variant resources baked into the APK + served favicons for the swap ──
+def _rn(name):
+    return name.replace('-', '_')   # Android resource names can't contain hyphens
+
+def write_named_launcher(res, name, design, bg):
+    """Write ic_launcher_<name>_* mipmaps + adaptive XML + bg drawable so an
+    <activity-alias> can point at this variant (runtime launcher swap, #242)."""
+    rn = _rn(name); bg_hex = '#%02X%02X%02X' % bg
+    for d in LEG:
+        o = f'{res}/mipmap-{d}'; os.makedirs(o, exist_ok=True)
+        tile(LEG[d], design, bg).convert('RGB').save(f'{o}/ic_launcher_{rn}.png')
+        circle(tile(LEG[d], design, bg)).save(f'{o}/ic_launcher_{rn}_round.png')
+        tile(FG[d], design, bg, hfrac=HFRAC_FG, transparent=True).save(f'{o}/ic_launcher_{rn}_foreground.png')
+    os.makedirs(f'{res}/mipmap-anydpi-v26', exist_ok=True)
+    adaptive = ('<?xml version="1.0" encoding="utf-8"?>\n'
+                '<adaptive-icon xmlns:android="http://schemas.android.com/apk/res/android">\n'
+                f'    <background android:drawable="@drawable/ic_launcher_{rn}_bg"/>\n'
+                f'    <foreground android:drawable="@mipmap/ic_launcher_{rn}_foreground"/>\n'
+                '</adaptive-icon>\n')
+    # BOTH android:icon and android:roundIcon must resolve to an adaptive-icon on
+    # API 26+. Without the _round.xml, roundIcon falls back to the legacy
+    # circle-cropped PNG, which the launcher then nests inside its own mask
+    # (icon-in-an-icon / "circle inside the tile"). (#242)
+    with open(f'{res}/mipmap-anydpi-v26/ic_launcher_{rn}.xml', 'w') as f:
+        f.write(adaptive)
+    with open(f'{res}/mipmap-anydpi-v26/ic_launcher_{rn}_round.xml', 'w') as f:
+        f.write(adaptive)
+    os.makedirs(f'{res}/drawable', exist_ok=True)
+    with open(f'{res}/drawable/ic_launcher_{rn}_bg.xml', 'w') as f:
+        f.write('<?xml version="1.0" encoding="utf-8"?>\n'
+                '<shape xmlns:android="http://schemas.android.com/apk/res/android" android:shape="rectangle">\n'
+                f'    <solid android:color="{bg_hex}"/>\n</shape>\n')
+
+def _variant_sources():
+    """(name, path) for every variant, including the active one as 'white'/'red'/…
+    from app-icon-<name>.png. The live app-icon.png is a copy of the active variant."""
+    return [(os.path.basename(p)[len('app-icon-'):-4], p)
+            for p in sorted(glob.glob(f'{ASSETS}/app-icon-*.png'))]
+
+def gen_apk():
+    """Bake every variant as named launcher resources + write served favicons
+    (static/app-icons/<name>.png for :8092, web/app-icons/<name>-*.png for :8090)
+    so the in-app icon switch (#242) can flip both the launcher and the web favicon."""
+    res = f'{ROOT}/simple-app/app/src/main/res'
+    st = f'{ROOT}/greatreads/src/greatreads/static/app-icons'
+    wb = f'{ROOT}/web/app-icons'
+    os.makedirs(st, exist_ok=True); os.makedirs(wb, exist_ok=True)
+    for name, path in _variant_sources():
+        design, bg = prep(path)
+        write_named_launcher(res, name, design, bg)
+        rn = _rn(name)
+        tile(192, design, bg).convert('RGB').save(f'{st}/{rn}.png')
+        tile(192, design, bg).convert('RGB').save(f'{wb}/{rn}-192.png')
+        tile(32, design, bg).convert('RGB').save(f'{wb}/{rn}-32.png')
+        print('  apk+favicons:', name)
+    print('Done. Named launcher resources + served favicons written; wire <activity-alias> per variant.')
+
 if __name__ == '__main__':
     arg = sys.argv[1] if len(sys.argv) > 1 else ''
     if arg == '--variants': gen_variants()
     elif arg == '--preview': gen_preview()
+    elif arg == '--apk': gen_apk()
     else: gen_live()

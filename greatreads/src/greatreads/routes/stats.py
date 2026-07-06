@@ -847,7 +847,10 @@ async def get_book_reading_time(book_id: int, db: Session = Depends(get_db)) -> 
 @router.get("/home-momentum")
 async def get_home_momentum(db: Session = Depends(get_db)) -> Dict[str, Any]:
     """Lightweight 'this year' momentum for the Home page (#65): books finished
-    year-to-date + words read year-to-date (from the reading-activity rollup)."""
+    year-to-date + words in books finished year-to-date. Words use the SAME basis as
+    the 'Reading Over Time' stats chart — full word_count of books finished this year
+    (media-filtered) — not the session-activity rollup, which only captured tracked
+    reading and understated the year ~8x (#245)."""
     year = date.today().year
     books_this_year = db.query(Reading).filter(
         Reading.date_finished_actual.isnot(None),
@@ -855,8 +858,13 @@ async def get_home_momentum(db: Session = Depends(get_db)) -> Dict[str, Any]:
     ).count()
     try:
         row = db.execute(text(
-            "SELECT COALESCE(SUM(words), 0) FROM reading_activity "
-            "WHERE substr(activity_date, 1, 4) = :yr"
+            "SELECT COALESCE(SUM(b.word_count), 0) "
+            "FROM read r JOIN books b ON b.id = r.book_id "
+            "WHERE r.date_finished_actual IS NOT NULL "
+            "AND strftime('%Y', r.date_finished_actual) = :yr "
+            "AND b.word_count IS NOT NULL "
+            "AND lower(r.media) IN "
+            "('audio','audiobook','kindle','ebook','physical','hardcover','paperback')"
         ), {"yr": str(year)}).fetchone()
         words_this_year = int(row[0] or 0)
     except Exception:

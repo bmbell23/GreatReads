@@ -25,12 +25,69 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|density|uiMode">
+            android:configChanges="screenSize|smallestScreenSize|screenLayout|orientation|keyboardHidden|keyboard|navigation|density|uiMode" />
+
+        <!-- Launcher-icon variants as aliases (#242). MainActivity has no launcher
+             entry of its own; exactly ONE alias is enabled at a time, toggled at
+             runtime by JsBridge.setLauncherIcon() via setComponentEnabledSetting
+             (no rebuild). Default = red (enabled); the rest disabled. Alias names
+             must match MainActivity.aliasFor(): "Icon" + CamelCase(variant). -->
+        <activity-alias android:name=".IconRed" android:enabled="true" android:exported="true"
+            android:targetActivity=".MainActivity" android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_red" android:roundIcon="@mipmap/ic_launcher_red_round">
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
-        </activity>
+        </activity-alias>
+        <activity-alias android:name=".IconBlue" android:enabled="false" android:exported="true"
+            android:targetActivity=".MainActivity" android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_blue" android:roundIcon="@mipmap/ic_launcher_blue_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".IconPurple" android:enabled="false" android:exported="true"
+            android:targetActivity=".MainActivity" android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_purple" android:roundIcon="@mipmap/ic_launcher_purple_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".IconPride" android:enabled="false" android:exported="true"
+            android:targetActivity=".MainActivity" android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_pride" android:roundIcon="@mipmap/ic_launcher_pride_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".IconLesbian" android:enabled="false" android:exported="true"
+            android:targetActivity=".MainActivity" android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_lesbian" android:roundIcon="@mipmap/ic_launcher_lesbian_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".IconBiPride" android:enabled="false" android:exported="true"
+            android:targetActivity=".MainActivity" android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_bi_pride" android:roundIcon="@mipmap/ic_launcher_bi_pride_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
+        <activity-alias android:name=".IconWhite" android:enabled="false" android:exported="true"
+            android:targetActivity=".MainActivity" android:label="@string/app_name"
+            android:icon="@mipmap/ic_launcher_white" android:roundIcon="@mipmap/ic_launcher_white_round">
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+        </activity-alias>
 
         <!-- Foreground media service: keeps the WebView audiobook playing when
              the screen locks / the app is backgrounded (Android otherwise

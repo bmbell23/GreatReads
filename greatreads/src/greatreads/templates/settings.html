@@ -14,6 +14,45 @@
 
 <div class="row">
     <div class="col-lg-8">
+        <!-- App Icon Card (#242) -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-icons me-2"></i>App Icon</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3">Pick the app icon — updates the browser/tab icon everywhere, and the Android launcher icon (no rebuild). On Android the launcher may flicker on change, and the first time you may need to re-pin the home-screen shortcut once.</p>
+                <div id="app-icon-grid" class="d-flex flex-wrap gap-2"></div>
+            </div>
+        </div>
+        <script>
+        (function () {
+            const VARIANTS = [['red','Red'],['blue','Blue'],['purple','Purple'],['pride','Pride'],['lesbian','Lesbian'],['bi_pride','Bi Pride'],['white','Minimal']];
+            const grid = document.getElementById('app-icon-grid');
+            const iconUrl = (rn) => `${window.APP_BASE_PATH || ''}/static/app-icons/${rn}.png?v=${rn}`;
+            let active = 'red';
+            function render() {
+                grid.innerHTML = VARIANTS.map(([rn, label]) => `
+                    <button type="button" class="ai-tile" data-rn="${rn}"
+                        style="border:2px solid ${rn===active?'#6f2da3':'#dee2e6'};border-radius:14px;background:#fff;width:92px;padding:8px 6px;cursor:pointer;text-align:center;">
+                        <img src="${iconUrl(rn)}" alt="${label}" style="width:64px;height:64px;border-radius:14px;display:block;margin:0 auto;">
+                        <div class="small mt-1" style="${rn===active?'font-weight:700;':''}">${label}</div>
+                    </button>`).join('');
+                grid.querySelectorAll('.ai-tile').forEach(b => b.onclick = () => choose(b.dataset.rn));
+            }
+            async function choose(rn) {
+                active = rn; render();
+                try { await GreatReads.apiCall('/settings/app_icon', { method: 'PUT', data: { setting_value: rn } }); } catch (_) {}
+                if (window.Android && window.Android.setLauncherIcon) { try { window.Android.setLauncherIcon(rn); } catch (_) {} }
+                if (window.grApplyFavicon) window.grApplyFavicon(rn);
+                if (window.GreatReads && GreatReads.showToast) GreatReads.showToast('App icon updated', 'success');
+            }
+            (async () => {
+                try { const d = await GreatReads.apiCall('/settings/app_icon'); if (d && d.setting_value) active = d.setting_value; } catch (_) {}
+                render();
+            })();
+        })();
+        </script>
+
         <!-- WPD Mode Card -->
         <div class="card mb-4">
             <div class="card-header d-flex align-items-center justify-content-between">

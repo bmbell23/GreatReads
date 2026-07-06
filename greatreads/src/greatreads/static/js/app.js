@@ -1927,6 +1927,21 @@ async function grApplyGlobalWakeLock() {
 }
 document.addEventListener('DOMContentLoaded', grApplyGlobalWakeLock);
 document.addEventListener('DOMContentLoaded', grBindPopupNav);
+
+// #242: apply the chosen app-icon variant to the browser/tab favicon on every app
+// page. base.html serves the default; this swaps to the saved variant on load, and
+// the Settings picker calls grApplyFavicon() live on change.
+window.grApplyFavicon = function (rn) {
+    if (!rn) return;
+    const href = `${BASE_PATH}/static/app-icons/${rn}.png?v=${rn}`;
+    document.querySelectorAll('link[rel~="icon"], link[rel="apple-touch-icon"]').forEach(l => { l.href = href; });
+};
+document.addEventListener('DOMContentLoaded', async function () {
+    try {
+        const r = await fetch(`${API_BASE}/settings/app_icon`);
+        if (r.ok) { const d = await r.json(); if (d && d.setting_value) window.grApplyFavicon(d.setting_value); }
+    } catch (_) {}
+});
 document.addEventListener('visibilitychange', () => { if (document.visibilityState === 'visible') grApplyGlobalWakeLock(); });
 document.addEventListener('touchstart', grApplyGlobalWakeLock, { passive: true });
 
