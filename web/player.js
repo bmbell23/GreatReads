@@ -296,7 +296,7 @@ async function init() {
     if (pre && typeof pre.progress === 'number' && pre.progress > 0) {
         // Optimistic book-bar render before the audio element has loaded.
         try { $('scrubber').value = Math.round(pre.progress * 1000); fillRange($('scrubber')); } catch (_) {}
-        try { $('book-pct').textContent = Math.round(pre.progress * 100) + '%'; } catch (_) {}
+        try { $('book-pct').textContent = (pre.progress * 100).toFixed(1) + '%'; } catch (_) {}
     }
 
     let savedPos = 0;
@@ -573,7 +573,7 @@ function updateUI() {
     $('elapsed').textContent = fmt(gt);
     // Remaining is "real" wall-clock time at the current speed.
     $('remaining').textContent = '-' + fmt(Math.max(0, total - gt) / rate);
-    $('book-pct').textContent = (total ? Math.round((gt / total) * 100) : 0) + '%';
+    $('book-pct').textContent = (total ? ((gt / total) * 100).toFixed(1) : '0.0') + '%';
     // #248: below the credit mark → not earning credit → flag the sync button.
     _maxPos = Math.max(_maxPos, gt);
     $('sync-btn').classList.toggle('behind', gt < _maxPos - 5);
@@ -585,7 +585,7 @@ function updateUI() {
     if (!chScrubbing) { $('ch-scrubber').value = clen ? Math.round((cpos / clen) * 1000) : 0; fillRange($('ch-scrubber')); }
     $('ch-elapsed').textContent = fmt(cpos);
     $('ch-remaining').textContent = '-' + fmt(Math.max(0, clen - cpos) / rate);
-    $('ch-pct').textContent = (clen ? Math.round((cpos / clen) * 100) : 0) + '%';
+    $('ch-pct').textContent = (clen ? ((cpos / clen) * 100).toFixed(1) : '0.0') + '%';
 
     const ch = ci >= 0 ? chapters[ci] : null;
     let ctitle = ch ? (ch.title || `Chapter ${ci + 1}`) : '';
@@ -990,7 +990,7 @@ async function renderBookmarks() {
         label.innerHTML = bmIcon + txt;
         const sub = document.createElement('div');
         sub.className = 'bm-sub';
-        const pctTxt = Math.round((n.percent || 0) * 100) + '%';
+        const pctTxt = ((n.percent || 0) * 100).toFixed(1) + '%';
         const timeTxt = (n.pos != null) ? fmt(n.pos) : fmt((n.percent || 0) * total);
         sub.innerHTML = pctTxt + ' · ' + timeTxt;
         main.appendChild(label); main.appendChild(sub);
