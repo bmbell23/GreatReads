@@ -228,11 +228,13 @@ async function loadDailyGoals() {
         const dailyMinutes = (activity && activity.daily_minutes) || {};
         // Order: Audio, then Ebook, then Physical (#81).
         const FMTS = [['Audio', 'audio_wpd'], ['Ebook', 'ebook_wpd'], ['Physical', 'physical_wpd']];
+        let tW = 0, tG = 0, tM = 0;   // combined totals across shown formats (#246)
         const rows = FMTS.map(([fmt, key]) => {
             const goal = (speeds && speeds[key]) || 0;
             if (goal <= 0) return '';
             const words = ((dailyWords[fmt] || {})[today]) || 0;
             const minutes = ((dailyMinutes[fmt] || {})[today]) || 0;
+            tW += words; tG += goal; tM += minutes;
             const pct = Math.round(words / goal * 100);
             const s = getMediaStyle(fmt);
             const done = pct >= 100;
@@ -252,7 +254,23 @@ async function loadDailyGoals() {
                 </div>`;
         }).filter(Boolean);
         if (!rows.length) { card.classList.add('d-none'); return; }
-        host.innerHTML = rows.join('');
+        // Combined total across all shown formats (#246): words read / goal · %, and time.
+        const tPct = tG > 0 ? Math.round(tW / tG * 100) : 0;
+        // Same 3-column track as the format rows so the total's words/%/goal sit
+        // directly ABOVE each format's words/%/goal (not jammed left). (#246)
+        const totalRow = `
+            <div class="d-flex align-items-center gap-2 mb-1 pb-1"
+                 style="border-bottom:1px solid rgba(0,0,0,0.08);"
+                 title="Total today: ${tW.toLocaleString()} / ${tG.toLocaleString()} words">
+                <i class="fas fa-layer-group text-muted" style="width:1.25rem; text-align:center;"></i>
+                <div style="position:relative; flex:1; height:16px;">
+                    <span class="dg-words dg-words-left" style="text-shadow:none; font-size:0.68rem;">${fmtCount(tW)}</span>
+                    <span class="dg-pct" style="text-shadow:none; font-size:0.74rem;">${tPct}%</span>
+                    <span class="dg-words dg-words-right" style="text-shadow:none; font-size:0.68rem;">${fmtCount(tG)}</span>
+                </div>
+                <span class="text-muted fw-bold" style="min-width:3.6rem; text-align:right; font-size:0.76rem;">${fmtMinutes(tM)}</span>
+            </div>`;
+        host.innerHTML = totalRow + rows.join('');
         card.classList.remove('d-none');
     } catch (error) {
         console.error('Error loading daily goals:', error);
