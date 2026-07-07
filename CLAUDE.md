@@ -21,28 +21,59 @@
   consistent on edits. (Descriptive labels like `enhancement`/`tech-debt` may
   stay alongside the `story` label.)
 
-## Every piece of work has a ticket, and moves through the board in order
-- **No work without a GitHub issue.** Every change — feature, fix, chore,
-  refactor — needs a ticket first. If you're about to touch code and there's no
-  issue for it, create one (in **Scoping**) before starting.
-- The board (Project #3 "GreatReads",
-  https://github.com/users/bmbell23/projects/3) has one Status flow, and tickets
-  move through it **in order**:
-  1. **Scoping** — default for new tickets. The ask exists but isn't yet
-     detailed enough to build confidently.
-  2. **Ready to Implement** — promote here **only when the ticket is thoroughly
-     scoped**: clear tasks/acceptance criteria, key files/approach identified,
-     open decisions resolved — i.e. someone could pick it up and build it with no
-     further questions. If you're not confident you could implement it as
-     written, it's not ready — ask the user the questions needed to get it there
-     first.
-  3. **In progress** — move here when you start implementing.
-  4. **In Review** — move here **as soon as you make code changes**. Work stays
-     in Review until **the user explicitly blesses it for closing**.
-  5. **Done** — only the **user** closes/marks Done. Don't self-close a ticket;
-     wait for the bless.
-- Don't skip columns (e.g. don't jump Scoping → In progress). Keep the ticket's
-  Status current as the work moves.
+## ONE ticket at a time, through the board in order
+
+The board is Project #3 "GreatReads" (https://github.com/users/bmbell23/projects/3).
+Statuses in order: **Scoping → Ready to Implement → In progress → In Review → Done.**
+Never skip columns; keep Status current as work moves.
+
+**No work without a GitHub issue.** When the user asks for something, **create the
+ticket as soon as possible** — before touching code.
+
+**New ticket lands in Scoping or Ready to Implement:**
+- **Straightforward + you can scope it confidently** (clear tasks, acceptance,
+  files/approach, no open decisions) → put it **straight into Ready to Implement**.
+- **Needs clarifying questions** → leave it in **Scoping**, **tell the user it needs
+  clarification, and ask the questions**. Resolve them with the user, then promote to
+  Ready to Implement. Never build from a guess.
+
+**Start implementing → In progress.**
+
+**Made ANY code change → move to In Review, and SAY SO.** The moment you edit code,
+move the ticket to **In Review** and **tell the user it's in review**. (This is the
+current rule; it overrides any older "not until committed" guidance.)
+
+**The code stays UNCOMMITTED while In Review.** Do **not** commit when you move to
+Review. In Review means: work done, **not yet committed**, awaiting the user's verdict.
+The commit happens only when the ticket is decided **Done** — or the ticket goes back
+to **In progress** for more changes.
+
+**Builds are always explicit — never leave the user guessing.** If a change needs a
+**container rebuild** (`./scripts/rebuild-ereader.sh`) and/or an **APK rebuild**
+(`./build-app.sh`) to be testable/live, **say so plainly and ask**: *"this needs a
+`<container/APK>` rebuild to see it — want me to run it, or will you?"* If they say you,
+run it. If they'll do it, wait. If the user would ever have to *discover on their own*
+that a rebuild was required, you failed to tell them — that's a bug in the process.
+
+**UNCOMMITTED == IN REVIEW.** At any moment, the list of uncommitted changes and the
+list of In-Review tickets should be **identical**. State both clearly whenever
+relevant. If they diverge, stop and reconcile.
+
+**Only ONE ticket in In progress + In Review, combined, at any time.** Scoping, Ready
+to Implement, and Done may hold many; the active lane holds **exactly one thing**. Work
+on one thing at a time.
+
+**User pivots to a new topic while something is In Review? STOP — do not start it.**
+Say: to pick that up, we first need to close out the in-review ticket — *is it good to
+mark Done and commit?* Only after it's resolved (Done + commit, or sent back to In
+progress) do you begin the next thing. **Even "just do this real quick" waits.**
+
+**Done = the user blesses it.** Only the **user** marks a ticket Done. On that bless,
+**then commit** (via `gvc`, still a gated action), and the active lane is clear for the
+next ticket.
+
+**Update tickets + comment profusely** as work moves — scope, findings, decisions, what
+was built, why. The issues (not memory, not docs) are what the next session trusts.
 
 ## Autonomy & permissions
 - **Work freely without asking for routine, reversible steps** — as long as the
@@ -60,10 +91,14 @@
      (or Calibre's `metadata.db`): `INSERT`/`UPDATE`/`DELETE`/`DROP`/schema
      changes, migrations, or data fixes. Read-only queries are fine. Back up the
      DB before any schema/data migration (Jan-2026 data-loss incident).
-  2. **Remaking the application** — rebuilding the container / `docker compose
-     ... up -d --build` (see "Rebuild the container" below).
-  3. **Committing code** — `git commit`, `gvc`, `git push`. Commits go through
-     `gvc` and only with explicit permission.
+  2. **Remaking the application** — rebuilding the **container**
+     (`./scripts/rebuild-ereader.sh`, see "Rebuild the container" below) **and/or the
+     APK** (`./build-app.sh`). Ask before either, and always **tell the user when a
+     rebuild is needed** so they never have to discover it themselves (see the board
+     flow above). Once they say go, run it yourself; if they'd rather do it, wait.
+  3. **Committing code** — `git commit`, `gvc`, `git push`. Commits go through `gvc`,
+     only with explicit permission, and **only when a ticket is decided Done** —
+     In-Review work stays uncommitted (see the board flow above).
 
 ## Rebuild the container — ask first, then do it
 - Rebuilding/remaking the application is a **gated action: ask the user before
