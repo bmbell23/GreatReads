@@ -43,9 +43,13 @@
         }
         .icon-btn:active { background: var(--border); }
         .icon-btn.hidden { display: none; }
-        /* Minimize affordance (Audible-style): a clean, centred down-chevron.
-           Behaviour is still back/Home until the persistent mini-player lands. */
-        #back-btn { font-size: 30px; line-height: 0.7; padding: 2px 8px 8px; }
+        /* Close affordance: an "X" matching the app's hamburger→X (two 3px bars
+           crossed). Honest close — leaving the player exits to Home (#231). */
+        #back-btn { position: relative; width: 40px; height: 40px; }
+        #back-btn span { position: absolute; top: 50%; left: 50%; width: 22px; height: 3px;
+            background: var(--muted); border-radius: 2px; }
+        #back-btn span:nth-child(1) { transform: translate(-50%, -50%) rotate(45deg); }
+        #back-btn span:nth-child(2) { transform: translate(-50%, -50%) rotate(-45deg); }
         .top-bar .now { font-size: 13px; color: var(--muted); overflow: hidden;
             text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: center; }
         .stage { flex: 1; display: flex; flex-direction: column; align-items: center;
@@ -272,7 +276,7 @@
 </head>
 <body>
     <div class="top-bar">
-        <button class="icon-btn" id="back-btn" title="Minimize" aria-label="Minimize">⌄</button>
+        <button class="icon-btn" id="back-btn" title="Close" aria-label="Close"><span></span><span></span></button>
         <span class="now" id="chapter-title"></span>
         <button class="icon-btn hidden" id="search-btn" title="Search the book"><img src="assets/search.png" alt="Search" class="icon-png"></button>
         <button class="icon-btn" id="bm-list-btn" title="Bookmarks"><img src="assets/bookmark.png" alt="Bookmarks" class="icon-png"></button>
