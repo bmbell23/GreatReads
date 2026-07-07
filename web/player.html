@@ -25,7 +25,9 @@
             --muted: #6c757d;
             --border: #e9ecef;
         }
-        * { margin: 0; padding: 0; box-sizing: border-box; }
+        * { margin: 0; padding: 0; box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+        /* No blue tap-flash / focus box on the player's buttons (#247). */
+        button:focus, button:focus-visible { outline: none; }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
             background:
