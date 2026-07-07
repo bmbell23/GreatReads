@@ -1392,7 +1392,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     const synText = grSynopsisText(book.description);
     const synBlock = synText
         ? `<div class="col-12 mt-1"><div class="text-muted small fw-semibold mb-1">Synopsis</div>
-             <div class="small" style="white-space:pre-line;max-height:16em;overflow:auto;">${grEsc(synText)}</div></div>` : '';
+             <div class="small" style="white-space:pre-line;max-height:16em;overflow:auto;text-align:justify;hyphens:auto;">${grEsc(synText)}</div></div>` : '';
 
     document.getElementById('openBookOptions').innerHTML =
         row1 + formatRow + extraInfo + secondary + tagChips + synBlock;
