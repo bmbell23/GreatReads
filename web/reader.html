@@ -560,6 +560,29 @@
         }
         #ambient-btn svg { width: 20px; height: 20px; display: block; }
         #ambient-btn:active { color: rgba(0, 0, 0, 0.85); }
+        /* #248: "Credit from here" sync — same row, right of ambient (154 + 28 + 10). */
+        #sync-btn {
+            position: fixed; top: 26px; left: 192px; width: 28px; height: 28px;
+            border-radius: 6px; background: transparent; border: none;
+            display: flex; align-items: center; justify-content: center;
+            z-index: 9500; cursor: pointer; -webkit-tap-highlight-color: transparent;
+        }
+        /* Icon via CSS mask so it can be recoloured yellow-orange when we're below
+           the credit high-water-mark (not earning credit). */
+        #sync-btn .sync-ico { width: 22px; height: 22px; display: block; opacity: 0.5;
+            background: #000;
+            -webkit-mask: url(assets/sync.svg) center/contain no-repeat;
+            mask: url(assets/sync.svg) center/contain no-repeat; }
+        #sync-btn:active .sync-ico { opacity: 0.85; }
+        #sync-btn.behind .sync-ico { background: #F59E0B; opacity: 1; }
+        /* #248: lightweight toast (the reader had none). */
+        #reader-toast {
+            position: fixed; left: 50%; bottom: 40px; transform: translateX(-50%);
+            background: rgba(0,0,0,0.82); color: #fff; padding: 10px 16px; border-radius: 20px;
+            font-size: 14px; z-index: 12000; opacity: 0; transition: opacity .2s;
+            pointer-events: none; max-width: 80vw; text-align: center;
+        }
+        #reader-toast.show { opacity: 1; }
         /* In-book search overlay rows. */
         .search-section {
             color: #8640C0;
@@ -1317,6 +1340,8 @@
          setupNavigation(); opens the full-screen search overlay below. -->
     <button id="search-btn" title="Search this book" onclick="openSearch()"><img src="assets/search.png" alt="Search"></button>
     <button id="ambient-btn" title="Ambient music" onclick="toggleAmbient()"></button>
+    <!-- #248: "Credit from here" — reset the word-credit mark to the current spot. -->
+    <button id="sync-btn" title="Credit from here" onclick="syncCreditMark()"><i class="sync-ico"></i></button>
     <audio id="ambient-audio" loop preload="none"></audio>
 
     <div id="reader-container">
@@ -1792,6 +1817,37 @@
         const format = urlParams.get('format') || 'epub';
         const title = urlParams.get('title') || 'Book';
         const API_URL = 'http://100.69.184.113:8092/api';
+
+        // #248: lightweight toast + "Credit from here" — reset the word-credit
+        // high-water-mark to the current spot so forward reading credits again
+        // after a cross-format jump. Credit baseline only; no position change.
+        function readerToast(msg) {
+            let t = document.getElementById('reader-toast');
+            if (!t) { t = document.createElement('div'); t.id = 'reader-toast'; document.body.appendChild(t); }
+            t.textContent = msg; t.classList.add('show');
+            clearTimeout(t._tid); t._tid = setTimeout(() => t.classList.remove('show'), 2200);
+        }
+        // Ebook credit high-water-mark (0..1). Below it → not earning word credit →
+        // the sync button goes yellow-orange. Loaded best-effort; kept monotonic.
+        let _maxProg = 0;
+        if (bookId) fetch(`${API_URL}/progress/${encodeURIComponent(bookId)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d && typeof d.maxProgress === 'number') _maxProg = d.maxProgress; })
+            .catch(() => {});
+        function updateSyncBtn(cur) {
+            if (typeof cur !== 'number' || isNaN(cur)) return;
+            _maxProg = Math.max(_maxProg, cur);
+            const b = document.getElementById('sync-btn');
+            if (b) b.classList.toggle('behind', cur < _maxProg - 0.003);
+        }
+        async function syncCreditMark() {
+            if (!bookId) { readerToast('No book to sync'); return; }
+            try {
+                const r = await fetch(`${API_URL}/progress/${encodeURIComponent(bookId)}/reset-credit-mark`, { method: 'POST' });
+                if (r.ok) { _maxProg = 0; const b = document.getElementById('sync-btn'); if (b) b.classList.remove('behind'); }
+                readerToast(r.ok ? 'Now crediting from here' : 'Sync failed');
+            } catch (_) { readerToast('Sync failed'); }
+        }
 
         // Mark this book as open so a cold WebView relaunch lands back here
         // instead of Home (#198). Cleared on real navigation away, refreshed
@@ -3412,6 +3468,7 @@
         function updateProgress() {
             const pageNum  = currentEpubPage + 1;
             const bookPct  = (pageNum / totalPages * 100).toFixed(1);
+            updateSyncBtn(totalPages > 0 ? pageNum / totalPages : 0);   // #248: below-mark flag
 
             // ---- Book progress (right) ----
             const bookEl = document.getElementById('progress-book');

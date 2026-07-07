@@ -114,6 +114,13 @@
         /* PNG icons for search / bookmark — brightness(0) forces the glyph dark
            regardless of the source PNG's colour, so they read on the light bar. */
         .icon-png { width: 24px; height: 24px; display: block; filter: brightness(0); opacity: 0.72; }
+        /* #248: sync icon via CSS mask so it can be recoloured. Yellow-orange when
+           we're BELOW the credit high-water-mark (not earning credit). */
+        #sync-btn .sync-ico { width: 24px; height: 24px; display: block; opacity: 0.72;
+            background: var(--text);
+            -webkit-mask: url(assets/sync.svg) center/contain no-repeat;
+            mask: url(assets/sync.svg) center/contain no-repeat; }
+        #sync-btn.behind .sync-ico { background: #F59E0B; opacity: 1; }
         /* Bookmark-add: same png + a small "+" badge so it reads as "add" */
         .bm-add-wrap { position: relative; display: inline-block; }
         .bm-add-plus { position: absolute; bottom: -4px; right: -5px;
@@ -281,6 +288,7 @@
         <button class="icon-btn" id="back-btn" title="Close" aria-label="Close"><span></span><span></span></button>
         <span class="now" id="chapter-title"></span>
         <button class="icon-btn hidden" id="search-btn" title="Search the book"><img src="assets/search.png" alt="Search" class="icon-png"></button>
+        <button class="icon-btn" id="sync-btn" title="Credit from here" aria-label="Credit from here"><i class="sync-ico"></i></button>
         <button class="icon-btn" id="bm-list-btn" title="Bookmarks"><img src="assets/bookmark.png" alt="Bookmarks" class="icon-png"></button>
     </div>
 

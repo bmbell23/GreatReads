@@ -25,6 +25,15 @@ const HAS_EBOOK = params.get('hasEbook') === '1' && !!EBOOK_ID;
 const PROGRESS_KEY = HAS_EBOOK && EBOOK_ID ? EBOOK_ID : (ABS_ID ? ('abs:' + ABS_ID) : '');
 const SPEED_KEY = 'ereader.audio.speed';
 
+// #248: audio credit high-water-mark (seconds). When the live position is below it we
+// aren't earning credit → the sync button goes yellow-orange. Loaded best-effort, kept
+// monotonic in updateUI, reset to the current spot when the user taps sync.
+let _maxPos = 0;
+if (PROGRESS_KEY) fetch(`${API_URL}/progress/${encodeURIComponent(PROGRESS_KEY)}`)
+    .then(r => r.ok ? r.json() : null)
+    .then(d => { if (d && typeof d.maxPosition === 'number') _maxPos = d.maxPosition; })
+    .catch(() => {});
+
 // Cross-instance heartbeat (#207). A fold-close can spawn a SECOND WebView whose
 // rehydrated player boots paused at the last periodic save while the old
 // instance's audio keeps playing (localStorage is shared across instances, so
@@ -565,6 +574,9 @@ function updateUI() {
     // Remaining is "real" wall-clock time at the current speed.
     $('remaining').textContent = '-' + fmt(Math.max(0, total - gt) / rate);
     $('book-pct').textContent = (total ? Math.round((gt / total) * 100) : 0) + '%';
+    // #248: below the credit mark → not earning credit → flag the sync button.
+    _maxPos = Math.max(_maxPos, gt);
+    $('sync-btn').classList.toggle('behind', gt < _maxPos - 5);
 
     // ---- Chapter bar (within the current part) ----
     const { ci, start, end } = chapterBounds(t);
@@ -637,6 +649,18 @@ $('back-btn').addEventListener('click', () => {
     if (window.ActiveBook) ActiveBook.clear();
     doClose();
     history.length > 1 ? history.back() : (location.href = 'index.html');
+});
+
+// #248: "Credit from here" — reset the word-credit high-water-mark (maxProgress /
+// maxPosition) to the current spot, so forward listening credits again after a
+// cross-format jump landed us ahead. Credit baseline only; no position change.
+$('sync-btn').addEventListener('click', async () => {
+    if (!PROGRESS_KEY) { toast('No book to sync'); return; }
+    try {
+        const r = await fetch(`${API_URL}/progress/${encodeURIComponent(PROGRESS_KEY)}/reset-credit-mark`, { method: 'POST' });
+        if (r.ok) { _maxPos = globalTime(); $('sync-btn').classList.remove('behind'); }
+        toast(r.ok ? 'Now crediting from here' : 'Sync failed');
+    } catch (_) { toast('Sync failed'); }
 });
 
 // ---------- In-book reader / search overlay (dual-format works) ----------
