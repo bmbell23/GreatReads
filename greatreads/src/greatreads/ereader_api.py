@@ -3173,6 +3173,25 @@ def greatreads_get_format(book_id):
 
     return {'media': None, 'readingId': None, 'status': None}
 
+def _dominant_format(book_id):
+    """The format this book was actually READ the most in (by minutes), from
+    reading_activity — so finish uses the real format, not the planned/TBR one (#249).
+    Returns 'Audio'|'Ebook'|'Physical' or None when there's no tracked activity."""
+    try:
+        conn = _gr_db()
+        try:
+            row = conn.execute(
+                'SELECT format, SUM(minutes) m FROM reading_activity WHERE book_key = ? '
+                'GROUP BY format ORDER BY m DESC LIMIT 1', (str(book_id),)).fetchone()
+        finally:
+            conn.close()
+        if row and row['m']:
+            return row['format']
+    except Exception as e:
+        print(f'dominant-format lookup failed for {book_id}: {e}')
+    return None
+
+
 @router.post('/api/greatreads/finish')
 async def greatreads_finish(request: Request):
     """Mark a book as finished in GreatReads, then surface the next TBR book.
@@ -3203,6 +3222,12 @@ async def greatreads_finish(request: Request):
     title = body.get('title', '')
     author = body.get('author', '')
     media = body.get('media', 'Ebook')
+    # #249: the journal, stats, and next-book pick must reflect the format actually
+    # READ, not the planned/TBR format. Override with the dominant format from
+    # reading_activity (e.g. a physical-TBR book read entirely on audio → 'Audio').
+    _dom = _dominant_format(book_id)
+    if _dom:
+        media = _dom
     finish_date = body.get('finishDate', '')
     detailed_ratings = body.get('ratings', {})
     reading_id = body.get('readingId')  # Optional; resolves the exact reading
@@ -3258,7 +3283,7 @@ async def greatreads_finish(request: Request):
         # Halve + round to int so every rating displays exactly as entered.
         # `rating_overall` stays computed server-side, never sent. The PUT
         # route runs ChainCalculator.recalculate_all_chains() for us.
-        update_data = {'date_finished_actual': finish_date}
+        update_data = {'date_finished_actual': finish_date, 'media': media}  # #249: journal = format actually read
         for key, value in (detailed_ratings or {}).items():
             try:
                 v = max(0, min(5, round(float(value) / 2)))
