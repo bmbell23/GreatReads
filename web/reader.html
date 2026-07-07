@@ -1962,6 +1962,9 @@
         let totalPages = 1;
         let pdfDoc = null;
         let epubBook = null;
+        // #10: ebook content anchors as file fractions (0..1). Defaults = whole file;
+        // overridden from /api/ebooks/{id} once loaded. Drive the story-relative % only.
+        let _contentStart = 0, _contentEnd = 1;
 
         // EPUB pagination state
         let epubPages = [];
@@ -3467,8 +3470,13 @@
 
         function updateProgress() {
             const pageNum  = currentEpubPage + 1;
-            const bookPct  = (pageNum / totalPages * 100).toFixed(1);
-            updateSyncBtn(totalPages > 0 ? pageNum / totalPages : 0);   // #248: below-mark flag
+            const rawFrac  = totalPages > 0 ? pageNum / totalPages : 0;
+            // #10: displayed % is STORY-relative — skips front/back matter via the book's
+            // content anchors, so 100% = story end (and past it reads 100%+). The raw
+            // fraction still drives credit/sync (#248) and the pushed progress (unchanged).
+            const _span    = Math.max(0.0001, _contentEnd - _contentStart);
+            const bookPct  = (Math.max(0, (rawFrac - _contentStart) / _span) * 100).toFixed(1);
+            updateSyncBtn(rawFrac);   // #248: below-mark flag (raw fraction)
 
             // ---- Book progress (right) ----
             const bookEl = document.getElementById('progress-book');
@@ -4166,6 +4174,10 @@
                 if (Number.isFinite(meta.wordCount) && meta.wordCount > 0) {
                     _bookWordCount = meta.wordCount;
                 }
+                // #10: content anchors (percent-of-file) → story-relative displayed %.
+                if (Number.isFinite(meta.contentStartPct)) _contentStart = Math.max(0, Math.min(1, meta.contentStartPct / 100));
+                if (Number.isFinite(meta.contentEndPct))   _contentEnd   = Math.max(0.01, Math.min(1, meta.contentEndPct / 100));
+                updateProgress();   // repaint the % now that anchors are known
             } catch (_) {}
         }
 

@@ -34,6 +34,12 @@ class Book(Base):
                                                  # user's own ratings (which live on Reading)
     narrator = Column(String)                    # audiobook narrator(s), from ABS / enrichment (#190)
     audio_duration_seconds = Column(Integer)     # total audiobook length from ABS, parts summed (#213)
+    # Content anchors (#10): the book's real story bounds, skipping front/back matter.
+    # Ebook = percent-of-file (0..100); physical = page. Unset → whole file/pages.
+    content_start_pct = Column(Float)
+    content_end_pct = Column(Float)
+    content_start_page = Column(Integer)
+    content_end_page = Column(Integer)
 
     # Relationships
     readings = relationship("Reading", back_populates="book", cascade="all, delete-orphan")
@@ -93,6 +99,10 @@ class Book(Base):
             "public_rating": self.public_rating,
             "narrator": self.narrator,
             "audio_duration_seconds": self.audio_duration_seconds,
+            "content_start_pct": self.content_start_pct,
+            "content_end_pct": self.content_end_pct,
+            "content_start_page": self.content_start_page,
+            "content_end_page": self.content_end_page,
             "cover_version": self.cover_version,
         }
 
@@ -127,6 +137,10 @@ class BookBase(BaseModel):
     genre: Optional[str] = None
     cover: bool = False
     isbn_id: Optional[int] = None
+    content_start_pct: Optional[float] = None
+    content_end_pct: Optional[float] = None
+    content_start_page: Optional[int] = None
+    content_end_page: Optional[int] = None
     tags: Optional[List[str]] = None
     description: Optional[str] = None       # synopsis (#149/#158)
     public_rating: Optional[float] = None   # community rating 0–5 (#149/#158)

@@ -413,6 +413,27 @@ def _gr_word_count_for(book_key):
     except Exception:
         return None
 
+def _gr_anchors_for(book_key):
+    """GreatReads ebook content anchors (content_start_pct, content_end_pct) for a
+    reader book_key, via external_imports (#10). Either may be None. Lets the reader
+    show a story-relative % that skips front/back matter. Best-effort → None."""
+    try:
+        bk = str(book_key)
+        source, ext_id = ('audiobookshelf', bk[4:]) if bk.startswith('abs:') else ('calibre', bk)
+        conn = _gr_db()
+        try:
+            row = conn.execute(
+                'SELECT b.content_start_pct, b.content_end_pct FROM books b '
+                'JOIN external_imports ei ON ei.book_id = b.id '
+                'WHERE ei.source=? AND ei.external_id=? LIMIT 1', (source, ext_id)).fetchone()
+        finally:
+            conn.close()
+        if row and (row['content_start_pct'] is not None or row['content_end_pct'] is not None):
+            return (row['content_start_pct'], row['content_end_pct'])
+    except Exception:
+        pass
+    return None
+
 def _progress_delta(item, prev):
     a, b = item.get('progress'), (prev or {}).get('progress')
     if isinstance(a, (int, float)) and isinstance(b, (int, float)) and a > b:
@@ -1760,6 +1781,9 @@ def get_book_info(book_id):
     book = get_book_metadata(book_id)
 
     if book:
+        a = _gr_anchors_for(str(book_id))   # #10: ebook story bounds for the reader %
+        book['contentStartPct'] = a[0] if a else None
+        book['contentEndPct'] = a[1] if a else None
         return book
     else:
         return JSONResponse({'error': 'Book not found'}, status_code=404)

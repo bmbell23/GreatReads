@@ -221,7 +221,8 @@
         bkeBook = null;
         bkeSetMode(true);
         ['bkeId', 'bkeTitle', 'bkeAuthorFirst', 'bkeAuthorLast', 'bkeSeries', 'bkeSeriesNum',
-         'bkeUniverse', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl', 'bkeDescription']
+         'bkeUniverse', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl', 'bkeDescription',
+         'bkeContentStartPct', 'bkeContentEndPct', 'bkeContentStartPage', 'bkeContentEndPage']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
         bkeSetGenres([]);
         _bkeResetContributors();   // #192
@@ -263,6 +264,8 @@
         set('bkeSeries', b.series); set('bkeSeriesNum', b.series_number);
         set('bkeUniverse', b.universe); set('bkeDate', b.date_published);
         set('bkePages', b.page_count); set('bkeWords', b.word_count); set('bkeIsbn', b.isbn_id);
+        set('bkeContentStartPct', b.content_start_pct); set('bkeContentEndPct', b.content_end_pct);
+        set('bkeContentStartPage', b.content_start_page); set('bkeContentEndPage', b.content_end_page);
         set('bkeCoverUrl', '');
         set('bkeDescription', b.description);
         // Genres from the tag store (#156); fall back to the legacy single genre.
@@ -374,6 +377,10 @@
             date_published: bkeNormDate(document.getElementById('bkeDate').value),
             page_count: num('bkePages', parseInt), word_count: num('bkeWords', parseInt),
             isbn_id: num('bkeIsbn', parseInt),
+            content_start_pct: num('bkeContentStartPct', parseFloat),
+            content_end_pct: num('bkeContentEndPct', parseFloat),
+            content_start_page: num('bkeContentStartPage', parseInt),
+            content_end_page: num('bkeContentEndPage', parseInt),
         };
         // Public rating has no form field; carry an enrichment-accepted value through (#161).
         if (bkePendingRating != null) data.public_rating = bkePendingRating;

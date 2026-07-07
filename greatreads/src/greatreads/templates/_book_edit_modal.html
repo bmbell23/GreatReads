@@ -97,6 +97,18 @@
                                 <input class="form-control form-control-sm" id="bkeWords" type="number" min="0"></div>
                             <div class="col-6"><label class="form-label small mb-0">ISBN</label>
                                 <input class="form-control form-control-sm" id="bkeIsbn"></div>
+                            <!-- Content anchors (#10): where the STORY really starts/ends, so % skips
+                                 front/back matter (appendix, acknowledgements…). Blank = whole book. -->
+                            <div class="col-12"><label class="form-label small mb-0 text-muted"
+                                 title="Where the story really begins/ends — so 100% means 'finished the story', not the file. Blank = whole book.">Story bounds <i class="fas fa-circle-info opacity-50"></i></label></div>
+                            <div class="col-3"><label class="form-label small mb-0">Ebook start %</label>
+                                <input class="form-control form-control-sm" id="bkeContentStartPct" type="number" min="0" max="100" step="0.1" placeholder="0"></div>
+                            <div class="col-3"><label class="form-label small mb-0">Ebook end %</label>
+                                <input class="form-control form-control-sm" id="bkeContentEndPct" type="number" min="0" max="100" step="0.1" placeholder="100"></div>
+                            <div class="col-3"><label class="form-label small mb-0">Phys start pg</label>
+                                <input class="form-control form-control-sm" id="bkeContentStartPage" type="number" min="0"></div>
+                            <div class="col-3"><label class="form-label small mb-0">Phys end pg</label>
+                                <input class="form-control form-control-sm" id="bkeContentEndPage" type="number" min="0"></div>
                             <!-- Genres as pills (#156): clean, deduped, autocompleting multi-value. -->
                             <div class="col-12"><label class="form-label small mb-0">Genres</label>
                                 <div id="bkeGenres" class="form-control form-control-sm bke-genre-field d-flex flex-wrap align-items-center gap-1"
