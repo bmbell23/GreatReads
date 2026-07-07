@@ -55,22 +55,35 @@ to **In progress** for more changes.
 run it. If they'll do it, wait. If the user would ever have to *discover on their own*
 that a rebuild was required, you failed to tell them — that's a bug in the process.
 
-**UNCOMMITTED == IN REVIEW.** At any moment, the list of uncommitted changes and the
-list of In-Review tickets should be **identical**. State both clearly whenever
-relevant. If they diverge, stop and reconcile.
+**UNCOMMITTED == the ACTIVE In-Review ticket.** Uncommitted changes should match the
+**one ticket you're actively reviewing** (just built, not yet blessed). State both
+clearly. Exception: a committed **"watch" ticket** that's still In Review (see below) is
+committed, so it isn't in the uncommitted list — that's fine.
 
-**Only ONE ticket in In progress + In Review, combined, at any time.** Scoping, Ready
-to Implement, and Done may hold many; the active lane holds **exactly one thing**. Work
-on one thing at a time.
+**Only ONE ACTIVE ticket in In progress + In Review at a time.** The active lane holds
+exactly one thing you're building. **Committed "watch" tickets left in In Review don't
+count** against this. Scoping, Ready to Implement, and Done may hold many.
 
-**User pivots to a new topic while something is In Review? STOP — do not start it.**
-Say: to pick that up, we first need to close out the in-review ticket — *is it good to
-mark Done and commit?* Only after it's resolved (Done + commit, or sent back to In
-progress) do you begin the next thing. **Even "just do this real quick" waits.**
+**"Watch" tickets may stay in In Review after commit.** Sometimes the user reviews a
+change, it gets committed, but they want to keep the ticket in **In Review to watch how
+it behaves over time** before marking Done. That's allowed and expected: such a ticket
+is **committed** and **passive** — it does NOT count as active work and isn't in the
+uncommitted list. It just waits in Review under the user's eye until they decide Done.
+
+**Remind the user of In-Review tickets every cycle.** Whenever we transition between
+tasks — finish one, start another, or the user pivots — **list the tickets currently
+sitting in In Review** so they stay visible and the user can close them when ready.
+Never let them silently pile up.
+
+**User pivots to a new topic while an ACTIVE (uncommitted) ticket is in In Review? STOP
+— do not start the new thing.** Say: to pick that up, we first need to close out the
+in-review ticket — *is it good to mark Done and commit?* Resolve it (Done + commit, or
+back to In progress) first. **Even "just do this real quick" waits.** (Passive committed
+"watch" tickets don't block a pivot — only the active/uncommitted one does.)
 
 **Done = the user blesses it.** Only the **user** marks a ticket Done. On that bless,
-**then commit** (via `gvc`, still a gated action), and the active lane is clear for the
-next ticket.
+**then commit** (via `gvc`, still a gated action) if not already committed, and the
+active lane is clear for the next ticket.
 
 **Update tickets + comment profusely** as work moves — scope, findings, decisions, what
 was built, why. The issues (not memory, not docs) are what the next session trusts.
