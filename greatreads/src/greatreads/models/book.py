@@ -34,12 +34,15 @@ class Book(Base):
                                                  # user's own ratings (which live on Reading)
     narrator = Column(String)                    # audiobook narrator(s), from ABS / enrichment (#190)
     audio_duration_seconds = Column(Integer)     # total audiobook length from ABS, parts summed (#213)
-    # Content anchors (#10): the book's real story bounds, skipping front/back matter.
-    # Ebook = percent-of-file (0..100); physical = page. Unset → whole file/pages.
+    # Content anchors (#10, audio added #256): the book's real story bounds,
+    # skipping front/back matter. Ebook = percent-of-file (0..100); physical = page;
+    # audiobook = timestamp seconds. Unset → whole file/pages/runtime.
     content_start_pct = Column(Float)
     content_end_pct = Column(Float)
     content_start_page = Column(Integer)
     content_end_page = Column(Integer)
+    content_start_seconds = Column(Float)
+    content_end_seconds = Column(Float)
 
     # Relationships
     readings = relationship("Reading", back_populates="book", cascade="all, delete-orphan")
@@ -103,6 +106,8 @@ class Book(Base):
             "content_end_pct": self.content_end_pct,
             "content_start_page": self.content_start_page,
             "content_end_page": self.content_end_page,
+            "content_start_seconds": self.content_start_seconds,
+            "content_end_seconds": self.content_end_seconds,
             "cover_version": self.cover_version,
         }
 
@@ -141,6 +146,8 @@ class BookBase(BaseModel):
     content_end_pct: Optional[float] = None
     content_start_page: Optional[int] = None
     content_end_page: Optional[int] = None
+    content_start_seconds: Optional[float] = None
+    content_end_seconds: Optional[float] = None
     tags: Optional[List[str]] = None
     description: Optional[str] = None       # synopsis (#149/#158)
     public_rating: Optional[float] = None   # community rating 0–5 (#149/#158)

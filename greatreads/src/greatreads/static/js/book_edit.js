@@ -39,6 +39,24 @@
         return v;
     }
 
+    // Audio story anchors (#256) accept h:mm:ss / m:ss / plain seconds; stored as
+    // Float seconds. Parse tolerantly, format back to the most compact clock string.
+    function bkeParseSecs(v) {
+        v = String(v || '').trim();
+        if (!v) return null;
+        if (/^\d*\.?\d+$/.test(v)) return parseFloat(v);   // plain seconds
+        const parts = v.split(':');
+        if (!parts.every(p => /^\d*\.?\d+$/.test(p.trim()))) return null;
+        return parts.reduce((acc, p) => acc * 60 + parseFloat(p), 0);
+    }
+    function bkeFmtSecs(n) {
+        if (n == null || isNaN(n)) return '';
+        n = Math.round(Number(n));
+        const h = Math.floor(n / 3600), m = Math.floor((n % 3600) / 60), s = n % 60;
+        const pad = x => String(x).padStart(2, '0');
+        return h > 0 ? `${h}:${pad(m)}:${pad(s)}` : `${m}:${pad(s)}`;
+    }
+
     async function bkeLoadLists() {
         if (bkeListsLoaded) return;
         bkeListsLoaded = true;
@@ -222,7 +240,8 @@
         bkeSetMode(true);
         ['bkeId', 'bkeTitle', 'bkeAuthorFirst', 'bkeAuthorLast', 'bkeSeries', 'bkeSeriesNum',
          'bkeUniverse', 'bkeDate', 'bkePages', 'bkeWords', 'bkeIsbn', 'bkeCoverUrl', 'bkeDescription',
-         'bkeContentStartPct', 'bkeContentEndPct', 'bkeContentStartPage', 'bkeContentEndPage']
+         'bkeContentStartPct', 'bkeContentEndPct', 'bkeContentStartPage', 'bkeContentEndPage',
+         'bkeContentStartSeconds', 'bkeContentEndSeconds']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
         bkeSetGenres([]);
         _bkeResetContributors();   // #192
@@ -266,6 +285,8 @@
         set('bkePages', b.page_count); set('bkeWords', b.word_count); set('bkeIsbn', b.isbn_id);
         set('bkeContentStartPct', b.content_start_pct); set('bkeContentEndPct', b.content_end_pct);
         set('bkeContentStartPage', b.content_start_page); set('bkeContentEndPage', b.content_end_page);
+        set('bkeContentStartSeconds', bkeFmtSecs(b.content_start_seconds));
+        set('bkeContentEndSeconds', bkeFmtSecs(b.content_end_seconds));
         set('bkeCoverUrl', '');
         set('bkeDescription', b.description);
         // Genres from the tag store (#156); fall back to the legacy single genre.
@@ -381,6 +402,8 @@
             content_end_pct: num('bkeContentEndPct', parseFloat),
             content_start_page: num('bkeContentStartPage', parseInt),
             content_end_page: num('bkeContentEndPage', parseInt),
+            content_start_seconds: bkeParseSecs(document.getElementById('bkeContentStartSeconds').value),
+            content_end_seconds: bkeParseSecs(document.getElementById('bkeContentEndSeconds').value),
         };
         // Public rating has no form field; carry an enrichment-accepted value through (#161).
         if (bkePendingRating != null) data.public_rating = bkePendingRating;

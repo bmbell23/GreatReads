@@ -817,9 +817,13 @@ async function resolveResumePosition() {
     if (linkedEbookId) keys.add(linkedEbookId);
 
     // Fetch all candidates in parallel (was sequential — a big part of slow resume).
+    // ?as=audiobook (#256): the backend rebases a sibling ebook/physical record's
+    // spot into audio-native progress through the story anchors, so the percent
+    // path (progress × bookTotal) lands at the right second. Same-format audio
+    // records come back verbatim.
     const recs = await Promise.all([...keys].map(async (k) => {
         try {
-            const r = await fetch(`${API_URL}/progress/${encodeURIComponent(k)}`);
+            const r = await fetch(`${API_URL}/progress/${encodeURIComponent(k)}?as=audiobook`);
             return r.ok ? await r.json() : null;
         } catch (_) { return null; }
     }));

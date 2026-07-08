@@ -447,7 +447,24 @@ async def update_reading_progress(
                 'physical' if media_l in ('physical', 'hardcover', 'paperback') else 'ebook')
             frac = max(0.0, min(1.0, current_percent / 100.0))
             now_ms = int(_t.time() * 1000)
-            rec = _j.dumps({'progress': frac, 'updated': now_ms, 'mediaType': mt, 'source': 'greatreads'})
+            # Canonical cross-format cursor (#256): convert this native fraction to a
+            # story-relative fraction through the book's anchors, so opening another
+            # format resumes at the same story point. Anchors unset → linear.
+            bk = db_reading.book
+            s_anchor, e_anchor = 0.0, 1.0
+            if mt == 'ebook':
+                if bk.content_start_pct is not None: s_anchor = bk.content_start_pct / 100.0
+                if bk.content_end_pct is not None:   e_anchor = bk.content_end_pct / 100.0
+            elif mt == 'physical' and bk.page_count:
+                if bk.content_start_page is not None: s_anchor = bk.content_start_page / bk.page_count
+                if bk.content_end_page is not None:   e_anchor = bk.content_end_page / bk.page_count
+            elif mt == 'audiobook' and bk.audio_duration_seconds:
+                if bk.content_start_seconds is not None: s_anchor = bk.content_start_seconds / bk.audio_duration_seconds
+                if bk.content_end_seconds is not None:   e_anchor = bk.content_end_seconds / bk.audio_duration_seconds
+            story_frac = (frac - s_anchor) / (e_anchor - s_anchor) if e_anchor > s_anchor else frac
+            story_frac = max(0.0, min(1.0, story_frac))
+            rec = _j.dumps({'progress': frac, 'updated': now_ms, 'mediaType': mt,
+                            'storyFrac': story_frac, 'storyFmt': mt, 'source': 'greatreads'})
             db.execute(_sql(
                 "CREATE TABLE IF NOT EXISTS ereader_progress ("
                 " book_key TEXT PRIMARY KEY, data TEXT NOT NULL, progress REAL, updated INTEGER)"))

@@ -434,6 +434,85 @@ def _gr_anchors_for(book_key):
         pass
     return None
 
+# ── Cross-format progress mapping (#256) ─────────────────────────────────────
+# The shared reading cursor is a single STORY-RELATIVE fraction (0..1) — 0 = the
+# real story start, 1 = the real story end — kept in every progress record as
+# `storyFrac` (+ `storyFmt`, the format that wrote it). Each format converts its
+# own native unit (ebook file-fraction, audio seconds, physical page) to/from that
+# fraction through the #10/#256 anchors, so "65.4%" lands at the same story point
+# in all three. Anchors unset for a format → linear (0..1 spans the whole thing).
+def _gr_bounds_for(book_key):
+    """Story bounds + per-format totals for a reader book_key, via external_imports.
+    Any field may be None. Feeds the native↔story conversions below. Best-effort."""
+    try:
+        bk = str(book_key)
+        source, ext_id = ('audiobookshelf', bk[4:]) if bk.startswith('abs:') else ('calibre', bk)
+        conn = _gr_db()
+        try:
+            row = conn.execute(
+                'SELECT b.content_start_pct, b.content_end_pct, b.content_start_page, '
+                'b.content_end_page, b.content_start_seconds, b.content_end_seconds, '
+                'b.page_count, b.audio_duration_seconds FROM books b '
+                'JOIN external_imports ei ON ei.book_id = b.id '
+                'WHERE ei.source=? AND ei.external_id=? LIMIT 1', (source, ext_id)).fetchone()
+        finally:
+            conn.close()
+        if row:
+            return dict(row)
+    except Exception:
+        pass
+    return None
+
+def _fmt_anchor_fracs(bounds, fmt):
+    """(start, end) as fractions [0,1] of the format's native total, from story
+    bounds. Missing anchors/total → (0.0, 1.0) so mapping is linear for that format."""
+    b = bounds or {}
+    s, e = 0.0, 1.0
+    if fmt == 'ebook':
+        if b.get('content_start_pct') is not None: s = b['content_start_pct'] / 100.0
+        if b.get('content_end_pct') is not None:   e = b['content_end_pct'] / 100.0
+    elif fmt == 'physical':
+        pc = b.get('page_count') or 0
+        if pc:
+            if b.get('content_start_page') is not None: s = b['content_start_page'] / pc
+            if b.get('content_end_page') is not None:   e = b['content_end_page'] / pc
+    elif fmt == 'audiobook':
+        dur = b.get('audio_duration_seconds') or 0
+        if dur:
+            if b.get('content_start_seconds') is not None: s = b['content_start_seconds'] / dur
+            if b.get('content_end_seconds') is not None:   e = b['content_end_seconds'] / dur
+    if not (e > s):
+        s, e = 0.0, 1.0
+    return (max(0.0, min(1.0, s)), max(0.0, min(1.0, e)))
+
+def _native_to_story(nf, bounds, fmt):
+    """Native fraction-of-total (0..1) → story-relative fraction (0..1)."""
+    try: nf = float(nf)
+    except (TypeError, ValueError): return None
+    s, e = _fmt_anchor_fracs(bounds, fmt)
+    if e <= s: return max(0.0, min(1.0, nf))
+    return max(0.0, min(1.0, (nf - s) / (e - s)))
+
+def _story_to_native(sf, bounds, fmt):
+    """Story-relative fraction (0..1) → native fraction-of-total (0..1)."""
+    try: sf = max(0.0, min(1.0, float(sf)))
+    except (TypeError, ValueError): return None
+    s, e = _fmt_anchor_fracs(bounds, fmt)
+    return max(0.0, min(1.0, s + sf * (e - s)))
+
+def _writer_fmt_nf(item):
+    """(format, native-fraction) that a progress record was written in.
+    Audio when it carries a position+duration; ebook otherwise (physical mirrors
+    set storyFmt directly and don't go through here)."""
+    pos, dur = item.get('position'), item.get('duration')
+    if item.get('mediaType') == 'audiobook' or (pos is not None and dur):
+        try:
+            d = float(dur)
+            return ('audiobook', float(pos) / d if d else None)
+        except (TypeError, ValueError):
+            return ('audiobook', None)
+    return ('ebook', item.get('progress'))
+
 def _progress_delta(item, prev):
     a, b = item.get('progress'), (prev or {}).get('progress')
     if isinstance(a, (int, float)) and isinstance(b, (int, float)) and a > b:
@@ -751,7 +830,6 @@ def _gr_set_current_percent(book_key, record):
         frac = record.get('progress')
         if not isinstance(frac, (int, float)) or frac <= 0 or frac >= 1:
             return  # only meaningful for an in-progress 0<pct<100
-        pct = round(frac * 100, 1)
         bk = str(book_key)
         if bk.startswith('abs:'):
             source, ext_id, media = 'audiobookshelf', bk[4:], 'Audio'
@@ -761,7 +839,7 @@ def _gr_set_current_percent(book_key, record):
         conn = _gr_db()
         try:
             row = conn.execute(
-                'SELECT r.id, r.current_percent FROM read r '
+                'SELECT r.id, r.current_percent, r.media FROM read r '
                 'JOIN external_imports ei ON ei.book_id = r.book_id '
                 'WHERE ei.source=? AND ei.external_id=? AND r.media=? '
                 '  AND r.date_started IS NOT NULL AND r.date_finished_actual IS NULL '
@@ -775,7 +853,7 @@ def _gr_set_current_percent(book_key, record):
                 # read ahead in a different format. Match any in-progress reading for
                 # the same book.
                 row = conn.execute(
-                    'SELECT r.id, r.current_percent FROM read r '
+                    'SELECT r.id, r.current_percent, r.media FROM read r '
                     'JOIN external_imports ei ON ei.book_id = r.book_id '
                     'WHERE ei.source=? AND ei.external_id=? '
                     '  AND r.date_started IS NOT NULL AND r.date_finished_actual IS NULL '
@@ -783,6 +861,23 @@ def _gr_set_current_percent(book_key, record):
                     (source, ext_id)).fetchone()
             if not row:
                 return  # GreatReads has no in-progress reading for this book
+            # Write a value native to the TARGET reading's format (#256). Same-format
+            # (the common case) → the writer's own raw %, unchanged. Cross-format (e.g.
+            # ebook write advancing a Physical reading) → rebase the shared story
+            # fraction through the target format's anchors, so current_percent — and
+            # thus current_progress_page — lands at the right story spot, not a raw
+            # denominator mismatch. Legacy records without storyFrac keep raw behaviour.
+            target_media = (row['media'] or '').lower()
+            target_fmt = ('audiobook' if target_media in ('audio', 'audiobook')
+                          else 'physical' if target_media in ('physical', 'hardcover', 'paperback')
+                          else 'ebook')
+            sf = record.get('storyFrac')
+            writer_fmt = 'audiobook' if media == 'Audio' else 'ebook'
+            if sf is not None and target_fmt != writer_fmt:
+                nf = _story_to_native(sf, _gr_bounds_for(book_key), target_fmt)
+                pct = round((nf if nf is not None else frac) * 100, 1)
+            else:
+                pct = round(frac * 100, 1)
             cur = row['current_percent']
             if cur is not None and abs(float(cur) - pct) < 0.05:
                 return  # unchanged — skip a redundant write (keep GR tracking tightly)
@@ -2763,12 +2858,38 @@ def list_progress():
     return {'items': items, 'total': len(items)}
 
 @router.get('/api/progress/{book_id}')
-def get_progress(book_id):
+def get_progress(book_id, request: Request):
     with _progress_lock:
         data = _load_progress()
     item = data.get(str(book_id))
     if not item:
         return JSONResponse({'error': 'not found'}, status_code=404)
+    # Cross-format rebase (#256): a client opening format X passes ?as=X. If the
+    # record was written by a DIFFERENT format, remap its native resume values
+    # (progress / position) from the canonical story fraction through X's anchors,
+    # so X resumes at the same story point. Same-format reads are returned verbatim
+    # (exact anchor/page/maxProgress preserved — no regression). Legacy rows without
+    # storyFrac fall through unchanged (old linear behaviour).
+    as_fmt = (request.query_params.get('as') or '').lower()
+    sf = item.get('storyFrac')
+    if as_fmt in ('ebook', 'audiobook', 'physical') and sf is not None \
+            and item.get('storyFmt') and as_fmt != item.get('storyFmt'):
+        bounds = _gr_bounds_for(book_id)
+        tnf = _story_to_native(sf, bounds, as_fmt)
+        if tnf is not None:
+            item = dict(item)
+            if as_fmt == 'ebook':
+                item['progress'] = tnf
+                # drop the other format's stale exact-position hints so the reader
+                # seeds from the rebased fraction, not a mismatched anchor/page.
+                item.pop('anchor', None); item.pop('page', None)
+            elif as_fmt == 'physical':
+                item['progress'] = tnf
+            elif as_fmt == 'audiobook':
+                dur = (bounds or {}).get('audio_duration_seconds') or item.get('duration')
+                item['progress'] = tnf
+                if dur:
+                    item['position'] = tnf * float(dur)
     return item
 
 @router.post('/api/progress/{book_id}/reset-credit-mark')
@@ -2920,6 +3041,15 @@ async def put_progress(book_id, request: Request):
                 item['maxProgress'] = max(_cp, float(_pmp)) if isinstance(_pmp, (int, float)) else _cp
             except (TypeError, ValueError):
                 pass
+        # Canonical cross-format cursor (#256): store the story-relative fraction
+        # this write lands at, tagged with the writing format, so the OTHER formats
+        # resume at the same story point (rebased in get_progress via ?as=).
+        _wf, _nf = _writer_fmt_nf(item)
+        if _nf is not None:
+            _sf = _native_to_story(_nf, _gr_bounds_for(book_id), _wf)
+            if _sf is not None:
+                item['storyFrac'] = _sf
+                item['storyFmt'] = _wf
         data[str(book_id)] = item
         _save_progress(data)
     # Reflect the % straight into GreatReads (read.current_percent) — no sync job.

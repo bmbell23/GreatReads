@@ -4085,7 +4085,9 @@
                 const d = await r.json();
                 const sib = (d.siblings || []).find(x => String(x).startsWith('abs:'));
                 if (!sib) return null;
-                const pr = await fetch(API_URL + '/progress/' + encodeURIComponent(sib));
+                // ?as=ebook (#256): rebase the audiobook's spot into ebook-native
+                // progress through the story anchors, so a percent fallback lands right.
+                const pr = await fetch(API_URL + '/progress/' + encodeURIComponent(sib) + '?as=ebook');
                 if (!pr.ok) return null;
                 return await pr.json();
             } catch (_) { return null; }
@@ -4100,7 +4102,7 @@
             try {
                 const candidates = [];
                 try {
-                    const r = await fetch(API_URL + '/progress/' + encodeURIComponent(bookId));
+                    const r = await fetch(API_URL + '/progress/' + encodeURIComponent(bookId) + '?as=ebook');
                     if (r.ok) candidates.push(await r.json());
                 } catch (_) {}
                 const sibAudio = await fetchAudiobookSibling();
