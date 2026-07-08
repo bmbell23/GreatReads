@@ -916,7 +916,7 @@ function normBookmark(b, origin) {
     if (percent == null && origin === 'ebook' && b.total) percent = (b.page || 0) / b.total;
     const pos = (typeof b.position === 'number') ? b.position : null;
     return { id: b.id, origin, type: b.type, percent, pos,
-             text: b.text || '', chapter: b.chapter || '', created: b.created || 0 };
+             text: b.text || '', chapter: b.chapter || '', note: b.note || '', created: b.created || 0 };
 }
 
 async function fetchAllBookmarks() {
@@ -962,6 +962,77 @@ async function deleteBookmark(id) {
     renderBookmarks();
 }
 
+// ── Bookmark notes (#259) ────────────────────────────────────────────────
+// Long-press (touch, ~500ms) or right-click (mouse) a bookmark to edit its
+// note. Long-press cancels on scroll/drag and swallows the trailing click so
+// it doesn't also seek.
+function attachNoteGesture(el, handler) {
+    el.addEventListener('contextmenu', (e) => { e.preventDefault(); handler(); });
+    let t = null, startY = 0, fired = false;
+    const clear = () => { if (t) { clearTimeout(t); t = null; } };
+    el.addEventListener('touchstart', (e) => {
+        fired = false;
+        startY = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
+        clear();
+        t = setTimeout(() => { fired = true; handler(); }, 500);
+    }, { passive: true });
+    el.addEventListener('touchmove', (e) => {
+        const y = (e.touches && e.touches[0]) ? e.touches[0].clientY : 0;
+        if (Math.abs(y - startY) > 10) clear();
+    }, { passive: true });
+    el.addEventListener('touchend', clear, { passive: true });
+    el.addEventListener('touchcancel', clear, { passive: true });
+    el.addEventListener('click', (e) => {
+        if (fired) { e.stopPropagation(); e.preventDefault(); fired = false; }
+    }, true);
+}
+
+// App-styled note editor. `initial` prefills; Save with empty clears the note.
+function openNoteEditor(initial, onSave) {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.5);z-index:11000;display:flex;align-items:center;justify-content:center;padding:24px;';
+    const card = document.createElement('div');
+    card.style.cssText = 'background:#fff;border-radius:14px;width:100%;max-width:420px;padding:18px;box-shadow:0 10px 40px rgba(0,0,0,0.35);';
+    card.innerHTML = '<div style="font-size:16px;font-weight:600;color:#212529;margin-bottom:10px;">Bookmark note</div>';
+    const ta = document.createElement('textarea');
+    ta.value = initial || '';
+    ta.placeholder = 'Add a description…';
+    ta.style.cssText = 'width:100%;min-height:96px;border:1px solid #ced4da;border-radius:8px;padding:10px;font-size:15px;line-height:1.4;color:#212529;resize:vertical;box-sizing:border-box;';
+    card.appendChild(ta);
+    const btns = document.createElement('div');
+    btns.style.cssText = 'display:flex;justify-content:flex-end;gap:8px;margin-top:14px;';
+    const cancel = document.createElement('button');
+    cancel.textContent = 'Cancel';
+    cancel.style.cssText = 'background:#f1f3f5;color:#495057;border:1px solid #e9ecef;padding:9px 16px;border-radius:8px;font-size:15px;cursor:pointer;';
+    const save = document.createElement('button');
+    save.textContent = 'Save';
+    save.style.cssText = 'background:#FF6600;color:#fff;border:none;padding:9px 18px;border-radius:8px;font-size:15px;cursor:pointer;';
+    const close = () => ov.remove();
+    cancel.addEventListener('click', close);
+    save.addEventListener('click', () => { const v = ta.value.trim(); close(); onSave(v); });
+    // Ctrl/Cmd+Enter saves (#259) — Esc cancels.
+    ta.addEventListener('keydown', (e) => {
+        if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') { e.preventDefault(); save.click(); }
+        else if (e.key === 'Escape') { e.preventDefault(); close(); }
+    });
+    ov.addEventListener('click', (e) => { if (e.target === ov) close(); });
+    btns.appendChild(cancel); btns.appendChild(save);
+    card.appendChild(btns);
+    ov.appendChild(card);
+    document.body.appendChild(ov);
+    setTimeout(() => { ta.focus(); }, 50);
+}
+
+async function saveBookmarkNote(id, note) {
+    try {
+        const r = await fetch(`${API_URL}/highlights/${encodeURIComponent(id)}`, {
+            method: 'PUT', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ note })
+        });
+        return r.ok;
+    } catch (_) { return false; }
+}
+
 async function renderBookmarks() {
     const list = $('bm-list');
     list.innerHTML = '<div class="bm-empty">Loading…</div>';
@@ -998,11 +1069,24 @@ async function renderBookmarks() {
         const timeTxt = (n.pos != null) ? fmt(n.pos) : fmt((n.percent || 0) * total);
         sub.innerHTML = pctTxt + ' · ' + timeTxt;
         main.appendChild(label); main.appendChild(sub);
+        // Optional user note (#259) — third line, brand-orange with a 📝.
+        const noteTxt = (n.note && String(n.note).trim()) ? String(n.note).trim() : '';
+        if (noteTxt) {
+            const note = document.createElement('div');
+            note.className = 'bm-note';
+            note.style.cssText = 'font-size:12px;color:#FF6600;margin-top:3px;line-height:1.35;white-space:pre-wrap;';
+            note.textContent = '📝 ' + noteTxt;
+            main.appendChild(note);
+        }
         const del = document.createElement('button');
         del.className = 'bm-del'; del.textContent = '×'; del.title = 'Delete';
         del.addEventListener('click', (e) => { e.stopPropagation(); deleteBookmark(n.id); });
         row.appendChild(main); row.appendChild(del);
         row.addEventListener('click', () => seekToBookmark(n));
+        // Long-press (touch) / right-click (mouse) → edit the note (#259).
+        attachNoteGesture(row, () => openNoteEditor(n.note || '', async (v) => {
+            if (await saveBookmarkNote(n.id, v)) { n.note = v; renderBookmarks(); }
+        }));
         list.appendChild(row);
     }
 }
