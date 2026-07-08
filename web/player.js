@@ -219,25 +219,72 @@ async function getCachedTrackBlob(absId, ino) {
     const rec = await _idbGet('audio', absId + ':' + ino);
     return rec && rec.blob ? rec.blob : null;
 }
-// Build a /play-shaped session from the local cache for a SINGLE-FILE audiobook.
-// Returns null if not fully cached or multi-file (caller then streams).
-async function loadLocalSession(absId) {
+// Build a /play-shaped session from the local cache. Accepts either a bare absId
+// (whole-book — single-file only) or a PART object carrying a specific track `ino`
+// (a synthetic per-track part from maybeExpandLocalTrackParts, #263). Returns null
+// if not cached (caller then streams).
+async function loadLocalSession(part) {
+    const absId = (typeof part === 'string') ? part : (part && part.absId);
+    const wantIno = (part && typeof part === 'object') ? part.ino : undefined;
+    if (!absId) return null;
     try {
         const manifest = await getCachedManifest(absId);
         if (!manifest) return null;
         const tracks = manifest.tracks || [];
-        if (tracks.length !== 1) return null;          // single-file only (for now)
-        const t = tracks[0];
+        let t;
+        if (wantIno != null) {
+            t = tracks.find(x => x.ino === wantIno);   // one synthetic track-part
+        } else {
+            if (tracks.length !== 1) return null;      // whole-abs: single-file only
+            t = tracks[0];
+        }
+        if (!t) return null;
         const blob = await getCachedTrackBlob(absId, t.ino);
         if (!blob) return null;
         return {
             id: null,                                   // no ABS session → sync/close no-op
             audioTracks: [{ contentUrl: URL.createObjectURL(blob) }],
-            chapters: manifest.chapters || [],
-            duration: t.duration || manifest.totalDuration || 0,
+            chapters: (part && typeof part === 'object' && part.chapters) || manifest.chapters || [],
+            duration: (part && typeof part === 'object' && part.duration) || t.duration || manifest.totalDuration || 0,
             currentTime: 0, startTime: 0, _local: true,
         };
     } catch (_) { return null; }
+}
+
+// #263: expand a single-abs book that's FULLY cached as MULTIPLE track files into
+// one synthetic "part" per track, so the existing part-advance / seek / resume
+// machinery plays it locally and gapless (the player wires only one <audio> src
+// per part, so a multi-track book otherwise had to stream). Only when EVERY track
+// blob is present — else we leave the single streaming part in place. Book-absolute
+// chapters (if the manifest carries them) are sliced + rebased to each track window.
+async function maybeExpandLocalTrackParts() {
+    if (!PARTS || PARTS.length !== 1) return;       // multi-part editions untouched
+    const absId = PARTS[0].absId;
+    if (!absId) return;
+    const manifest = await getCachedManifest(absId);
+    if (!manifest) return;
+    const tracks = manifest.tracks || [];
+    if (tracks.length <= 1) return;                 // single-track uses the existing path
+    for (const t of tracks) {                       // require the whole book cached
+        if (!(await getCachedTrackBlob(absId, t.ino))) return;
+    }
+    const bookChapters = manifest.chapters || [];
+    let acc = 0;
+    PARTS = tracks.map((t, idx) => {
+        const dur = +t.duration || 0;
+        const gStart = acc, gEnd = acc + dur;
+        acc = gEnd;
+        const chapters = bookChapters
+            .filter(c => (c.start || 0) < gEnd && ((c.end != null ? c.end : (c.start || 0)) > gStart))
+            .map(c => ({
+                title: c.title,
+                start: Math.max(0, (c.start || 0) - gStart),
+                end: (c.end != null) ? (c.end - gStart) : undefined,
+            }));
+        return { absId, ino: t.ino, title: t.filename || `Track ${idx + 1}`,
+                 duration: dur, chapters, _localTrack: true };
+    });
+    console.log(`[#263] ${tracks.length} cached tracks → parts (local, gapless)`);
 }
 
 // ---------- Local audio cache (WRITE side, #261) ----------
@@ -260,9 +307,11 @@ function _idbPut(store, value) {
     }));
 }
 async function _cacheAudiobookParts() {
+    const seen = new Set();
     for (const p of (PARTS || [])) {
         const absId = p && p.absId;
-        if (!absId) continue;
+        if (!absId || seen.has(absId)) continue;   // synthetic track-parts share an absId (#263)
+        seen.add(absId);
         try {
             const mr = await fetch(`${API_URL}/audiobooks/${encodeURIComponent(absId)}/tracks`);
             if (!mr.ok) continue;
@@ -344,6 +393,9 @@ async function init() {
     } else {
         PARTS = [{ absId: ABS_ID, duration: 0 }];
     }
+    // #263: if this single-abs book is fully cached as multiple track files, expand
+    // it into one synthetic part per track so it plays locally + gapless.
+    await maybeExpandLocalTrackParts();
     recomputeStarts();
 
     // Our saved resume position (preferred over ABS's own session currentTime),
@@ -416,7 +468,7 @@ async function loadPart(i, seekTo, autoplay) {
     setLoading();
     // Local-first (#54): if the library pre-downloaded this audiobook, play from
     // the on-device file — no ABS /play, no streaming, works in a dead zone.
-    let s = await loadLocalSession(PARTS[i].absId);
+    let s = await loadLocalSession(PARTS[i]);
     if (!s) {
         try {
             const res = await fetch(`${API_URL}/audiobooks/${encodeURIComponent(PARTS[i].absId)}/play`, {
