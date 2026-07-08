@@ -173,9 +173,10 @@ function applySpeed(r) {
     r = Math.min(3, Math.max(1, Math.round((parseFloat(r) || 1) * 10) / 10));
     chosenRate = r;
     audio.playbackRate = r;
-    $('speed').value = r;
-    $('speed-pill').textContent = r.toFixed(1) + '×';
-    fillRange($('speed'));
+    const lbl = r.toFixed(1) + '×';
+    const sp = $('speed'); if (sp) sp.value = r;
+    const btn = $('speed-btn'); if (btn) btn.textContent = lbl;       // #265: button shows current speed
+    const pv = $('speed-popup-val'); if (pv) pv.textContent = lbl;
     try { localStorage.setItem(SPEED_KEY, String(r)); } catch (_) {}
     updateUI();
 }
@@ -713,8 +714,17 @@ $('back30').addEventListener('click', () => skip(-30));
 $('fwd30').addEventListener('click', () => skip(30));
 $('prev-ch').addEventListener('click', prevChapter);
 $('next-ch').addEventListener('click', nextChapter);
-// Speed slider — live update + persist (propagates across books via localStorage).
+// Speed control (#265): the button (bottom-left of the controls) shows the current
+// rate; tapping it reveals a vertical slider (1.0× bottom → 3.0× top). Live update
+// + persist (propagates across books via localStorage). Tap away to dismiss.
 $('speed').addEventListener('input', (e) => applySpeed(e.target.value));
+(function () {
+    const btn = $('speed-btn'), pop = $('speed-popup');
+    if (!btn || !pop) return;
+    btn.addEventListener('click', (e) => { e.stopPropagation(); pop.hidden = !pop.hidden; });
+    pop.addEventListener('click', (e) => e.stopPropagation());
+    document.addEventListener('click', () => { if (!pop.hidden) pop.hidden = true; });
+})();
 // Leaving the player stops playback (close session + save final position).
 $('back-btn').addEventListener('click', () => {
     // Deliberate exit — stop the "/" bootstrap bouncing back into the player

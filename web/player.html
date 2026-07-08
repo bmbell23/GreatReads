@@ -139,23 +139,38 @@
         .play-btn:active { transform: scale(0.95); }
         .skip-label { font-size: 12px; color: var(--muted); display: block; margin-top: 2px; font-weight: 600; }
 
-        /* ---- Bottom bar: speed slider ---- */
-        .bottom-bar { display: flex; align-items: center; gap: 14px;
+        /* ---- Bottom bar (Chapters) ---- */
+        .bottom-bar { display: flex; align-items: center; justify-content: center; gap: 14px;
             padding: 12px 20px 12px;
             margin-bottom: calc(60px + env(safe-area-inset-bottom, 0px)); }
-        .speed-wrap { flex: 1; display: flex; align-items: center; gap: 10px; }
-        .speed-pill { flex-shrink: 0; min-width: 52px; text-align: center; font-size: 13px;
-            font-weight: 700; color: var(--brand-purple); background: rgba(134,64,192,0.12);
-            border: 1px solid rgba(134,64,192,0.30); border-radius: 99px; padding: 4px 8px; }
+
+        /* Speed button (#265): bottom-LEFT of the controls, mirroring #bm-add on
+           the right. Shows the current rate; tap to open the vertical slider. This
+           replaces the old bottom horizontal slider that sat too close to the
+           screen edge and got nudged by accident. */
+        #speed-btn { position: absolute; left: 0; top: 50%; transform: translateY(-50%);
+            font-size: 15px; font-weight: 700; color: var(--brand-purple); min-width: 48px; }
+
+        /* Speed popup: a vertical slider — 1.0× at the bottom, 3.0× at the top. */
+        .speed-popup { position: fixed; z-index: 60;
+            left: calc(14px + env(safe-area-inset-left, 0px));
+            bottom: calc(150px + env(safe-area-inset-bottom, 0px));
+            display: flex; flex-direction: column; align-items: center; gap: 8px;
+            background: var(--surface); border: 1px solid var(--border); border-radius: 18px;
+            padding: 14px 12px; box-shadow: 0 10px 34px rgba(0,0,0,0.35); }
+        .speed-popup[hidden] { display: none; }
+        .speed-popup-val { font-size: 15px; font-weight: 700; color: var(--brand-purple); }
+        .speed-popup-end { font-size: 11px; font-weight: 600; color: #9aa0a6; }
         #speed {
-            -webkit-appearance: none; appearance: none; flex: 1; height: 6px;
-            border-radius: 99px; outline: none; cursor: pointer; background: var(--track);
-        }
+            writing-mode: vertical-lr; direction: rtl;   /* min at bottom, max at top */
+            width: 10px; height: 190px; touch-action: none;
+            -webkit-appearance: none; appearance: none;
+            border-radius: 99px; outline: none; cursor: pointer; background: var(--track); }
         #speed::-webkit-slider-thumb {
-            -webkit-appearance: none; width: 18px; height: 18px; border-radius: 50%;
-            background: var(--brand-pink); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.25); }
+            -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
+            background: var(--brand-pink); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
         #speed::-moz-range-thumb {
-            width: 16px; height: 16px; border-radius: 50%; background: var(--brand-pink);
+            width: 22px; height: 22px; border-radius: 50%; background: var(--brand-pink);
             border: none; cursor: pointer; }
         .text-btn { background: var(--surface); border: 1px solid var(--border); color: var(--brand-purple);
             font-weight: 600; border-radius: 8px;
@@ -324,23 +339,30 @@
             <button class="play-btn" id="play" title="Play/Pause"><img id="play-img" src="assets/play.png" alt="Play"></button>
             <button class="icon-btn" id="fwd30" title="Forward 30s">↻<span class="skip-label">30</span></button>
             <button class="icon-btn" id="next-ch" title="Next chapter">⏭</button>
-            <!-- Absolutely positioned so it doesn't shift the centred group -->
+            <!-- Absolutely positioned so they don't shift the centred group:
+                 bookmark on the right, speed on the left (#265). -->
             <button class="icon-btn" id="bm-add" title="Bookmark this spot" aria-label="Bookmark this spot">
                 <span class="bm-add-wrap">
                     <img src="assets/bookmark.png" alt="" class="icon-png">
                     <span class="bm-add-plus" aria-hidden="true">+</span>
                 </span>
             </button>
+            <button class="icon-btn" id="speed-btn" title="Playback speed" aria-label="Playback speed">1.0×</button>
         </div>
         </div><!-- /.stage-main -->
     </div>
 
     <div class="bottom-bar">
-        <div class="speed-wrap">
-            <input type="range" id="speed" min="1" max="3" step="0.1" value="1">
-            <span class="speed-pill" id="speed-pill">1.0×</span>
-        </div>
         <button class="text-btn" id="chapters-btn2">Chapters</button>
+    </div>
+
+    <!-- Speed popup (#265): tapping the speed button (bottom-left of the controls)
+         reveals this vertical slider — 1.0× at the bottom, 3.0× at the top. -->
+    <div class="speed-popup" id="speed-popup" hidden>
+        <span class="speed-popup-val" id="speed-popup-val">1.0×</span>
+        <span class="speed-popup-end">3.0</span>
+        <input type="range" id="speed" min="1" max="3" step="0.1" value="1">
+        <span class="speed-popup-end">1.0</span>
     </div>
 
     <div class="drawer-backdrop" id="drawer-backdrop">
