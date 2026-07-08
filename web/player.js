@@ -239,6 +239,74 @@ async function loadLocalSession(absId) {
     } catch (_) { return null; }
 }
 
+// ---------- Local audio cache (WRITE side, #261) ----------
+// The player used to only READ the cache; a book that wasn't pre-downloaded on
+// the Home screen (e.g. you resumed straight into it, #198) then streamed
+// forever. Now the player caches this book on open too — every part's tracks +
+// manifest, plus the linked ebook — so the next open is fully local. All
+// fire-and-forget + delayed so it never competes with playback start,
+// skip-if-cached, and storage-guarded.
+function _idbPut(store, value) {
+    return openAudioDB().then((dbh) => new Promise((resolve) => {
+        if (!dbh || !dbh.objectStoreNames.contains(store)) return resolve(false);
+        try {
+            const tx = dbh.transaction([store], 'readwrite');
+            tx.objectStore(store).put(value);
+            tx.oncomplete = () => resolve(true);
+            tx.onerror = () => resolve(false);
+            tx.onabort = () => resolve(false);
+        } catch (_) { resolve(false); }
+    }));
+}
+async function _cacheAudiobookParts() {
+    for (const p of (PARTS || [])) {
+        const absId = p && p.absId;
+        if (!absId) continue;
+        try {
+            const mr = await fetch(`${API_URL}/audiobooks/${encodeURIComponent(absId)}/tracks`);
+            if (!mr.ok) continue;
+            const manifest = await mr.json();
+            await _idbPut('cacheMeta', { id: 'manifest:' + absId, manifest, cachedAt: Date.now() });
+            const tracks = manifest.tracks || [];
+            // Storage guard — don't start a big download unless it'll actually fit.
+            const need = tracks.reduce((s, t) => s + (t.size || 0), 0);
+            if (navigator.storage && navigator.storage.estimate) {
+                try {
+                    const est = await navigator.storage.estimate();
+                    const free = (est.quota || 0) - (est.usage || 0);
+                    if (need > 0 && free > 0 && need > free * 0.9) continue;
+                } catch (_) {}
+            }
+            for (const t of tracks) {
+                if (await getCachedTrackBlob(absId, t.ino)) continue;   // skip cached
+                const r = await fetch(t.url);
+                if (!r.ok) continue;
+                const blob = await r.blob();
+                await _idbPut('audio', {
+                    id: absId + ':' + t.ino, absId, ino: t.ino, blob,
+                    size: blob.size, mime: blob.type || t.mime || 'audio/mpeg',
+                    cachedAt: Date.now(),
+                });
+            }
+        } catch (_) { /* try again on a later open */ }
+    }
+}
+async function _cacheLinkedEbook() {
+    if (!linkedEbookId) return;
+    try {
+        const existing = await _idbGet('books', linkedEbookId);
+        if (existing && existing.blob) return;                  // already cached
+        const r = await fetch(`${API_URL}/ebooks/${encodeURIComponent(linkedEbookId)}/download?format=epub`);
+        if (!r.ok) return;
+        const blob = await r.blob();
+        await _idbPut('books', { id: linkedEbookId, format: 'epub', blob, cached: new Date() });
+    } catch (_) {}
+}
+async function precacheThisBook() {
+    await _cacheAudiobookParts();
+    await _cacheLinkedEbook();
+}
+
 async function init() {
     $('title').textContent = TITLE;
     $('author').textContent = AUTHOR;
@@ -330,6 +398,11 @@ async function init() {
         }
     }
     await loadPart(startPart, Math.max(0, localSeek), false);
+
+    // Cache this book on open (#261) — all parts + the linked ebook — so the next
+    // open is fully local even if we reached here by resuming straight into the
+    // player (bypassing the Home-screen precache). Delayed + fire-and-forget.
+    setTimeout(() => { precacheThisBook().catch(() => {}); }, 4000);
 }
 
 // Load a single part's ABS session and wire its track into the <audio>. The
