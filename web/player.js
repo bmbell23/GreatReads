@@ -920,15 +920,19 @@ function normBookmark(b, origin) {
 }
 
 async function fetchAllBookmarks() {
-    const reqs = [
-        fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(PROGRESS_KEY)}&type=bookmark`),
-        fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(PROGRESS_KEY)}&type=auto-bookmark`),
-    ];
-    if (linkedEbookId) {
-        reqs.push(fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(linkedEbookId)}&type=bookmark`));
-        reqs.push(fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(linkedEbookId)}&type=auto-bookmark`));
+    // De-dup the keys first: for a dual-format book PROGRESS_KEY === linkedEbookId
+    // (both the Calibre id), so also fetching linkedEbookId would return — and
+    // render — every bookmark twice (#260). Collapse to a Set, then dedupe the
+    // collected records by id defensively.
+    const keys = new Set([PROGRESS_KEY]);
+    if (linkedEbookId) keys.add(linkedEbookId);
+    const reqs = [];
+    for (const k of keys) {
+        reqs.push(fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(k)}&type=bookmark`));
+        reqs.push(fetch(`${API_URL}/highlights?bookId=${encodeURIComponent(k)}&type=auto-bookmark`));
     }
     const out = [];
+    const seen = new Set();
     try {
         const res = await Promise.all(reqs);
         for (let i = 0; i < res.length; i++) {
@@ -939,6 +943,7 @@ async function fetchAllBookmarks() {
                 // reliable discriminant — also catches audio bookmarks cross-keyed
                 // under the linked ebook id; ebook bookmarks (mediaType ''/absent) drop.
                 if (b.mediaType !== 'audiobook') continue;
+                if (b.id != null) { if (seen.has(b.id)) continue; seen.add(b.id); }
                 out.push(normBookmark(b, 'audio'));
             }
         }
