@@ -7025,7 +7025,11 @@
                 console.warn('TOC: could not resolve page for', item);
             }
             toggleTOC();
-            toggleMenu();
+            // Close Reading Options only if it's actually open (the TOC used to be
+            // launched from inside it). Never OPEN it here — a bare toggleMenu()
+            // popped Reading Options open after every TOC jump (#257).
+            const _controls = document.getElementById('reader-controls');
+            if (_controls && _controls.classList.contains('visible')) toggleMenu();
         }
 
         // Recursively render a tree of {title, anchor, children} nodes into
