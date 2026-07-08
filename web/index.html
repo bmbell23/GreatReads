@@ -2682,9 +2682,15 @@
         }
         async function precacheInProgressEbooks() {
             // In-progress = 0 < progress < 1 (skip finished + not-started).
-            const ipIds = [];
+            const ipIds = new Set();
             progressMap.forEach((rec, id) => {
-                if (rec && rec.progress > 0 && rec.progress < 1) ipIds.push(String(id));
+                if (rec && rec.progress > 0 && rec.progress < 1) ipIds.add(String(id));
+            });
+            // #264: also cache the EBOOK of a book that's in progress as AUDIO only
+            // (its id isn't in progressMap) — so all formats cache together.
+            homeBooks.forEach(b => {
+                const a = (b && b.absId) ? audioProgressByAbsId.get(String(b.absId)) : null;
+                if (a && a.progress > 0 && a.progress < 1) ipIds.add(String(b.id));
             });
             for (const id of ipIds) {
                 try {
@@ -2730,9 +2736,15 @@
         // `audio`. Sequential + skip-if-cached + storage-checked so it runs once
         // and can't blow the quota / evict other caches.
         async function precacheInProgressAudio() {
-            const ipAbs = [];
+            const ipAbs = new Set();
             audioProgressByAbsId.forEach((rec, absId) => {
-                if (rec && rec.progress > 0 && rec.progress < 1) ipAbs.push(String(absId));
+                if (rec && rec.progress > 0 && rec.progress < 1) ipAbs.add(String(absId));
+            });
+            // #264: also cache the AUDIO of a book that's in progress as EBOOK only,
+            // so both formats of every in-progress book cache together.
+            homeBooks.forEach(b => {
+                const e = b ? progressMap.get(String(b.id)) : null;
+                if (e && e.progress > 0 && e.progress < 1 && b.absId) ipAbs.add(String(b.absId));
             });
             for (const absId of ipAbs) {
                 try {

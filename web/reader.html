@@ -2719,6 +2719,11 @@
                 setTimeout(calculatePages, 100);
             });
             if (_seededFromPrefetch) syncReadingStateFromServer().catch(() => {});
+            // Cross-format cache symmetry (#264): the reader already caches this
+            // EPUB on open; also pre-download the linked AUDIOBOOK so both formats
+            // are local regardless of which one you entered through. Delayed +
+            // fire-and-forget + storage-guarded so it never competes with paint.
+            setTimeout(() => { cacheLinkedAudiobook().catch(() => {}); }, 5000);
         }
 
         // ---------- Word-anchored reading position ----------
@@ -6471,6 +6476,70 @@
                     tx.onerror = () => resolve(false);
                 } catch (e) { resolve(false); }
             });
+        }
+
+        // ---- Linked-audiobook pre-cache (#264) ----
+        // The reader owns EreaderDB's v3 schema, so it can write the `audio` /
+        // `cacheMeta` stores the player reads from. On opening an ebook we also
+        // download its linked audiobook's tracks + manifest, so opening the
+        // audio later plays fully local. Skip-if-cached, storage-guarded.
+        function _idbGetAudio(store, key) {
+            return new Promise((resolve) => {
+                if (!bookDB || !bookDB.objectStoreNames.contains(store)) return resolve(null);
+                try {
+                    const r = bookDB.transaction([store], 'readonly').objectStore(store).get(key);
+                    r.onsuccess = () => resolve(r.result || null);
+                    r.onerror = () => resolve(null);
+                } catch (_) { resolve(null); }
+            });
+        }
+        function _idbPutAudio(store, value) {
+            return new Promise((resolve) => {
+                if (!bookDB || !bookDB.objectStoreNames.contains(store)) return resolve(false);
+                try {
+                    const tx = bookDB.transaction([store], 'readwrite');
+                    tx.objectStore(store).put(value);
+                    tx.oncomplete = () => resolve(true);
+                    tx.onerror = () => resolve(false);
+                    tx.onabort = () => resolve(false);
+                } catch (_) { resolve(false); }
+            });
+        }
+        async function cacheLinkedAudiobook() {
+            try {
+                await openBookDB();
+                const r = await fetch(API_URL + '/booklinks/' + encodeURIComponent(bookId));
+                if (!r.ok) return;
+                const d = await r.json();
+                const sib = (d.siblings || []).find(x => String(x).startsWith('abs:'));
+                if (!sib) return;
+                const absId = String(sib).slice(4);
+                const mr = await fetch(API_URL + '/audiobooks/' + encodeURIComponent(absId) + '/tracks');
+                if (!mr.ok) return;
+                const manifest = await mr.json();
+                await _idbPutAudio('cacheMeta', { id: 'manifest:' + absId, manifest, cachedAt: Date.now() });
+                const tracks = manifest.tracks || [];
+                // Storage guard — don't start a big download unless it'll fit.
+                const need = tracks.reduce((s, t) => s + (t.size || 0), 0);
+                if (navigator.storage && navigator.storage.estimate) {
+                    try {
+                        const est = await navigator.storage.estimate();
+                        const free = (est.quota || 0) - (est.usage || 0);
+                        if (need > 0 && free > 0 && need > free * 0.9) return;
+                    } catch (_) {}
+                }
+                for (const t of tracks) {
+                    const existing = await _idbGetAudio('audio', absId + ':' + t.ino);
+                    if (existing && existing.blob) continue;                 // skip cached
+                    const tr = await fetch(t.url);
+                    if (!tr.ok) continue;
+                    const blob = await tr.blob();
+                    await _idbPutAudio('audio', {
+                        id: absId + ':' + t.ino, absId, ino: t.ino, blob,
+                        size: blob.size, mime: blob.type || t.mime || 'audio/mpeg', cachedAt: Date.now(),
+                    });
+                }
+            } catch (_) { /* try again on a later open */ }
         }
 
         function updateDualPageButton() {
