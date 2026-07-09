@@ -1190,10 +1190,18 @@ async function renderBookmarks() {
     const BM_ICON_MANUAL = '<img src="assets/bookmark.png" style="width:13px;height:13px;opacity:0.7;vertical-align:middle;margin-right:5px;" aria-hidden="true">';
     const BM_ICON_AUTO   = '<img src="assets/bookmark.png" style="width:13px;height:13px;filter:invert(28%) sepia(83%) saturate(1700%) hue-rotate(258deg) brightness(90%);vertical-align:middle;margin-right:5px;" aria-hidden="true">';
 
-    // One furthest-first list — manual + auto merged (already sorted % desc), no
-    // section split, one compact row each (#80).
+    // #262: split into Manual + Automatic sections (mirrors the ebook reader), each
+    // already sorted furthest-first — so auto-bookmarks are clearly labelled, not
+    // just an icon-colour hint.
     const total = bookTotal();
-    for (const n of items) {
+    const mkHeader = (labelText, color) => {
+        const h = document.createElement('div');
+        h.style.cssText = `padding:12px 16px 4px;font-size:11px;font-weight:700;`
+            + `letter-spacing:0.6px;text-transform:uppercase;color:${color};`;
+        h.textContent = labelText;
+        return h;
+    };
+    const buildRow = (n) => {
         const bmIcon = (n.type === 'auto-bookmark') ? BM_ICON_AUTO : BM_ICON_MANUAL;
         const row = document.createElement('div');
         row.className = 'bm-row';
@@ -1227,7 +1235,17 @@ async function renderBookmarks() {
         attachNoteGesture(row, () => openNoteEditor(n.note || '', async (v) => {
             if (await saveBookmarkNote(n.id, v)) { n.note = v; renderBookmarks(); }
         }));
-        list.appendChild(row);
+        return row;
+    };
+    const manual = items.filter(n => n.type !== 'auto-bookmark');
+    const auto   = items.filter(n => n.type === 'auto-bookmark');
+    if (manual.length) {
+        list.appendChild(mkHeader('📌 Manual Bookmarks', '#d04040'));
+        manual.forEach(n => list.appendChild(buildRow(n)));
+    }
+    if (auto.length) {
+        list.appendChild(mkHeader('⏱ Automatic Bookmarks', 'var(--brand-purple)'));
+        auto.forEach(n => list.appendChild(buildRow(n)));
     }
 }
 

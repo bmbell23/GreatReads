@@ -2787,15 +2787,24 @@ async def create_highlight(request: Request):
         # is "stale auto-save data" — the user already has a fresher snapshot.
         if item['type'] == 'auto-bookmark':
             book_id = item['bookId']
+            # #262: cap per (book, FORMAT). A book's ebook + audiobook share one
+            # bookId (the Calibre id), so a single per-book cap let ebook
+            # auto-bookmarks evict audio ones (and vice-versa). Key the cap by
+            # format (audiobook vs ebook) so each keeps its own most-recent N.
+            def _fmt(it):
+                return 'audiobook' if it.get('mediaType') == 'audiobook' else 'ebook'
+            item_fmt = _fmt(item)
             autos = [it for it in items
                      if it.get('type') == 'auto-bookmark'
-                     and str(it.get('bookId')) == book_id]
+                     and str(it.get('bookId')) == book_id
+                     and _fmt(it) == item_fmt]
             if len(autos) > AUTO_BOOKMARK_LIMIT_PER_BOOK:
                 autos.sort(key=lambda x: x.get('created') or 0, reverse=True)
                 keep = {it['id'] for it in autos[:AUTO_BOOKMARK_LIMIT_PER_BOOK]}
                 items = [it for it in items
                          if not (it.get('type') == 'auto-bookmark'
                                  and str(it.get('bookId')) == book_id
+                                 and _fmt(it) == item_fmt
                                  and it['id'] not in keep)]
         _save_highlights(items)
     return JSONResponse(item, status_code=201)
