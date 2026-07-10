@@ -1105,14 +1105,25 @@
         // Backend audio-progress fraction (0..100) for a row, if any. Prefers
         // the backend-synced record (cross-device) but falls back to
         // localStorage for an instant local-only update after leaving the player.
+        // #269: the STORY-relative fraction (front/back matter trimmed via the
+        // content anchors) so the Home % matches the reader/player; falls back to
+        // the raw native fraction for legacy records/state without it.
+        function _dispFrac(o) {
+            if (!o) return null;
+            if (typeof o.storyFrac === 'number') return o.storyFrac;
+            if (typeof o.progress === 'number') return o.progress;
+            return null;
+        }
         function audioPctFor(book) {
             const rec = audioProgressByAbsId.get(rawAbsIdFor(book));
-            let pct = (rec && typeof rec.progress === 'number') ? Math.round(rec.progress * 100) : 0;
+            let f = _dispFrac(rec);
+            let pct = f != null ? +(f * 100).toFixed(1) : 0;
             const absId = rawAbsIdFor(book);
             if (absId) {
                 const local = readingStateFor('abs:' + absId);
-                if (local && typeof local.progress === 'number' && (!rec || (local.ts || 0) > (rec.updated || 0))) {
-                    pct = Math.round(local.progress * 100);
+                const lf = _dispFrac(local);
+                if (lf != null && (!rec || (local.ts || 0) > (rec.updated || 0))) {
+                    pct = +(lf * 100).toFixed(1);
                 }
             }
             return pct;
@@ -1121,10 +1132,14 @@
         // backend store but falls back to localStorage for instant local updates.
         function ebookPctFor(book) {
             const rec = progressMap.get(String(book.id));
-            let pct = (rec && rec.mediaType !== 'audiobook' && typeof rec.progress === 'number') ? Math.round(rec.progress * 100) : 0;
+            let f = (rec && rec.mediaType !== 'audiobook') ? _dispFrac(rec) : null;
+            let pct = f != null ? +(f * 100).toFixed(1) : 0;
             const local = readingStateFor(book.id);
-            if (local && typeof local.progress === 'number' && (!rec || (local.ts || 0) > (rec.updated || 0))) {
-                pct = Math.round(local.progress * 100);
+            const lf = _dispFrac(local);
+            // Ignore an audio-typed local marker on the EBOOK bar (the player stamps
+            // ereader.state.<ebookId> with the raw audio %); it's not an ebook spot.
+            if (lf != null && local.mediaType !== 'audiobook' && (!rec || (local.ts || 0) > (rec.updated || 0))) {
+                pct = +(lf * 100).toFixed(1);
             }
             return pct;
         }

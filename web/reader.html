@@ -3629,10 +3629,16 @@
                 // font/viewport changes) AND the bare progress fraction
                 // (fallback for legacy state or content with no anchors).
                 const anchor = captureFirstVisibleAnchor();
+                const _prog = currentEpubPage / totalPages;
+                // #269: also stash the STORY-relative fraction (front/back-matter
+                // trimmed via the content anchors) so the Home progress label matches
+                // what the reader shows, instead of the raw file %.
+                const _span = Math.max(0.0001, _contentEnd - _contentStart);
                 const state = {
                     page: currentEpubPage,
                     total: totalPages,
-                    progress: currentEpubPage / totalPages,
+                    progress: _prog,
+                    storyFrac: Math.max(0, Math.min(1, (_prog - _contentStart) / _span)),
                     anchor: anchor,
                     fontSize: fontSize,
                     chapterTitle: _curChapterTitle,
