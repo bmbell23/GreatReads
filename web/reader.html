@@ -2107,7 +2107,16 @@
                 if (!raw) return false;
                 sessionStorage.removeItem(sk);
                 const rec = JSON.parse(raw);
-                if (!rec || rec.error || !rec.updated || rec.mediaType === 'audiobook') return false;
+                // Only seed a genuine ebook-native record synchronously. Any
+                // audio-origin record (mediaType audiobook, OR carries a `position`
+                // in seconds, OR was written by a non-ebook storyFmt) must NOT be
+                // seeded raw — its ebook resume needs the ?as=ebook rebase + chapter
+                // anchor, which only the (then-blocking) syncReadingStateFromServer
+                // can do once the TOC is parsed. Bailing here forces that path.
+                if (!rec || rec.error || !rec.updated
+                    || rec.mediaType === 'audiobook'
+                    || rec.position != null
+                    || (rec.storyFmt && rec.storyFmt !== 'ebook')) return false;
                 const key = 'ereader.state.' + bookId;
                 let localTs = 0;
                 try { const r = localStorage.getItem(key); if (r) localTs = (JSON.parse(r) || {}).ts || 0; } catch (_) {}
@@ -2692,6 +2701,12 @@
             // Attach detected scene/POV breaks as collapsible scene lists under
             // each leaf chapter so the TOC can expose intra-chapter scenes.
             attachScenesToTocTree(epubContent);
+
+            // #266: reader-assisted chapter alignment. Upload our chapter list
+            // (title + anchor + totalAnchors) so the server can match it to the
+            // audiobook's ABS chapters and build a dense cross-format sync map.
+            // Fire-and-forget; no-op for non-dual-format / no-TOC books.
+            uploadEbookChaptersForAlignment();
 
             // Load + visually apply server-side highlights AND pull the
             // latest reading position from the backend BEFORE pagination.
@@ -4047,29 +4062,53 @@
                 .replace(/\s+/g, ' ').trim();
         }
 
-        // Map an audiobook chapter (title + fraction-through) onto an ebook
-        // anchor by matching the title against tocItems, then interpolating by
-        // anchor within the chapter. Returns null when there's no confident
-        // title match — the caller then keeps the percent fallback. Safe to call
-        // before pagination: it only needs tocItems + the annotated anchors,
-        // both of which exist by the time progress sync runs.
+        // Ordered [{title, anchor}] chapter list for title→anchor lookups. Prefers
+        // the nav TOC (toc.ncx / nav.xhtml → tocTree, resolved to anchors) so it
+        // works for heading-less epubs (e.g. Calibre conversions whose chapter
+        // titles are styled <blockquote>/<span>, not <h1>-<h3>); falls back to the
+        // heading-scan tocItems. Sorted by anchor so "next entry" bounds a chapter.
+        function flatChapterAnchors() {
+            const flat = [];
+            const walk = (nodes) => {
+                for (const n of (nodes || [])) {
+                    if (typeof n.anchor === 'number' && (n.title || '').trim())
+                        flat.push({ title: n.title, anchor: n.anchor });
+                    if (n.children && n.children.length) walk(n.children);
+                }
+            };
+            if (tocTree && tocTree.length) walk(tocTree);
+            if (!flat.length) {
+                for (const it of tocItems)
+                    if (Number.isFinite(it.anchor) && (it.title || '').trim())
+                        flat.push({ title: it.title, anchor: it.anchor });
+            }
+            flat.sort((a, b) => a.anchor - b.anchor);
+            return flat;
+        }
+
+        // Map an audiobook chapter (title + fraction-through) onto an ebook anchor
+        // by matching the title against the chapter list, then interpolating by
+        // anchor within the chapter. Returns null when there's no confident title
+        // match — the caller then keeps the percent fallback. Safe to call before
+        // pagination: it only needs the TOC + annotated anchors, both of which
+        // exist by the time progress sync runs.
         function ebookAnchorForChapter(title, fraction) {
             const want = normChapterTitle(title);
-            if (!want || !tocItems.length) return null;
+            if (!want) return null;
+            const flat = flatChapterAnchors();
+            if (!flat.length) return null;
             let k = -1;
-            for (let i = 0; i < tocItems.length; i++) {
-                if (normChapterTitle(tocItems[i].title) === want) { k = i; break; }
+            for (let i = 0; i < flat.length; i++) {
+                if (normChapterTitle(flat[i].title) === want) { k = i; break; }
             }
             if (k < 0) return null;
-            const startA = tocItems[k].anchor;
+            const startA = flat[k].anchor;
             if (!Number.isFinite(startA)) return null;
-            // Chapter end = next heading at the same-or-shallower level (a deeper
-            // sub-heading is still inside this chapter), else end of book.
-            const lvl = tocItems[k].level;
+            // Chapter end = the next distinct TOC anchor (sorted), else end of book.
             let endA = null;
-            for (let j = k + 1; j < tocItems.length; j++) {
-                if (tocItems[j].level <= lvl && Number.isFinite(tocItems[j].anchor)) {
-                    endA = tocItems[j].anchor; break;
+            for (let j = k + 1; j < flat.length; j++) {
+                if (Number.isFinite(flat[j].anchor) && flat[j].anchor > startA) {
+                    endA = flat[j].anchor; break;
                 }
             }
             if (endA == null) {
@@ -4078,6 +4117,33 @@
             }
             const frac = (typeof fraction === 'number') ? Math.max(0, Math.min(1, fraction)) : 0;
             return Math.round(startA + frac * Math.max(0, endA - startA));
+        }
+
+        // #266: post this ebook's chapter list to the server for cross-format
+        // alignment. The anchor (block-index) of each chapter is font/pagination
+        // invariant, so tocItems is stable to send here (pre-pagination). Only
+        // does anything for a book that has an audiobook sibling; the server
+        // matches titles to the ABS chapters and persists the dense sync map.
+        async function uploadEbookChaptersForAlignment() {
+            try {
+                if (!bookId) return;
+                // Uses the nav TOC (tocTree) when present so heading-less epubs still
+                // yield a chapter list; falls back to tocItems. Same source the
+                // audio→ebook resume matcher uses, so the map matches at runtime.
+                const chapters = flatChapterAnchors();
+                if (chapters.length < 2) return;
+                const bl = await fetch(API_URL + '/booklinks/' + encodeURIComponent(bookId));
+                if (!bl.ok) return;
+                const d = await bl.json();
+                if (!(d.siblings || []).some(x => String(x).startsWith('abs:'))) return;
+                const totalAnchors = document.querySelectorAll('[data-anchor]').length;
+                if (!totalAnchors) return;
+                await fetch(API_URL + '/align/' + encodeURIComponent(bookId) + '/ebook-chapters', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ chapters, totalAnchors })
+                });
+            } catch (_) {}
         }
 
         // Resolve the matching audiobook's progress (dual-format works) so a
@@ -4116,7 +4182,16 @@
                 let localTs = 0;
                 try {
                     const raw = localStorage.getItem(STATE_KEY);
-                    if (raw) localTs = (JSON.parse(raw) || {}).ts || 0;
+                    if (raw) {
+                        const ls = JSON.parse(raw) || {};
+                        // #266: the audiobook player stamps ereader.state.<ebookId>
+                        // with the RAW audio fraction (mediaType:'audiobook') + a fresh
+                        // ts. That marker must NOT gate the server's cross-format rebase
+                        // — otherwise switching audio→ebook resumes from the raw audio
+                        // % (wrong chapter). Treat an audio-typed local state as ts-less
+                        // so the rebased + chapter-anchored server position always wins.
+                        localTs = (ls.mediaType === 'audiobook') ? 0 : (ls.ts || 0);
+                    }
                 } catch (_) {}
 
                 const valid = candidates.filter(x => x && !x.error && x.updated);
@@ -4130,9 +4205,24 @@
                     // mapping the global percent (page-density vs narration pace
                     // don't line up). Falls back to `progress` when no match.
                     const isAudio = remote.mediaType === 'audiobook';
-                    const audioAnchor = (isAudio && remote.chapterTitle)
+                    let audioAnchor = (isAudio && remote.chapterTitle)
                         ? ebookAnchorForChapter(remote.chapterTitle, remote.chapterFraction)
                         : null;
+                    // #266: for a cross-format (audio→ebook) resume, remote.progress is
+                    // an ANCHOR-space fraction — it round-trips through the chapter map
+                    // (ef = anchor/totalAnchors) + the content anchors, NOT a page
+                    // fraction. When chapter-title matching didn't yield an anchor,
+                    // derive one from that fraction × total anchors so we land in anchor
+                    // space, not page space (page-density ≠ anchor-density was dropping
+                    // the resume ~a chapter early; the 1.3% start offset compounded it).
+                    let audioAnchorSrc = audioAnchor != null ? 'chapter' : 'none';
+                    if (isAudio && audioAnchor == null && typeof remote.progress === 'number') {
+                        const totA = document.querySelectorAll('[data-anchor]').length;
+                        if (totA > 1) {
+                            audioAnchor = Math.round(Math.max(0, Math.min(1, remote.progress)) * (totA - 1));
+                            audioAnchorSrc = 'anchor-frac';
+                        }
+                    }
                     localStorage.setItem(STATE_KEY, JSON.stringify({
                         page:     isAudio ? null : remote.page,
                         total:    isAudio ? null : remote.total,
@@ -4142,9 +4232,7 @@
                         ts:       remote.updated
                     }));
                     console.log('☁️  Restored reading position from server:', remote,
-                        isAudio ? (audioAnchor != null
-                            ? `(chapter-aligned → anchor ${audioAnchor})`
-                            : '(percent fallback — no chapter match)') : '');
+                        isAudio ? `(anchor ${audioAnchor} via ${audioAnchorSrc})` : '');
                 }
                 // Restore reading-speed buffer from THIS ebook's own record
                 // (the audiobook has none) regardless of who won on position.

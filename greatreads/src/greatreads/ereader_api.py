@@ -485,20 +485,109 @@ def _fmt_anchor_fracs(bounds, fmt):
         s, e = 0.0, 1.0
     return (max(0.0, min(1.0, s)), max(0.0, min(1.0, e)))
 
-def _native_to_story(nf, bounds, fmt):
-    """Native fraction-of-total (0..1) → story-relative fraction (0..1)."""
+def _native_to_story(nf, bounds, fmt, amap=None):
+    """Native fraction-of-total (0..1) → story-relative fraction (0..1).
+
+    #266: for the audiobook, a dense per-chapter alignment map (`amap`, from the
+    reader-uploaded ebook chapter list matched to ABS chapters) refines the mapping
+    piecewise — audio native frac → ebook native frac (real chapter correspondence)
+    → story via the ebook anchors — instead of the single linear anchor segment.
+    Outside the outer matched pair (or no map) it falls back to the linear anchors."""
     try: nf = float(nf)
     except (TypeError, ValueError): return None
+    if fmt == 'audiobook' and amap:
+        ef = _amap_interp(nf, amap, 'af', 'ef')
+        if ef is not None:
+            return _native_to_story(ef, bounds, 'ebook')
     s, e = _fmt_anchor_fracs(bounds, fmt)
     if e <= s: return max(0.0, min(1.0, nf))
     return max(0.0, min(1.0, (nf - s) / (e - s)))
 
-def _story_to_native(sf, bounds, fmt):
-    """Story-relative fraction (0..1) → native fraction-of-total (0..1)."""
+def _story_to_native(sf, bounds, fmt, amap=None):
+    """Story-relative fraction (0..1) → native fraction-of-total (0..1).
+
+    #266: inverse of the audiobook dense-map path in _native_to_story — story →
+    ebook native (via ebook anchors) → audio native (piecewise ef→af). Falls back
+    to the linear anchor segment outside the matched range / when no map exists."""
     try: sf = max(0.0, min(1.0, float(sf)))
     except (TypeError, ValueError): return None
+    if fmt == 'audiobook' and amap:
+        ef = _story_to_native(sf, bounds, 'ebook')
+        if ef is not None:
+            af = _amap_interp(ef, amap, 'ef', 'af')
+            if af is not None:
+                return max(0.0, min(1.0, af))
     s, e = _fmt_anchor_fracs(bounds, fmt)
     return max(0.0, min(1.0, s + sf * (e - s)))
+
+# ── Dense per-chapter alignment map (#266) ───────────────────────────────────
+# Reader-assisted: the ebook reader uploads its chapter list (title + anchor +
+# totalAnchors); we match those titles to the audiobook's ABS chapters (title +
+# start seconds) and persist, per GreatReads book id, a list of matched points
+#   {title, ef: ebook native frac (anchor/totalAnchors), af: audio native frac}
+# in `ereader_app_kv` under `align:<book.id>`. The raw ebook uploads live under
+# `ebkchap:<book.id>` so the background job can re-match without the reader.
+def _norm_chapter_title(t):
+    """Python mirror of the reader/player normChapterTitle() — MUST stay in sync
+    (reader.html / player.js) or titles won't match and alignment silently fails."""
+    import re as _re
+    return _re.sub(r'\s+', ' ', _re.sub(r'[^a-z0-9 ]+', ' ', (t or '').lower())).strip()
+
+def _amap_interp(x, amap, xk, yk):
+    """Piecewise-linear interpolate y(x) over the alignment map's (xk→yk) points.
+    Returns None when the map has <2 usable points or x lies OUTSIDE the matched
+    range [first,last] — the caller then falls back to the linear anchor mapping."""
+    try:
+        pts = sorted(((float(m[xk]), float(m[yk])) for m in (amap or [])
+                      if m.get(xk) is not None and m.get(yk) is not None),
+                     key=lambda p: p[0])
+    except (TypeError, ValueError):
+        return None
+    uniq = []
+    for px, py in pts:
+        if uniq and abs(px - uniq[-1][0]) < 1e-9:
+            continue
+        uniq.append((px, py))
+    if len(uniq) < 2:
+        return None
+    try: x = float(x)
+    except (TypeError, ValueError): return None
+    if x < uniq[0][0] or x > uniq[-1][0]:
+        return None
+    for i in range(1, len(uniq)):
+        x0, y0 = uniq[i - 1]
+        x1, y1 = uniq[i]
+        if x <= x1:
+            if x1 <= x0:
+                return y0
+            t = (x - x0) / (x1 - x0)
+            return y0 + t * (y1 - y0)
+    return uniq[-1][1]
+
+def _gr_book_id_for(book_key):
+    """GreatReads internal books.id for a reader book_key (via external_imports),
+    the format-agnostic key the alignment map is stored under. None if unresolved."""
+    try:
+        bk = str(book_key)
+        source, ext_id = ('audiobookshelf', bk[4:]) if bk.startswith('abs:') else ('calibre', bk)
+        conn = _gr_db()
+        try:
+            row = conn.execute(
+                'SELECT b.id FROM books b JOIN external_imports ei ON ei.book_id = b.id '
+                'WHERE ei.source=? AND ei.external_id=? LIMIT 1', (source, ext_id)).fetchone()
+        finally:
+            conn.close()
+        return int(row['id']) if row else None
+    except Exception:
+        return None
+
+def _load_align_map(book_key):
+    """Dense alignment map for a reader book_key, or None. Best-effort."""
+    bid = _gr_book_id_for(book_key)
+    if bid is None:
+        return None
+    m = _kv_get(f'align:{bid}')
+    return m if (isinstance(m, list) and len(m) >= 2) else None
 
 def _writer_fmt_nf(item):
     """(format, native-fraction) that a progress record was written in.
@@ -874,7 +963,8 @@ def _gr_set_current_percent(book_key, record):
             sf = record.get('storyFrac')
             writer_fmt = 'audiobook' if media == 'Audio' else 'ebook'
             if sf is not None and target_fmt != writer_fmt:
-                nf = _story_to_native(sf, _gr_bounds_for(book_key), target_fmt)
+                nf = _story_to_native(sf, _gr_bounds_for(book_key), target_fmt,
+                                      _load_align_map(book_key))
                 pct = round((nf if nf is not None else frac) * 100, 1)
             else:
                 pct = round(frac * 100, 1)
@@ -2655,6 +2745,159 @@ def audiobook_tracks(abs_id):
         'chapters': chapters,
     }
 
+# ── Dense chapter alignment — build + upload endpoint (#266) ─────────────────
+def _abs_id_for_book(book_id_int):
+    """Audiobookshelf external_id for a GreatReads books.id (its audio sibling), or
+    None if the book has no audiobook import."""
+    try:
+        conn = _gr_db()
+        try:
+            row = conn.execute(
+                "SELECT external_id FROM external_imports "
+                "WHERE book_id=? AND source='audiobookshelf' LIMIT 1",
+                (int(book_id_int),)).fetchone()
+        finally:
+            conn.close()
+        return row['external_id'] if row else None
+    except Exception:
+        return None
+
+def _abs_chapters_and_duration(abs_id):
+    """(chapters[{title,start}], total_duration_seconds) for an ABS item, or (None,None)."""
+    if not ABS_ENABLED:
+        return None, None
+    item = _abs_get(f'/api/items/{abs_id}', params={'expanded': 1})
+    if not item:
+        return None, None
+    media = item.get('media') or {}
+    chapters = [{'title': c.get('title') or '', 'start': float(c.get('start') or 0)}
+                for c in (media.get('chapters') or [])]
+    dur = media.get('duration')
+    if not dur:
+        dur = sum(float(f.get('duration') or 0) for f in (media.get('audioFiles') or []))
+    return chapters, (float(dur) if dur else None)
+
+def _build_align_map(book_id_int, ebook_chapters, total_anchors):
+    """Match an ebook's uploaded chapter list (title + anchor / totalAnchors) to its
+    audiobook's ABS chapters (title + start sec) by normalized title. Returns the
+    sorted list of matched points [{title, ef, af}] (ebook/audio native fracs), [] if
+    too few match (fall back to #256), or None if the book isn't dual-format / no data."""
+    try:
+        total = int(total_anchors)
+    except (TypeError, ValueError):
+        return None
+    if total <= 0:
+        return None
+    abs_id = _abs_id_for_book(book_id_int)
+    if not abs_id:
+        return None  # not a dual-format book
+    achaps, dur = _abs_chapters_and_duration(abs_id)
+    if not achaps or not dur:
+        return None
+    # ebook: normalized title → native fraction (first occurrence wins, matching the
+    # reader's ebookAnchorForChapter which takes the first title match).
+    emap = {}
+    for c in (ebook_chapters or []):
+        a = c.get('anchor')
+        if a is None:
+            continue
+        nt = _norm_chapter_title(c.get('title'))
+        if not nt or nt in emap:
+            continue
+        try:
+            emap[nt] = max(0.0, min(1.0, float(a) / total))
+        except (TypeError, ValueError):
+            continue
+    if not emap:
+        return []
+    pts = []
+    for c in achaps:
+        nt = _norm_chapter_title(c.get('title'))
+        if nt not in emap:
+            continue
+        pts.append({'title': c.get('title') or '', 'ef': emap[nt],
+                    'af': max(0.0, min(1.0, (c.get('start') or 0) / dur))})
+    pts.sort(key=lambda p: p['af'])
+    out = []
+    for p in pts:
+        if out and abs(p['af'] - out[-1]['af']) < 1e-6:
+            continue
+        out.append(p)
+    return out
+
+def _refresh_align_for_book(book_id_int, ebook_chapters=None, total_anchors=None):
+    """(Re)build + persist the alignment map for a book. Uses the passed ebook chapter
+    upload, else the last cached upload (`ebkchap:<id>`). Stores `align:<id>` = the map
+    (or [] when too few match → clean #256 fallback). Returns the matched-point count."""
+    if ebook_chapters is None:
+        cached = _kv_get(f'ebkchap:{book_id_int}') or {}
+        ebook_chapters = cached.get('chapters')
+        total_anchors = cached.get('totalAnchors')
+    amap = _build_align_map(book_id_int, ebook_chapters, total_anchors)
+    if amap is None:
+        return None
+    _kv_set(f'align:{book_id_int}', amap if len(amap) >= 2 else [])
+    return len(amap)
+
+def _all_ebkchap_book_ids():
+    """GreatReads book ids that have a cached ebook chapter upload (`ebkchap:<id>`) —
+    the set the background refresh re-matches. Books never opened aren't included."""
+    ids = []
+    try:
+        conn = _gr_db()
+        try:
+            _ensure_app_kv_table(conn)
+            rows = conn.execute(
+                "SELECT key FROM ereader_app_kv WHERE key LIKE 'ebkchap:%'").fetchall()
+        finally:
+            conn.close()
+        for r in rows:
+            try:
+                ids.append(int(str(r['key']).split(':', 1)[1]))
+            except (ValueError, IndexError):
+                continue
+    except Exception:
+        pass
+    return ids
+
+def refresh_all_alignments():
+    """#266 background sweep: rebuild the alignment map for every book that has a
+    cached ebook chapter upload (keeps maps fresh as ABS chapters / match logic
+    change). Best-effort per book. Returns a summary dict."""
+    ids = _all_ebkchap_book_ids()
+    refreshed = mapped = 0
+    for bid in ids:
+        try:
+            r = _refresh_align_for_book(bid)
+        except Exception:
+            r = None
+        if r is not None:
+            refreshed += 1
+            if r >= 2:
+                mapped += 1
+    return {'books': len(ids), 'refreshed': refreshed, 'mapped': mapped}
+
+@router.post('/api/align/{book_id}/ebook-chapters')
+async def align_ebook_chapters(book_id, request: Request):
+    """#266 reader-assisted alignment: the ebook reader POSTs its chapter list
+    {chapters:[{title,anchor}], totalAnchors} on open. We cache it and (re)build the
+    dense audio↔ebook map. Idempotent; safe to re-post on every open/re-pagination."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    chapters = body.get('chapters') or []
+    total = body.get('totalAnchors')
+    bid = _gr_book_id_for(book_id)
+    if bid is None:
+        return {'ok': False, 'reason': 'unresolved-book'}
+    _kv_set(f'ebkchap:{bid}', {'chapters': chapters, 'totalAnchors': total})
+    matched = _refresh_align_for_book(bid, chapters, total)
+    if matched is None:
+        return {'ok': True, 'matched': 0, 'chapters': len(chapters), 'dualFormat': False}
+    return {'ok': True, 'matched': matched, 'chapters': len(chapters),
+            'dualFormat': True, 'fallback': matched < 2}
+
 @router.get('/api/audiobooks/{abs_id}/track/{ino}/download')
 def download_audiobook_track(abs_id, ino, request: Request):
     """Range-capable proxy of a single ABS audio file (keyed by `ino` from the
@@ -2884,7 +3127,7 @@ def get_progress(book_id, request: Request):
     if as_fmt in ('ebook', 'audiobook', 'physical') and sf is not None \
             and item.get('storyFmt') and as_fmt != item.get('storyFmt'):
         bounds = _gr_bounds_for(book_id)
-        tnf = _story_to_native(sf, bounds, as_fmt)
+        tnf = _story_to_native(sf, bounds, as_fmt, _load_align_map(book_id))
         if tnf is not None:
             item = dict(item)
             if as_fmt == 'ebook':
@@ -3055,7 +3298,8 @@ async def put_progress(book_id, request: Request):
         # resume at the same story point (rebased in get_progress via ?as=).
         _wf, _nf = _writer_fmt_nf(item)
         if _nf is not None:
-            _sf = _native_to_story(_nf, _gr_bounds_for(book_id), _wf)
+            _sf = _native_to_story(_nf, _gr_bounds_for(book_id), _wf,
+                                   _load_align_map(book_id))
             if _sf is not None:
                 item['storyFrac'] = _sf
                 item['storyFmt'] = _wf

@@ -96,16 +96,29 @@ def _title_core_tokens(s: str) -> Optional[frozenset]:
 
 
 def _get_calibre_universe_map(conn: sqlite3.Connection) -> dict[int, str]:
-    """Return {book_id: universe_name} from Calibre's custom Universe column."""
+    """Return {book_id: universe_name} from Calibre's custom Universe column.
+
+    `universe` is a NORMALIZED text column (custom_columns.normalized=1): its
+    custom_column_N table is (id, value, link) with NO `book` column — the
+    book→value link lives in books_custom_column_N_link. Non-normalized columns
+    (e.g. numeric word_count) do carry a `book` column and are read directly."""
     try:
         row = conn.execute(
-            "SELECT id FROM custom_columns WHERE label = 'universe' LIMIT 1"
+            "SELECT id, normalized FROM custom_columns WHERE label = 'universe' LIMIT 1"
         ).fetchone()
         if not row:
             return {}
-        col_id = row[0]
-        table = f"custom_column_{col_id}"
-        rows = conn.execute(f"SELECT book, value FROM {table}").fetchall()
+        col_id, normalized = row[0], row[1]
+        if normalized:
+            rows = conn.execute(
+                f"SELECT link.book, cc.value "
+                f"FROM books_custom_column_{col_id}_link link "
+                f"JOIN custom_column_{col_id} cc ON cc.id = link.value"
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"SELECT book, value FROM custom_column_{col_id}"
+            ).fetchall()
         return {r[0]: r[1] for r in rows if r[1]}
     except Exception as exc:
         logger.warning("Could not read Calibre universe column: %s", exc)
@@ -113,18 +126,29 @@ def _get_calibre_universe_map(conn: sqlite3.Connection) -> dict[int, str]:
 
 
 def _get_calibre_universe(conn: sqlite3.Connection, book_id: int) -> Optional[str]:
-    """Return the Universe custom field value for a single Calibre book."""
+    """Return the Universe custom field value for a single Calibre book.
+
+    Normalized text column → read via books_custom_column_N_link (custom_column_N
+    has no `book` column). See _get_calibre_universe_map for the schema note."""
     try:
         row = conn.execute(
-            "SELECT id FROM custom_columns WHERE label = 'universe' LIMIT 1"
+            "SELECT id, normalized FROM custom_columns WHERE label = 'universe' LIMIT 1"
         ).fetchone()
         if not row:
             return None
-        col_id = row[0]
-        table = f"custom_column_{col_id}"
-        uni_row = conn.execute(
-            f"SELECT value FROM {table} WHERE book = ? LIMIT 1", (book_id,)
-        ).fetchone()
+        col_id, normalized = row[0], row[1]
+        if normalized:
+            uni_row = conn.execute(
+                f"SELECT cc.value "
+                f"FROM books_custom_column_{col_id}_link link "
+                f"JOIN custom_column_{col_id} cc ON cc.id = link.value "
+                f"WHERE link.book = ? LIMIT 1", (book_id,)
+            ).fetchone()
+        else:
+            uni_row = conn.execute(
+                f"SELECT value FROM custom_column_{col_id} WHERE book = ? LIMIT 1",
+                (book_id,)
+            ).fetchone()
         return uni_row[0] if uni_row else None
     except Exception as exc:
         logger.warning("Could not read Calibre universe for book %s: %s", book_id, exc)

@@ -194,6 +194,20 @@ def _libby_autofulfill():
         db.close()
 
 
+def _align_refresh():
+    """Scheduled sweep (#266): rebuild the dense ebook↔audiobook chapter-alignment
+    maps for every dual-format book whose ebook chapter list has been uploaded (i.e.
+    opened at least once). Keeps cross-format progress sync tight as ABS chapters or
+    the match logic change. Reader-assisted, so never-opened books are skipped."""
+    try:
+        from .ereader_api import refresh_all_alignments
+        result = refresh_all_alignments()
+        if result.get("books"):
+            logger.info("Chapter alignment refresh: %s", result)
+    except Exception as exc:
+        logger.error("Chapter alignment refresh failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Application lifespan manager."""
@@ -287,6 +301,17 @@ async def lifespan(app: FastAPI):
             id="libby_autofulfill",
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=5),
+            coalesce=True,
+            max_instances=1,
+        )
+        # Chapter-alignment refresh sweep (#266) — re-match the dense ebook↔audiobook
+        # per-chapter maps for opened dual-format books, ~every 30 min.
+        scheduler.add_job(
+            _align_refresh,
+            IntervalTrigger(minutes=int(os.environ.get("ALIGN_REFRESH_INTERVAL_MIN", "30"))),
+            id="chapter_alignment_refresh",
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(minutes=4),
             coalesce=True,
             max_instances=1,
         )
