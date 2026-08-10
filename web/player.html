@@ -54,8 +54,11 @@
         #back-btn span:nth-child(2) { transform: translate(-50%, -50%) rotate(-45deg); }
         .top-bar .now { font-size: 13px; color: var(--muted); overflow: hidden;
             text-overflow: ellipsis; white-space: nowrap; flex: 1; text-align: center; }
+        /* Anchor the stack to the TOP (was center) so a taller cover grows UP into the
+           previously-wasted space above it, rather than the growth being split evenly
+           above and below by centering (#272). */
         .stage { flex: 1; display: flex; flex-direction: column; align-items: center;
-            justify-content: center; padding: 8px 24px 4px; gap: 16px; min-height: 0; }
+            justify-content: flex-start; padding: 8px 24px 4px; gap: 16px; min-height: 0; }
         /* Portrait: the wrapper is transparent so meta/bars/controls remain
            direct flex children of .stage (unchanged layout). Landscape (below)
            turns it into a real column beside the cover. */
@@ -64,9 +67,15 @@
            constraining both axes plus aspect-ratio lets a max-* clamp distort the
            ratio (the "2.5:3" bug). Only height is capped; max-width is a generous
            safety that won't bind in normal cases, so the 2:3 shape always holds.
-           Height kept modest so the portrait stack doesn't overflow into the top bar. */
+           Height kept modest so the portrait stack doesn't overflow into the top bar.
+           Bumped up (#272) to reclaim the wasted vertical space above the cover; the
+           tuned landscape/foldable cases below keep their own smaller heights. Paired
+           with the stage now top-anchoring (justify-content:flex-start) so the extra
+           height is spent growing UP into that space. Default flex-shrink is kept as a
+           safety so a short viewport shrinks the cover to fit rather than clipping the
+           controls. */
         .cover {
-            height: min(40vh, 320px); width: auto; aspect-ratio: 2/3; max-width: 82vw;
+            height: min(56vh, 480px); width: auto; aspect-ratio: 2/3; max-width: 82vw;
             border-radius: 16px;
             object-fit: cover; box-shadow: 0 12px 40px rgba(134,64,192,0.20),
                 0 0 0 1px rgba(0,0,0,0.06);
@@ -163,14 +172,16 @@
         .speed-popup-end { font-size: 11px; font-weight: 600; color: #9aa0a6; }
         #speed {
             writing-mode: vertical-lr; direction: rtl;   /* min at bottom, max at top */
-            width: 10px; height: 190px; touch-action: none;
+            /* Taller + wider than before (#272): more travel per 0.1× step so it's
+               far less twitchy, and a fatter track/thumb make it easy to grab. */
+            width: 16px; height: 260px; touch-action: none;
             -webkit-appearance: none; appearance: none;
             border-radius: 99px; outline: none; cursor: pointer; background: var(--track); }
         #speed::-webkit-slider-thumb {
-            -webkit-appearance: none; width: 24px; height: 24px; border-radius: 50%;
+            -webkit-appearance: none; width: 32px; height: 32px; border-radius: 50%;
             background: var(--brand-pink); cursor: pointer; box-shadow: 0 1px 4px rgba(0,0,0,0.3); }
         #speed::-moz-range-thumb {
-            width: 22px; height: 22px; border-radius: 50%; background: var(--brand-pink);
+            width: 30px; height: 30px; border-radius: 50%; background: var(--brand-pink);
             border: none; cursor: pointer; }
         .text-btn { background: var(--surface); border: 1px solid var(--border); color: var(--brand-purple);
             font-weight: 600; border-radius: 8px;
@@ -286,9 +297,13 @@
         @media (orientation: portrait) and (min-aspect-ratio: 5/6) {
             .stage { gap: 10px; padding: 6px 24px; }
             /* Height-driven so the near-square foldable keeps an EXACT 2:3 (the old
-               width + max-height clamp produced ~2.5:3). Smaller so the full stack
-               fits the ~1:1 viewport. (#226) */
-            .cover { height: min(38vh, 300px); max-width: 44vw; }
+               width + max-height clamp produced ~2.5:3). (#226)
+               #272: match the standard-phone cover instead of the old small cap — an
+               unfolded fold has roughly a phone's worth of vertical room (~880px), so
+               the same big cover fits (the tightened gaps + top-anchor + default
+               shrink keep it from overflowing). max-width raised so the wider
+               near-square viewport can't clamp it back down. */
+            .cover { height: min(56vh, 480px); max-width: 62vw; }
             .meta .title { font-size: 18px; }
             .bars { gap: 8px; }
             .bottom-bar {
