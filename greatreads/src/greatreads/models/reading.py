@@ -35,6 +35,9 @@ class Reading(Base):
     date_started = Column(Date)
     date_finished_actual = Column(Date)
     date_paused = Column(Date)  # When set, progress calculation freezes
+    date_dnf = Column(Date)  # When set, the reading was abandoned (Did Not Finish):
+                             # NOT finished, the book stays "unread", but the portion
+                             # read still credits words/pages fractionally (#271).
     rating_horror = Column(Float)
     rating_spice = Column(Float)
     rating_world_building = Column(Float)
@@ -120,10 +123,23 @@ class Reading(Base):
         return self.date_paused is not None
 
     @property
+    def is_dnf(self) -> bool:
+        """Check if reading was abandoned (Did Not Finish). (#271)"""
+        return self.date_dnf is not None
+
+    @property
     def status(self) -> str:
-        """Get reading status."""
+        """Get reading status.
+
+        Precedence: finished > dnf > paused > in_progress > not_started. DNF is a
+        terminal-ish abandoned state — the book is NOT finished and stays "unread",
+        so it must never read as in_progress/paused (which would leak it into TBR
+        and the in-progress shelves). (#271)
+        """
         if self.is_finished:
             return "finished"
+        elif self.is_dnf:
+            return "dnf"
         elif self.is_paused:
             return "paused"
         elif self.is_started:
@@ -204,6 +220,7 @@ class Reading(Base):
             "date_started": self.date_started.isoformat() if self.date_started else None,
             "date_finished_actual": self.date_finished_actual.isoformat() if self.date_finished_actual else None,
             "date_paused": self.date_paused.isoformat() if self.date_paused else None,
+            "date_dnf": self.date_dnf.isoformat() if self.date_dnf else None,
             "rating_horror": self.rating_horror,
             "rating_spice": self.rating_spice,
             "rating_world_building": self.rating_world_building,
@@ -227,6 +244,7 @@ class Reading(Base):
             "is_finished": self.is_finished,
             "is_started": self.is_started,
             "is_paused": self.is_paused,
+            "is_dnf": self.is_dnf,
             "current_percent": self.current_percent,
             "current_percent_manual_override": self.current_percent_manual_override,
             "date_progress_set": self.date_progress_set.isoformat() if self.date_progress_set else None,
@@ -283,6 +301,8 @@ class ReadingResponse(ReadingBase):
     status: str
     is_finished: bool
     is_started: bool
+    is_dnf: bool = False
+    date_dnf: Optional[date] = None
     current_page: Optional[int] = None
     current_page_manual_override: bool = False
     current_progress_percent: Optional[float] = None

@@ -71,7 +71,8 @@ async def get_library_books(
             query = query.filter(
                 and_(
                     Reading.date_started.isnot(None),
-                    Reading.date_finished_actual.is_(None)
+                    Reading.date_finished_actual.is_(None),
+                    Reading.date_dnf.is_(None)  # abandoned (DNF) is not in-progress (#271)
                 )
             )
 
@@ -118,8 +119,10 @@ async def get_library_books(
         book_data["readings"] = [r.to_dict() for r in readings]
         book_data["read_count"] = len([r for r in readings if r.date_finished_actual])
         book_data["is_read"] = any(r.date_finished_actual for r in readings)
+        # A DNF reading is neither read nor in-progress — the book stays unread (#271).
         book_data["is_in_progress"] = any(
-            r.date_started and not r.date_finished_actual for r in readings
+            r.date_started and not r.date_finished_actual and not r.date_dnf
+            for r in readings
         )
 
         # Inventory + owned-media + external source links (Calibre / Audiobookshelf).

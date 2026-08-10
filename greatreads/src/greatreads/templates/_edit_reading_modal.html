@@ -96,6 +96,12 @@
                 <button type="button" class="btn btn-outline-warning me-auto mb-2 mb-sm-0 d-none" id="editResetCreditBtn" onclick="resetCreditFromModal()">
                     <i class="fas fa-rotate-left me-1"></i>Reset word-credit mark
                 </button>
+                {# DNF (Did Not Finish) — abandon the book but keep its sessions/entry and
+                   credit the portion read to word totals (#271). Toggles to "Resume" when
+                   already DNF. Shown/hidden by showEditModal based on status. #}
+                <button type="button" class="btn btn-dnf mb-2 mb-sm-0 d-none" id="dnfReadingBtn" onclick="dnfReadingFromModal()">
+                    <i class="fas fa-ban me-1"></i>DNF this Book
+                </button>
                 <button type="button" class="btn btn-secondary mb-2 mb-sm-0" data-bs-dismiss="modal">Cancel</button>
                 <button type="button" class="btn btn-info mb-2 mb-sm-0" id="startReadingManualBtn" onclick="startReadingManualFromModal()" style="display: none;">
                     <i class="fas fa-calendar-plus me-1"></i>Start with Date

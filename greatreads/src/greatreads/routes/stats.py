@@ -5,7 +5,7 @@ from typing import Optional, Dict, Any
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import extract, and_, text
+from sqlalchemy import extract, and_, or_, func, text
 
 from ..database import get_db
 from ..models.reading import Reading
@@ -16,6 +16,39 @@ from ..services.format_dominance import get_primary_format
 router = APIRouter()
 
 
+# ---- DNF word/page credit (#271) --------------------------------------------
+# The stats aggregates below draw from finished readings AND abandoned (DNF) ones.
+# A finished reading credits its book's FULL word/page count; a DNF credits only the
+# fraction actually read (current_percent). Book *counts* stay finished-only — a DNF
+# is not a read book — but its portion still contributes to word/page totals.
+
+def _reading_end_date(reading):
+    """Effective 'end' date for a reading: the finish date, else the DNF date."""
+    return reading.date_finished_actual or reading.date_dnf
+
+
+def _credit_weight(reading) -> float:
+    """1.0 for a finished reading; fraction-read (0..1) for a DNF; else 0."""
+    if reading.date_finished_actual is not None:
+        return 1.0
+    if reading.date_dnf is not None:
+        pct = reading.current_percent or 0.0
+        return max(0.0, min(1.0, pct / 100.0))
+    return 0.0
+
+
+def _weighted_words(reading) -> int:
+    if not reading.book or not reading.book.word_count:
+        return 0
+    return int(round(reading.book.word_count * _credit_weight(reading)))
+
+
+def _weighted_pages(reading) -> int:
+    if not reading.book or not reading.book.page_count:
+        return 0
+    return int(round(reading.book.page_count * _credit_weight(reading)))
+
+
 @router.get("/")
 async def get_reading_stats(
     year: Optional[int] = Query(None),
@@ -24,18 +57,23 @@ async def get_reading_stats(
 ) -> Dict[str, Any]:
     """Get reading statistics with optional year/month filtering."""
 
-    # Base query for finished readings with eager loading of book relationship
-    query = db.query(Reading).options(joinedload(Reading.book)).filter(Reading.date_finished_actual.isnot(None))
+    # Base query: finished readings PLUS abandoned (DNF) ones, so a DNF's portion
+    # read still credits words/pages below (#271). Book counts remain finished-only.
+    # The period is keyed off the effective end date (finish date, else DNF date).
+    _end = func.coalesce(Reading.date_finished_actual, Reading.date_dnf)
+    query = db.query(Reading).options(joinedload(Reading.book)).filter(
+        or_(Reading.date_finished_actual.isnot(None), Reading.date_dnf.isnot(None))
+    )
 
     # Apply year filter
     if year:
-        query = query.filter(extract('year', Reading.date_finished_actual) == year)
+        query = query.filter(extract('year', _end) == year)
 
     # Apply month filter (only if year is also specified)
     if month and year:
-        query = query.filter(extract('month', Reading.date_finished_actual) == month)
+        query = query.filter(extract('month', _end) == month)
 
-    # Get all finished readings for this period
+    # Get all finished + DNF readings for this period
     readings = query.all()
 
     # Books Read by Format
@@ -46,7 +84,8 @@ async def get_reading_stats(
     }
 
     for reading in readings:
-        if reading.media:
+        # Book counts are finished-only — a DNF is not a read book (#271).
+        if reading.media and reading.date_finished_actual:
             media_normalized = reading.media.lower()
             if media_normalized in ['audio', 'audiobook']:
                 format_counts["Audio"] += 1
@@ -64,29 +103,24 @@ async def get_reading_stats(
 
     for reading in readings:
         if reading.media and reading.book and reading.book.word_count:
-            # Calculate days elapsed
-            if reading.date_started and reading.date_finished_actual:
-                days_elapsed = (
-                    reading.date_finished_actual - reading.date_started
-                ).days
-                if days_elapsed > 0:  # Avoid division by zero
+            # Calculate days elapsed over the read (DNF: start → abandon date, with
+            # only the fraction-read words credited). (#271)
+            end_date = _reading_end_date(reading)
+            if reading.date_started and end_date:
+                days_elapsed = (end_date - reading.date_started).days
+                words = _weighted_words(reading)
+                if days_elapsed > 0 and words > 0:  # Avoid division by zero
                     media_normalized = reading.media.lower()
                     if media_normalized in ['audio', 'audiobook']:
-                        reading_speeds["Audio"]["total_words"] += (
-                            reading.book.word_count
-                        )
+                        reading_speeds["Audio"]["total_words"] += words
                         reading_speeds["Audio"]["total_days"] += days_elapsed
                         reading_speeds["Audio"]["count"] += 1
                     elif media_normalized in ['kindle', 'ebook']:
-                        reading_speeds["Ebook"]["total_words"] += (
-                            reading.book.word_count
-                        )
+                        reading_speeds["Ebook"]["total_words"] += words
                         reading_speeds["Ebook"]["total_days"] += days_elapsed
                         reading_speeds["Ebook"]["count"] += 1
                     elif media_normalized in ['physical', 'hardcover', 'paperback']:
-                        reading_speeds["Physical"]["total_words"] += (
-                            reading.book.word_count
-                        )
+                        reading_speeds["Physical"]["total_words"] += words
                         reading_speeds["Physical"]["total_days"] += days_elapsed
                         reading_speeds["Physical"]["count"] += 1
 
@@ -125,11 +159,14 @@ async def get_reading_stats(
                         format_key = "Physical"
 
                     if format_key:
-                        author_books[author][format_key] += 1
-                        if reading.book.word_count:
-                            author_words[author][format_key] += reading.book.word_count
-                        if reading.book.page_count:
-                            author_pages[author][format_key] += reading.book.page_count
+                        if reading.date_finished_actual:  # count finished books only
+                            author_books[author][format_key] += 1
+                        ww = _weighted_words(reading)  # DNF: fraction-read words (#271)
+                        if ww:
+                            author_words[author][format_key] += ww
+                        pp = _weighted_pages(reading)
+                        if pp:
+                            author_pages[author][format_key] += pp
 
     # Sort by total word count and get top 7
     sorted_authors = sorted(
@@ -165,11 +202,14 @@ async def get_reading_stats(
                     format_key = "Physical"
 
                 if format_key:
-                    genre_books[genre][format_key] += 1
-                    if reading.book.word_count:
-                        genre_words[genre][format_key] += reading.book.word_count
-                    if reading.book.page_count:
-                        genre_pages[genre][format_key] += reading.book.page_count
+                    if reading.date_finished_actual:  # count finished books only
+                        genre_books[genre][format_key] += 1
+                    ww = _weighted_words(reading)  # DNF: fraction-read words (#271)
+                    if ww:
+                        genre_words[genre][format_key] += ww
+                    pp = _weighted_pages(reading)
+                    if pp:
+                        genre_pages[genre][format_key] += pp
 
     # Sort genres by total book count
     sorted_genres = sorted(
@@ -204,11 +244,14 @@ async def get_reading_stats(
                     format_key = "Physical"
 
                 if format_key:
-                    decade_books[decade_label][format_key] += 1
-                    if reading.book.word_count:
-                        decade_words[decade_label][format_key] += reading.book.word_count
-                    if reading.book.page_count:
-                        decade_pages[decade_label][format_key] += reading.book.page_count
+                    if reading.date_finished_actual:  # count finished books only
+                        decade_books[decade_label][format_key] += 1
+                    ww = _weighted_words(reading)  # DNF: fraction-read words (#271)
+                    if ww:
+                        decade_words[decade_label][format_key] += ww
+                    pp = _weighted_pages(reading)
+                    if pp:
+                        decade_pages[decade_label][format_key] += pp
 
     # Sort by decade (extract numeric value for proper chronological sorting)
     sorted_decades = sorted(
@@ -228,7 +271,8 @@ async def get_reading_stats(
     }
 
     for reading in readings:
-        if reading.book and reading.book.word_count:
+        # Distribution of finished books by size — a DNF is not a completed book (#271).
+        if reading.book and reading.book.word_count and reading.date_finished_actual:
             wc = reading.book.word_count
 
             # Determine range
@@ -397,7 +441,8 @@ async def get_reading_stats(
     # Gender of Authors Read
     gender_counts = {"Male": 0, "Female": 0}
     for reading in readings:
-        if reading.book and reading.book.author_gender:
+        # Author-gender is a finished-book count — exclude DNF (#271).
+        if reading.book and reading.book.author_gender and reading.date_finished_actual:
             gender_normalized = reading.book.author_gender.strip().lower()
             if gender_normalized in ['male', 'm']:
                 gender_counts["Male"] += 1
@@ -456,15 +501,16 @@ async def get_reading_stats(
             else:
                 days_to_finish_ranges["31+ days"] += 1
 
-    # Get available years and months for filtering
+    # Get available years and months for filtering. Includes DNF readings, keyed by
+    # the effective end date (finish date, else DNF date) (#271).
     all_readings = db.query(Reading).filter(
-        Reading.date_finished_actual.isnot(None)
+        or_(Reading.date_finished_actual.isnot(None), Reading.date_dnf.isnot(None))
     ).all()
     available_years = sorted(
         set(
-            r.date_finished_actual.year
+            _reading_end_date(r).year
             for r in all_readings
-            if r.date_finished_actual
+            if _reading_end_date(r)
         ),
         reverse=True
     )
@@ -473,13 +519,13 @@ async def get_reading_stats(
     if year:
         year_readings = [
             r for r in all_readings
-            if r.date_finished_actual and r.date_finished_actual.year == year
+            if _reading_end_date(r) and _reading_end_date(r).year == year
         ]
         available_months = sorted(
             set(
-                r.date_finished_actual.month
+                _reading_end_date(r).month
                 for r in year_readings
-                if r.date_finished_actual
+                if _reading_end_date(r)
             )
         )
 
@@ -489,8 +535,9 @@ async def get_reading_stats(
     pages_by_year = {}
     if not year:  # Only calculate when viewing all years
         for reading in all_readings:
-            if reading.date_finished_actual:
-                yr = reading.date_finished_actual.year
+            end_date = _reading_end_date(reading)
+            if end_date:
+                yr = end_date.year
                 if yr not in books_by_year:
                     books_by_year[yr] = {"Audio": 0, "Ebook": 0, "Physical": 0}
                     words_by_year[yr] = {"Audio": 0, "Ebook": 0, "Physical": 0}
@@ -508,12 +555,14 @@ async def get_reading_stats(
                         format_key = "Physical"
 
                     if format_key:
-                        books_by_year[yr][format_key] += 1
-                        if reading.book:
-                            if reading.book.word_count:
-                                words_by_year[yr][format_key] += reading.book.word_count
-                            if reading.book.page_count:
-                                pages_by_year[yr][format_key] += reading.book.page_count
+                        if reading.date_finished_actual:  # count finished books only
+                            books_by_year[yr][format_key] += 1
+                        ww = _weighted_words(reading)  # DNF: fraction-read words (#271)
+                        if ww:
+                            words_by_year[yr][format_key] += ww
+                        pp = _weighted_pages(reading)
+                        if pp:
+                            pages_by_year[yr][format_key] += pp
 
         # Sort by year
         books_by_year = dict(sorted(books_by_year.items()))
@@ -527,13 +576,14 @@ async def get_reading_stats(
     if year and not month:  # Only calculate when viewing a specific year (all months)
         year_readings = [
             r for r in all_readings
-            if r.date_finished_actual and r.date_finished_actual.year == year
+            if _reading_end_date(r) and _reading_end_date(r).year == year
         ]
         month_names = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
         for reading in year_readings:
-            if reading.date_finished_actual:
-                mo = reading.date_finished_actual.month
+            end_date = _reading_end_date(reading)
+            if end_date:
+                mo = end_date.month
                 month_label = month_names[mo - 1]
                 if month_label not in books_by_month:
                     books_by_month[month_label] = {"Audio": 0, "Ebook": 0, "Physical": 0}
@@ -552,12 +602,14 @@ async def get_reading_stats(
                         format_key = "Physical"
 
                     if format_key:
-                        books_by_month[month_label][format_key] += 1
-                        if reading.book:
-                            if reading.book.word_count:
-                                words_by_month[month_label][format_key] += reading.book.word_count
-                            if reading.book.page_count:
-                                pages_by_month[month_label][format_key] += reading.book.page_count
+                        if reading.date_finished_actual:  # count finished books only
+                            books_by_month[month_label][format_key] += 1
+                        ww = _weighted_words(reading)  # DNF: fraction-read words (#271)
+                        if ww:
+                            words_by_month[month_label][format_key] += ww
+                        pp = _weighted_pages(reading)
+                        if pp:
+                            pages_by_month[month_label][format_key] += pp
 
         # Sort by month order
         sorted_books = {
@@ -687,7 +739,8 @@ async def get_reading_stats(
             "selected_year": year,
             "selected_month": month
         },
-        "total_books_read": len(readings)
+        # Finished books only — a DNF is not a read book (its words still count above). (#271)
+        "total_books_read": sum(1 for r in readings if r.date_finished_actual)
     }
 
 
@@ -869,5 +922,20 @@ async def get_home_momentum(db: Session = Depends(get_db)) -> Dict[str, Any]:
         words_this_year = int(row[0] or 0)
     except Exception:
         words_this_year = 0
+    # Add the fraction-read words of books DNF'd this year (#271) — same basis/media
+    # filter, weighted by current_percent. books_this_year stays finished-only.
+    try:
+        row2 = db.execute(text(
+            "SELECT COALESCE(SUM(b.word_count * (COALESCE(r.current_percent, 0) / 100.0)), 0) "
+            "FROM read r JOIN books b ON b.id = r.book_id "
+            "WHERE r.date_dnf IS NOT NULL AND r.date_finished_actual IS NULL "
+            "AND strftime('%Y', r.date_dnf) = :yr "
+            "AND b.word_count IS NOT NULL "
+            "AND lower(r.media) IN "
+            "('audio','audiobook','kindle','ebook','physical','hardcover','paperback')"
+        ), {"yr": str(year)}).fetchone()
+        words_this_year += int(row2[0] or 0)
+    except Exception:
+        pass
     return {"year": year, "books_this_year": books_this_year,
             "words_this_year": words_this_year}

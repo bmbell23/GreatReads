@@ -19,8 +19,12 @@ class ChainCalculator:
     
     def recalculate_all_chains(self):
         """Recalculate all reading chains - equivalent to update-readings --all."""
+        # Abandoned (DNF) readings are terminal, exactly like finished ones — they must
+        # never be treated as active/in-progress (else a DNF book would anchor its
+        # format's chain and resurface on Home). Exclude them from every chain. (#271)
         unfinished_readings = self.db.query(Reading).filter(
-            Reading.date_finished_actual.is_(None)
+            Reading.date_finished_actual.is_(None),
+            Reading.date_dnf.is_(None),
         ).all()
 
         reading_speeds = get_reading_speeds(self.db)

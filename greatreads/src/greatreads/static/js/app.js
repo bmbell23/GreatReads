@@ -176,6 +176,8 @@ function initAllEmojiRatings() {
 function getStatusBadge(reading) {
     if (reading.is_finished) {
         return `<span class="status-badge status-finished">Finished</span>`;
+    } else if (reading.is_dnf) {
+        return `<span class="status-badge status-dnf">DNF</span>`;
     } else if (reading.is_started) {
         return `<span class="status-badge status-in-progress">In Progress</span>`;
     } else {
@@ -186,6 +188,8 @@ function getStatusBadge(reading) {
 function getStatusClass(reading) {
     if (reading.is_finished) {
         return 'finished';
+    } else if (reading.is_dnf) {
+        return 'dnf';
     } else if (reading.is_started) {
         return 'in-progress';
     } else {
@@ -407,12 +411,20 @@ function showEditModal(reading) {
     const pauseBtn = document.getElementById('pauseReadingBtn');
     const unpauseBtn = document.getElementById('unpauseReadingBtn');
     const finishBtn = document.getElementById('finishReadingBtn');
+    const dnfBtn = document.getElementById('dnfReadingBtn');
 
     // Finish button was removed from the edit-reading modals (#110) — finishing
     // now happens only from the Home in-progress action / reader / physical session.
     // Guard finishBtn so the Start/Pause/Unpause toggling still works where it's gone.
     if (startBtn) {
-        if (!reading.date_started) {
+        if (reading.is_dnf) {
+            // Abandoned (DNF) — no start/pause/unpause; the DNF button becomes "Resume". (#271)
+            startBtn.style.display = 'none';
+            if (startManualBtn) startManualBtn.style.display = 'none';
+            if (pauseBtn) pauseBtn.style.display = 'none';
+            if (unpauseBtn) unpauseBtn.style.display = 'none';
+            if (finishBtn) finishBtn.style.display = 'none';
+        } else if (!reading.date_started) {
             // Not started yet - show Start buttons
             startBtn.style.display = 'inline-block';
             if (startManualBtn) startManualBtn.style.display = 'inline-block';
@@ -433,6 +445,23 @@ function showEditModal(reading) {
             if (pauseBtn) pauseBtn.style.display = 'inline-block';
             if (unpauseBtn) unpauseBtn.style.display = 'none';
             if (finishBtn) finishBtn.style.display = 'inline-block';
+        }
+    }
+
+    // DNF button (#271): "Resume" when already abandoned; otherwise offer "DNF this
+    // Book" for any started-but-unfinished reading (in progress or paused). Hidden for
+    // not-started and finished readings.
+    if (dnfBtn) {
+        if (reading.is_dnf) {
+            dnfBtn.classList.remove('d-none');
+            dnfBtn.dataset.mode = 'undnf';
+            dnfBtn.innerHTML = '<i class="fas fa-rotate-left me-1"></i>Resume (un-DNF)';
+        } else if (reading.date_started && !reading.is_finished) {
+            dnfBtn.classList.remove('d-none');
+            dnfBtn.dataset.mode = 'dnf';
+            dnfBtn.innerHTML = '<i class="fas fa-ban me-1"></i>DNF this Book';
+        } else {
+            dnfBtn.classList.add('d-none');
         }
     }
 
@@ -1509,6 +1538,57 @@ async function unpauseReadingFromModal() {
     const id = document.getElementById('editReadingId').value;
     if (!confirm('Unpause this reading? Progress will resume from where it was paused.')) return;
     try { await unpauseReading(id); showToast('Reading unpaused!', 'success'); _erCloseEditModal(); _erReload(); } catch (e) {}
+}
+// DNF (Did Not Finish) toggle (#271). In 'dnf' mode it abandons the book — sessions
+// and the reading entry stay, the portion read still credits word totals, but the book
+// is NOT finished and stays unread. In 'undnf' mode it resumes an abandoned book.
+async function dnfReadingFromModal() {
+    const id = document.getElementById('editReadingId').value;
+    const btn = document.getElementById('dnfReadingBtn');
+    const mode = (btn && btn.dataset.mode) || 'dnf';
+    if (mode === 'undnf') {
+        if (!confirm('Resume this book? It returns to In Progress and no longer counts as DNF.')) return;
+        try {
+            await apiCall(`/readings/${id}/undnf`, { method: 'POST' });
+            showToast('Resumed — back to In Progress', 'success');
+            _erCloseEditModal();
+            bootstrap.Modal.getInstance(document.getElementById('openBookModal'))?.hide();
+            _erReload();
+        } catch (e) { showToast('Failed to resume', 'danger'); }
+        return;
+    }
+    if (!confirm("Mark this book Did-Not-Finish?\n\nYour reading sessions and progress stay saved, and the portion you read still counts toward your word totals — but the book won't count as finished and stays unread.")) return;
+
+    // Q1: put this book back on the TBR (not-started) so you could restart it later?
+    const reAdd = confirm("Put this book back on your TBR as not-started?\n\nOK = add it back (you can restart it later)\nCancel = leave it off your TBR");
+
+    // Q2: if it's part of a series with other books still on the TBR, offer to clear
+    // those sequels too (you're abandoning the series). (#271)
+    let removeSeries = false;
+    try {
+        const info = await apiCall(`/readings/${id}/series-tbr`, { silent: true });
+        if (info && info.count > 0) {
+            const shown = info.titles.slice(0, 8).join('\n') + (info.titles.length > 8 ? '\n…' : '');
+            removeSeries = confirm(`This book is part of "${info.series}", and ${info.count} other book(s) in the series are on your TBR:\n\n${shown}\n\nRemove those from your TBR too?`);
+        }
+    } catch (e) { /* series info is best-effort; skip the sequel prompt on failure */ }
+
+    try {
+        const res = await apiCall(`/readings/${id}/dnf`, {
+            method: 'POST',
+            params: { re_add_tbr: reAdd, remove_series_from_tbr: removeSeries }
+        });
+        let msg = 'Marked DNF — sessions kept, book stays unread';
+        const acts = res && res.dnf_actions;
+        if (acts) {
+            if (acts.re_added_to_tbr) msg += '; added back to TBR';
+            if (acts.series_removed_count) msg += `; removed ${acts.series_removed_count} series book(s) from TBR`;
+        }
+        showToast(msg, 'success');
+        _erCloseEditModal();
+        bootstrap.Modal.getInstance(document.getElementById('openBookModal'))?.hide();
+        _erReload();
+    } catch (e) { showToast('Failed to mark DNF', 'danger'); }
 }
 async function deleteReadingFromModal() {
     const id = document.getElementById('editReadingId').value;

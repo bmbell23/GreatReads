@@ -5,10 +5,11 @@ from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import and_, or_
+from sqlalchemy import and_, or_, func
 
 from ..database import get_db
 from ..models.reading import Reading, ReadingCreate, ReadingUpdate, ReadingResponse
+from ..models.book import Book
 from ..services.chain_calculator import ChainCalculator
 from ._book_enrich import enrich_book_dict
 
@@ -53,12 +54,15 @@ async def get_readings(
     if status:
         if status == "finished":
             query = query.filter(Reading.date_finished_actual.isnot(None))
+        elif status == "dnf":
+            query = query.filter(Reading.date_dnf.isnot(None))
         elif status == "in_progress":
             query = query.filter(
                 and_(
                     Reading.date_started.isnot(None),
                     Reading.date_finished_actual.is_(None),
-                    Reading.date_paused.is_(None)  # Exclude paused books
+                    Reading.date_paused.is_(None),  # Exclude paused books
+                    Reading.date_dnf.is_(None)  # Exclude abandoned (DNF) books (#271)
                 )
             )
         elif status == "not_started":
@@ -84,6 +88,7 @@ async def get_tbr_readings(db: Session = Depends(get_db)):
         joinedload(Reading.book)
     ).filter(
         Reading.date_finished_actual.is_(None),
+        Reading.date_dnf.is_(None),              # abandoned (DNF) books are not TBR (#271)
         or_(
             Reading.date_started.is_(None),      # not started
             Reading.date_paused.isnot(None),     # or paused
@@ -106,14 +111,21 @@ async def get_tbr_readings(db: Session = Depends(get_db)):
 
 @router.get("/journal")
 async def get_journal_readings(db: Session = Depends(get_db)):
-    """Get finished readings sorted by date finished (most recent first)."""
-    # Get all finished readings with book data
+    """Get finished + DNF readings sorted by end date (most recent first).
+
+    DNF readings are shown here too (marked DNF in the UI) — abandoning a book is a
+    real reading event worth keeping in the journal (#271). Ordered by the effective
+    end date: the finish date, or the DNF date when there's no finish.
+    """
     readings = db.query(Reading).options(
         joinedload(Reading.book)
     ).filter(
-        Reading.date_finished_actual.isnot(None)
+        or_(
+            Reading.date_finished_actual.isnot(None),
+            Reading.date_dnf.isnot(None),
+        )
     ).order_by(
-        Reading.date_finished_actual.desc()
+        func.coalesce(Reading.date_finished_actual, Reading.date_dnf).desc()
     ).all()
 
     # Convert to dict, enriching each book with source links + owned media so the
@@ -150,6 +162,9 @@ async def create_reading(reading: ReadingCreate, db: Session = Depends(get_db)):
                 Reading.date_finished_actual.is_(None)
             )
         ).all()
+
+        # Abandoned (DNF) readings are terminal — never chain a new read onto one (#271).
+        same_media_readings = [r for r in same_media_readings if r.date_dnf is None]
 
         if same_media_readings:
             # Sort by date_est_start to find the last one in the chain
@@ -548,6 +563,8 @@ async def finish_reading(reading_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=400, detail="Reading is already finished")
 
     db_reading.date_finished_actual = date.today()
+    # Finishing a previously-abandoned reading supersedes the DNF (#271).
+    db_reading.date_dnf = None
 
     # If not started, set start date to today as well
     if not db_reading.date_started:
@@ -561,6 +578,188 @@ async def finish_reading(reading_id: int, db: Session = Depends(get_db)):
     calculator.finish_reading_and_start_next(reading_id)
 
     # Reload with book data
+    db_reading = db.query(Reading).options(
+        joinedload(Reading.book)
+    ).filter(Reading.id == reading_id).first()
+
+    return db_reading.to_dict()
+
+
+def _series_tbr_readings(db: Session, book_id: int) -> List[Reading]:
+    """Not-started TBR readings for the OTHER books in this book's series (#271).
+
+    'On the TBR' here = a planned, not-started reading (no start date, not finished,
+    not DNF). Started/paused/finished reads of sibling books are left alone.
+    """
+    book = db.query(Book).filter(Book.id == book_id).first()
+    if not book or not book.series:
+        return []
+    sibling_ids = [
+        row[0] for row in db.query(Book.id).filter(
+            Book.series == book.series, Book.id != book_id
+        ).all()
+    ]
+    if not sibling_ids:
+        return []
+    return db.query(Reading).options(joinedload(Reading.book)).filter(
+        Reading.book_id.in_(sibling_ids),
+        Reading.date_started.is_(None),
+        Reading.date_finished_actual.is_(None),
+        Reading.date_dnf.is_(None),
+    ).all()
+
+
+def _delete_reading_keeping_chain(db: Session, reading: Reading):
+    """Delete a reading, relinking any followers to its predecessor (chain integrity)."""
+    for follower in db.query(Reading).filter(Reading.id_previous == reading.id).all():
+        follower.id_previous = reading.id_previous
+    db.delete(reading)
+
+
+def _create_tbr_entry(db: Session, book_id: int, media: Optional[str]) -> int:
+    """Create a fresh not-started (TBR) reading for a book, linked to the end of its
+    format's chain — used to put a DNF'd book back on the TBR (#271)."""
+    media = normalize_media_type(media)
+    id_previous = None
+    if media:
+        # Link after the last non-terminal reading of this format (skip finished + DNF).
+        same_media = [
+            r for r in db.query(Reading).filter(
+                Reading.media == media,
+                Reading.date_finished_actual.is_(None),
+                Reading.date_dnf.is_(None),
+            ).all()
+        ]
+        if same_media:
+            same_media.sort(key=lambda r: (
+                r.date_est_start or r.date_started or date(2099, 1, 1), r.id))
+            for r in same_media:
+                if not any(o.id_previous == r.id for o in same_media):
+                    id_previous = r.id
+                    break
+    new_reading = Reading(book_id=book_id, media=media, id_previous=id_previous)
+    db.add(new_reading)
+    db.commit()
+    db.refresh(new_reading)
+    return new_reading.id
+
+
+@router.get("/{reading_id}/series-tbr")
+async def get_series_tbr(reading_id: int, db: Session = Depends(get_db)):
+    """How many OTHER books in this reading's series are sitting on the TBR (#271).
+
+    Drives the DNF prompt that offers to clear the rest of a series you're abandoning.
+    """
+    reading = db.query(Reading).filter(Reading.id == reading_id).first()
+    if not reading:
+        raise HTTPException(status_code=404, detail="Reading not found")
+    book = db.query(Book).filter(Book.id == reading.book_id).first()
+    series = book.series if book else None
+    tbr = _series_tbr_readings(db, reading.book_id)
+    titles = sorted({r.book.title for r in tbr if r.book})
+    return {"series": series, "count": len(titles), "titles": titles}
+
+
+@router.post("/{reading_id}/dnf")
+async def dnf_reading(
+    reading_id: int,
+    re_add_tbr: bool = False,
+    remove_series_from_tbr: bool = False,
+    db: Session = Depends(get_db),
+):
+    """Mark a reading Did-Not-Finish (abandoned) (#271).
+
+    Keeps the reading entry + its sessions, does NOT count the book as finished (it
+    stays "unread"), but freezes the current position so the portion read still
+    credits words/pages fractionally in the stats. Unlike finishing, a DNF does NOT
+    auto-start the next book in the chain (you're not necessarily continuing — often
+    it's a series you're dropping). Two optional follow-ups:
+
+    - ``re_add_tbr``: drop a fresh not-started entry for this book back on the TBR so
+      you can restart it later.
+    - ``remove_series_from_tbr``: clear the OTHER books of this book's series from the
+      TBR (not-started entries only) — for when you're abandoning the whole series.
+    """
+    from datetime import date
+
+    db_reading = db.query(Reading).filter(Reading.id == reading_id).first()
+    if not db_reading:
+        raise HTTPException(status_code=404, detail="Reading not found")
+
+    if db_reading.date_finished_actual:
+        raise HTTPException(status_code=400, detail="Cannot DNF a finished reading")
+    if db_reading.date_dnf:
+        raise HTTPException(status_code=400, detail="Reading is already marked DNF")
+
+    db_reading.date_dnf = date.today()
+
+    # You can only abandon something you've begun — backfill a start if missing so
+    # the reading is a coherent journal entry.
+    if not db_reading.date_started:
+        db_reading.date_started = date.today()
+
+    # Freeze the position (like pause) so the fractional word/page credit is stable
+    # even if nothing was ever logged.
+    if db_reading.current_percent is None:
+        db_reading.current_percent = db_reading.current_progress_percent or 0.0
+
+    # DNF and paused are mutually exclusive states.
+    db_reading.date_paused = None
+
+    book_id = db_reading.book_id
+    media = db_reading.media
+    db.commit()
+
+    # Optionally clear the rest of the series off the TBR (not-started siblings only).
+    series_removed = 0
+    if remove_series_from_tbr:
+        for r in _series_tbr_readings(db, book_id):
+            _delete_reading_keeping_chain(db, r)
+            series_removed += 1
+        db.commit()
+
+    # Optionally put this book back on the TBR as a fresh not-started entry.
+    re_added = False
+    if re_add_tbr:
+        _create_tbr_entry(db, book_id, media)
+        re_added = True
+
+    # Refresh chain estimates — but do NOT auto-start the next book on a DNF (#271).
+    calculator = ChainCalculator(db)
+    calculator.recalculate_all_chains()
+
+    db_reading = db.query(Reading).options(
+        joinedload(Reading.book)
+    ).filter(Reading.id == reading_id).first()
+
+    result = db_reading.to_dict()
+    result["dnf_actions"] = {
+        "re_added_to_tbr": re_added,
+        "series_removed_count": series_removed,
+    }
+    return result
+
+
+@router.post("/{reading_id}/undnf")
+async def undnf_reading(reading_id: int, db: Session = Depends(get_db)):
+    """Resume an abandoned (DNF) reading — clears the DNF and returns it to
+    in-progress, keeping the logged position (#271)."""
+    db_reading = db.query(Reading).filter(Reading.id == reading_id).first()
+    if not db_reading:
+        raise HTTPException(status_code=404, detail="Reading not found")
+
+    if not db_reading.date_dnf:
+        raise HTTPException(status_code=400, detail="Reading is not marked DNF")
+
+    db_reading.date_dnf = None
+
+    db.commit()
+    db.refresh(db_reading)
+
+    # Back in the active set — recalculate chain estimates.
+    calculator = ChainCalculator(db)
+    calculator.recalculate_all_chains()
+
     db_reading = db.query(Reading).options(
         joinedload(Reading.book)
     ).filter(Reading.id == reading_id).first()

@@ -447,7 +447,8 @@ function applyFilters() {
         let result = 0;
         switch (currentSort) {
             case 'date_finished':
-                result = new Date(a.date_finished_actual) - new Date(b.date_finished_actual);
+                // Effective end date: finish date, else the DNF date (#271).
+                result = new Date(a.date_finished_actual || a.date_dnf) - new Date(b.date_finished_actual || b.date_dnf);
                 break;
             case 'title':
                 result = a.book.title.localeCompare(b.book.title);
@@ -475,7 +476,8 @@ function applyFilters() {
                 result = (a.book.page_count || 0) - (b.book.page_count || 0);
                 break;
             default:
-                result = new Date(a.date_finished_actual) - new Date(b.date_finished_actual);
+                // Effective end date: finish date, else the DNF date (#271).
+                result = new Date(a.date_finished_actual || a.date_dnf) - new Date(b.date_finished_actual || b.date_dnf);
                 break;
         }
         return sortAscending ? result : -result;
@@ -610,6 +612,16 @@ function createReadingCard(reading, index) {
         ? '<span class="tbr-icon-badge" style="background-color:#17a2b8;color:#fff;" title="Reread"><i class="fas fa-rotate-right"></i></span>'
         : '';
 
+    // DNF (Did Not Finish): mark the card, and show the abandon date + a distinct icon
+    // in place of the finish flag (#271).
+    const isDnf = !!reading.is_dnf;
+    const dnfBadge = isDnf
+        ? '<span class="status-badge status-dnf" title="Did Not Finish" style="margin-left:6px;">DNF</span>'
+        : '';
+    const endDate = isDnf ? reading.date_dnf : reading.date_finished_actual;
+    const endIcon = isDnf ? 'fa-ban' : 'fa-flag-checkered';
+    const endColor = isDnf ? ' color:#e8590c;' : '';
+
     return `
         <div class="card reading-card ${statusClass} ${borderClass} mb-2 fade-in" data-reading-id="${reading.id}" onclick="openReadingActions(${reading.id})">
             <div class="card-body tbr-card-body">
@@ -627,7 +639,7 @@ function createReadingCard(reading, index) {
                     <div class="tbr-info journal-info flex-grow-1">
                         <div class="d-flex justify-content-between align-items-start gap-2">
                             <div class="tbr-info-text">
-                                <h5 class="card-title mb-1 text-truncate">${book.title}</h5>
+                                <h5 class="card-title mb-1 text-truncate">${book.title}${dnfBadge}</h5>
                                 <p class="text-muted mb-1 text-truncate">${book.author}</p>
                                 ${book.series ? `<div class="tbr-series text-muted mb-1">${book.universe ? book.universe + ': ' : ''}${book.series}${book.series_number ? ' #' + book.series_number : ''}</div>` : ''}
                                 <div class="tbr-meta text-muted mb-0">
@@ -657,8 +669,8 @@ function createReadingCard(reading, index) {
                                     <i class="fas fa-calendar-day" style="width: 16px;"></i>${reading.actual_days_elapsed != null ? reading.actual_days_elapsed : 'N/A'}
                                 </div>
                                 <div class="text-muted">
-                                    <i class="fas fa-flag-checkered" style="width: 16px;"></i>
-                                    ${GreatReads.formatDateSmart(reading.date_finished_actual) || 'N/A'}
+                                    <i class="fas ${endIcon}" style="width: 16px;${endColor}"></i>
+                                    ${GreatReads.formatDateSmart(endDate) || 'N/A'}
                                 </div>
                             </div>
                         </div>
