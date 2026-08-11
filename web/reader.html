@@ -1838,7 +1838,14 @@
             if (typeof cur !== 'number' || isNaN(cur)) return;
             _maxProg = Math.max(_maxProg, cur);
             const b = document.getElementById('sync-btn');
-            if (b) b.classList.toggle('behind', cur < _maxProg - 0.003);
+            // #273: flag "behind" only when genuinely more than ~1.5 pages back. The
+            // tolerance scales with page size (a page can be <0.1% on a long book, but
+            // ~0.5%+ on a short one), so sub-page jitter and pagination reflow never
+            // flip the icon orange right after resuming at your furthest point. The old
+            // fixed 0.3% band, combined with a ±1-page convention skew (now removed at
+            // the call site), was too eager on short books and too coarse on long ones.
+            const tol = Math.max(0.005, 1.5 / (totalPages || 1));
+            if (b) b.classList.toggle('behind', cur < _maxProg - tol);
         }
         async function syncCreditMark() {
             if (!bookId) { readerToast('No book to sync'); return; }
@@ -3496,7 +3503,12 @@
             // fraction still drives credit/sync (#248) and the pushed progress (unchanged).
             const _span    = Math.max(0.0001, _contentEnd - _contentStart);
             const bookPct  = (Math.max(0, (rawFrac - _contentStart) / _span) * 100).toFixed(1);
-            updateSyncBtn(rawFrac);   // #248: below-mark flag (raw fraction)
+            // #248/#273: below-mark flag. Compare in the SAME convention the credit
+            // mark is stored in — saveReadingState persists progress as
+            // currentEpubPage/totalPages (start-of-page), and maxProgress is the max of
+            // that. Passing the (page+1)/total value here instead put the comparison a
+            // full page ahead of the stored mark, flipping the icon orange spuriously.
+            updateSyncBtn(totalPages > 0 ? currentEpubPage / totalPages : 0);
 
             // ---- Book progress (right) ----
             const bookEl = document.getElementById('progress-book');
@@ -3615,7 +3627,12 @@
         const FONT_KEY  = 'ereader.fontSize';
 
         function saveReadingState() {
-            if (!bookId || !totalPages) return;
+            // #273: bail while pagination is unsettled (totalPages 0 or 1). During the
+            // brief EPUB repagination race totalPages momentarily collapses to 1; a save
+            // in that window can push the monotonic credit mark (maxProgress) ahead of
+            // real reading, leaving the sync icon permanently "behind" (orange) until a
+            // manual reset. A genuine 1-page book is not a realistic EPUB case.
+            if (!bookId || totalPages <= 1) return;
             // Don't persist ANY position until the user actually turns a page.
             // Covers two cases: (1) the open-time clobber — a fresh open sits at
             // the start before/without a successful restore, and saving that would

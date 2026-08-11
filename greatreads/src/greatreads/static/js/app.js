@@ -1238,10 +1238,14 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
         if (es || ee) rows.push(['Planned', `${es ? formatDateSmart(es) : 'TBD'} – ${ee ? formatDateSmart(ee) : 'TBD'}`]);
     }
     // Reading Position (in-progress): current % with the high-water mark appended async.
+    // Show TENTHS (not a whole-percent round) so this matches the reader and the actual
+    // credit position — Math.round made 6.8% read as "7%", looking like credit started
+    // ahead of where you left off, when the credit mark is a full-precision fraction (#273).
     if (ipReading) {
-        const cur = Math.round(ipReading.current_progress_percent || 0);
+        const curExact = ipReading.current_progress_percent || 0;
+        const cur = curExact.toFixed(1);
         const pages = book.page_count || 0;
-        const pg = pages ? ` · p. ${Math.max(1, Math.round((cur / 100) * pages))} of ${pages.toLocaleString()}` : '';
+        const pg = pages ? ` · p. ${Math.max(1, Math.round((curExact / 100) * pages))} of ${pages.toLocaleString()}` : '';
         rows.push(['Reading Position', `<span id="gbaPos">${cur}%</span><span id="gbaPage" class="text-muted">${pg}</span>`]);
     }
     // Reading Sessions summary (N @ avg) — filled async from the sessions list (#127).
@@ -1494,12 +1498,16 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
             .then(p => {
                 const el = document.getElementById('gbaPos');
                 if (!el || !p || typeof p.progress !== 'number') return;
-                const pct = Math.round(p.progress * 100);
-                const hwm = (typeof p.maxProgress === 'number') ? Math.round(p.maxProgress * 100) : null;
-                el.textContent = (hwm != null && hwm > pct) ? `${pct}% (${hwm}% max)` : `${pct}%`;
+                // Tenths, not whole-percent (#273): the high-water "max" is the position
+                // where word-credit resumes; rounding it to an integer (6.8→7) made it
+                // look ahead of where you left off. Compare/show at one decimal so it
+                // matches the reader and the true (full-precision) credit fraction.
+                const pct = +(p.progress * 100).toFixed(1);
+                const hwm = (typeof p.maxProgress === 'number') ? +(p.maxProgress * 100).toFixed(1) : null;
+                el.textContent = (hwm != null && hwm > pct) ? `${pct.toFixed(1)}% (${hwm.toFixed(1)}% max)` : `${pct.toFixed(1)}%`;
                 const pel = document.getElementById('gbaPage');
                 const pages = book.page_count || 0;
-                if (pel && pages) pel.textContent = ` · p. ${Math.max(1, Math.round((pct / 100) * pages))} of ${pages.toLocaleString()}`;
+                if (pel && pages) pel.textContent = ` · p. ${Math.max(1, Math.round(p.progress * pages))} of ${pages.toLocaleString()}`;
             })
             .catch(() => {});
     }
