@@ -784,22 +784,69 @@ def _book_in_progress_on(conn, bk, date):
     except Exception:
         return False
 
+_QUALIFYING_SESSION_SQL = ('(COALESCE(ended_at,0) - COALESCE(started_at,0)) >= ? '
+                           'AND minutes > 0 AND (words = 0 OR (words * 1.0 / minutes) <= ?)')
+
+def _has_qualifying_ebook_session(conn, date, bk):
+    """True if `date` holds at least one session for `bk` that the rollup would count."""
+    try:
+        return conn.execute(
+            'SELECT 1 FROM reading_sessions WHERE activity_date=? AND book_key=? AND format=? '
+            'AND ' + _QUALIFYING_SESSION_SQL + ' LIMIT 1',
+            (date, bk, 'Ebook', _SESSION_MIN_MS, _EBOOK_MAX_WPM)).fetchone() is not None
+    except Exception:
+        return False
+
+def _heal_future_start_date(conn, bk, date):
+    """Pull a future `date_started` back to `date` (#274).
+
+    A qualifying session IS proof the book was being read that day, so a reading that
+    claims to start LATER is wrong — most often because a client stamped "today" from
+    `toISOString()` (UTC), which reads as tomorrow all evening in a negative-offset
+    timezone. Without this, `_book_in_progress_on` fails and the day's ebook credit is
+    deleted instead of recorded. Only ever moves the date backward, only for unfinished
+    readings, and only on the strength of a session the rollup would count.
+    Returns True if a row was healed."""
+    try:
+        if not _has_qualifying_ebook_session(conn, date, bk):
+            return False
+        source, ext_id = ('audiobookshelf', bk[4:]) if bk.startswith('abs:') else ('calibre', bk)
+        rows = conn.execute(
+            'SELECT r.id, r.date_started FROM read r JOIN external_imports ei ON ei.book_id = r.book_id '
+            'WHERE ei.source=? AND ei.external_id=? AND r.date_started IS NOT NULL '
+            'AND date(r.date_started) > date(?) '
+            'AND (r.date_finished_actual IS NULL OR date(r.date_finished_actual) >= date(?))',
+            (source, ext_id, date, date)).fetchall()
+        if not rows:
+            return False
+        with conn:
+            for r in rows:
+                conn.execute('UPDATE read SET date_started=? WHERE id=?', (date, r['id']))
+                print(f'reading_activity: healed future date_started {r["date_started"]} -> {date} '
+                      f'for reading {r["id"]} ({bk}) — session on {date} proves it was started (#274)')
+        return True
+    except Exception as e:
+        print(f'reading_activity start-date heal failed for {bk}/{date}: {e}')
+        return False
+
 def _rederive_ebook_activity_row(conn, date, bk):
     """Recompute reading_activity[(date, bk, 'Ebook')] from that day's qualifying
     sessions, replacing whatever was there; delete the row when nothing qualifies
     (peek/race-only sessions, or the book isn't in progress). (#59)"""
     try:
         if not _book_in_progress_on(conn, bk, date):
-            with conn:
-                conn.execute('DELETE FROM reading_activity WHERE activity_date=? AND book_key=? AND format=?',
-                             (date, bk, 'Ebook'))
-            return
+            # A start date in the future is the reading being wrong about itself, not the
+            # day being unreal — heal it and re-check rather than dropping the credit (#274).
+            if not (_heal_future_start_date(conn, bk, date) and _book_in_progress_on(conn, bk, date)):
+                with conn:
+                    conn.execute('DELETE FROM reading_activity WHERE activity_date=? AND book_key=? AND format=?',
+                                 (date, bk, 'Ebook'))
+                return
         agg = conn.execute(
             'SELECT COALESCE(SUM(minutes),0) m, COALESCE(SUM(words),0) w, '
             'COALESCE(SUM(wpm_mpw_sum),0) ws, COALESCE(SUM(wpm_n),0) wn '
             'FROM reading_sessions WHERE activity_date=? AND book_key=? AND format=? '
-            'AND (COALESCE(ended_at,0) - COALESCE(started_at,0)) >= ? '
-            'AND minutes > 0 AND (words = 0 OR (words * 1.0 / minutes) <= ?)',
+            'AND ' + _QUALIFYING_SESSION_SQL,
             (date, bk, 'Ebook', _SESSION_MIN_MS, _EBOOK_MAX_WPM)).fetchone()
         m = float(agg['m'] or 0.0); w = int(agg['w'] or 0)
         ws = float(agg['ws'] or 0.0); wn = int(agg['wn'] or 0)

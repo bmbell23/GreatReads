@@ -978,7 +978,7 @@ async function libMarkFinished(id) {
     if (!confirm(`Mark "${book.title}" as finished today?`)) return;
     hideOpenBookModal();
     try {
-        const today = new Date().toISOString().split('T')[0];
+        const today = GreatReads.todayLocal();
         const owned = book.media_owned || [];
         const media = owned.includes('Ebook') ? 'Ebook'
                     : owned.includes('Audio') ? 'Audio'

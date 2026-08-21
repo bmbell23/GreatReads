@@ -1406,7 +1406,7 @@ function openReadingActions(readingId) {
 async function tbrStartFromPopup(readingId) {
     if (!confirm('Start this reading with today\'s date?')) return;
     try {
-        const today = new Date().toISOString().split('T')[0];
+        const today = GreatReads.todayLocal();
         await GreatReads.apiCall(`/readings/${readingId}`, {
             method: 'PUT',
             data: { date_started: today, status: 'In Progress' }
@@ -1445,7 +1445,7 @@ async function startReadingFromModal() {
     }
 
     try {
-        const today = new Date().toISOString().split('T')[0];
+        const today = GreatReads.todayLocal();
 
         await GreatReads.apiCall(`/readings/${readingId}`, {
             method: 'PUT',
@@ -1471,7 +1471,7 @@ async function startReadingManualFromModal() {
     const readingId = document.getElementById('editReadingId').value;
 
     // Prompt for start date
-    const startDate = prompt('Enter start date (YYYY-MM-DD):', new Date().toISOString().split('T')[0]);
+    const startDate = prompt('Enter start date (YYYY-MM-DD):', GreatReads.todayLocal());
     if (!startDate) {
         return;
     }

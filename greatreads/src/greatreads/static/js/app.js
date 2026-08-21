@@ -42,6 +42,15 @@ function showToast(message, type = 'info') {
     });
 }
 
+// Today (or any Date) as YYYY-MM-DD in the *browser's* timezone. `toISOString()`
+// is UTC, so from 6pm MDT onward it returns TOMORROW — which stamped readings with
+// a future date_started and silently voided that evening's ebook credit (#274).
+// Every "today" the user sees or sends must go through this.
+function todayLocal(d = new Date()) {
+    const p = n => String(n).padStart(2, '0');
+    return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+}
+
 function formatDate(dateString) {
     if (!dateString) return 'Not set';
     // Parse as local date to avoid timezone conversion issues
@@ -1527,13 +1536,13 @@ async function startReadingFromModal() {
     const id = document.getElementById('editReadingId').value;
     if (!confirm("Start this reading with today's date?")) return;
     try {
-        await apiCall(`/readings/${id}`, { method: 'PUT', data: { date_started: new Date().toISOString().split('T')[0], status: 'In Progress' } });
+        await apiCall(`/readings/${id}`, { method: 'PUT', data: { date_started: todayLocal(), status: 'In Progress' } });
         showToast('Reading started!', 'success'); _erCloseEditModal(); _erReload();
     } catch (e) {}
 }
 async function startReadingManualFromModal() {
     const id = document.getElementById('editReadingId').value;
-    const d = prompt('Enter start date (YYYY-MM-DD):', new Date().toISOString().split('T')[0]);
+    const d = prompt('Enter start date (YYYY-MM-DD):', todayLocal());
     if (!d) return;
     try { await startReading(id, d); showToast('Reading started with custom date!', 'success'); _erCloseEditModal(); _erReload(); } catch (e) {}
 }
@@ -2282,6 +2291,7 @@ function formatDuration(min) {
 window.GreatReads = {
     showToast,
     formatDate,
+    todayLocal,
     formatRating,
     getStatusBadge,
     getStatusClass,

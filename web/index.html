@@ -1076,6 +1076,14 @@
             }
         }
 
+        // Local-timezone YYYY-MM-DD. `toISOString()` is UTC, so from 6pm MDT onward it
+        // rolls to tomorrow — a finish/start date stamped a day ahead voids that
+        // evening's reading credit on the server (#274).
+        function localDateStr(d = new Date()) {
+            const p = n => String(n).padStart(2, '0');
+            return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
+        }
+
         function escapeHTML(s) {
             return String(s).replace(/[&<>"']/g, c => ({
                 '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'
@@ -2165,7 +2173,7 @@
             document.getElementById('finish-book-author').textContent = book.author || 'Unknown';
 
             // Set default date to today
-            const today = new Date().toISOString().split('T')[0];
+            const today = localDateStr();
             document.getElementById('finish-date').value = today;
 
             // Fetch format from GreatReads if available
@@ -2308,7 +2316,7 @@
                                 try {
                                     const d = new Date(finishDate + 'T00:00:00');
                                     d.setDate(d.getDate() + 1);
-                                    startDate = d.toISOString().slice(0, 10);
+                                    startDate = localDateStr(d);
                                 } catch (_) {}
                                 await fetch(`${API_URL}/greatreads/start-next`, {
                                     method: 'POST',
