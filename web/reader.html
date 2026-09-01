@@ -1310,6 +1310,8 @@
     <script src="vendor/pdf.min.js"></script>
     <script src="vendor/jszip.min.js"></script>
     <script src="quotes.js?v=1"></script>
+    <!-- Device diagnostics (#275): queues offline, flushes when the host is back. -->
+    <script src="gr-diag.js"></script>
     <script src="active-book.js?v=1"></script>
 </head>
 <body>
@@ -2151,6 +2153,14 @@
                 await openBookDB();
                 let arrayBuffer = null;
                 const cached = await getCachedBookBlob(bookId);
+                if (window.GRDiag) {
+                    GRDiag.log('reader_open', {
+                        bookId: String(bookId), format: 'epub',
+                        cached: !!(cached && cached.blob),
+                        bytes: (cached && cached.blob) ? cached.blob.size : 0,
+                        online: navigator.onLine !== false,
+                    });
+                }
                 if (cached && cached.blob) {
                     console.log('📦 Using cached blob, size:', cached.blob.size);
                     arrayBuffer = await cached.blob.arrayBuffer();

@@ -3191,6 +3191,52 @@ def get_progress(book_id, request: Request):
                     item['position'] = tnf * float(dur)
     return item
 
+# ---- Device diagnostics (#275) ----------------------------------------------
+# The phone is the one place we cannot see: no console, no adb, and the failures
+# that matter (offline launch, slow book opens) happen exactly when the device is
+# cut off. Clients queue events locally and POST them here on reconnect; they land
+# in the normal activity log (#184), so /logs shows what actually happened on the
+# device. Best-effort by design: this must never break a page.
+_CLIENT_EVENT_MAX = 50          # per POST — a flush of a long offline stretch
+_CLIENT_DETAIL_MAX = 2000       # chars of JSON detail per event
+
+@router.post('/api/client-events')
+async def client_events(request: Request):
+    """Accept a batch of client-side diagnostic events and mirror them into event_log."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    events = (body or {}).get('events')
+    if not isinstance(events, list):
+        return JSONResponse({'error': 'events must be a list'}, status_code=400)
+    try:
+        from .services.event_log_service import log_event
+    except Exception as e:
+        print(f'client-events: log_event unavailable: {e}')
+        return {'accepted': 0}
+
+    accepted = 0
+    for ev in events[:_CLIENT_EVENT_MAX]:
+        if not isinstance(ev, dict) or not ev.get('event'):
+            continue
+        detail = ev.get('detail')
+        detail = detail if isinstance(detail, dict) else ({'value': detail} if detail is not None else {})
+        # The client stamps its own wall-clock: the event may be hours older than
+        # this flush, and "when it happened" is the whole point offline.
+        if ev.get('at'):
+            detail['client_time'] = str(ev['at'])[:40]
+        try:
+            if len(json.dumps(detail, default=str)) > _CLIENT_DETAIL_MAX:
+                detail = {'truncated': True}
+        except (TypeError, ValueError):
+            detail = {'unserializable': True}
+        level = ev.get('level') if ev.get('level') in ('info', 'success', 'warning', 'error') else 'info'
+        log_event('device', str(ev['event'])[:100], level=level,
+                  title=(str(ev['title'])[:300] if ev.get('title') else None), detail=detail)
+        accepted += 1
+    return {'accepted': accepted}
+
 @router.post('/api/progress/{book_id}/reset-credit-mark')
 def reset_progress_credit_mark(book_id):
     """Reset the word-credit high-water-mark (#79/#86) down to the current position,

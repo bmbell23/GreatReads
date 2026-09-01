@@ -232,7 +232,19 @@ public class MainActivity extends Activity {
             webView = createRetainedWebView(sWebCtx);
             sWebView = webView;
             setContentView(webView);
-            webView.loadUrl("http://100.69.184.113:8090/");
+            // #275: decide the entry load HERE rather than optimistically hitting the
+            // remote host and hoping the fallbacks catch it. Fully offline, the old
+            // path ended with an empty document — and since the WebView paints
+            // Color.BLACK behind it, that is the black screen. Offline we go straight
+            // to the bundled offline Home instead of touching the network at all.
+            boolean netUp = isOnline(this);
+            NativeDiag.note(getApplicationContext(), "cold_launch", NativeDiag.d("online", netUp));
+            if (netUp) {
+                webView.loadUrl("http://100.69.184.113:8090/");
+            } else {
+                if (sClient != null) sClient.forceOffline();
+                webView.loadUrl(OFFLINE_HOME_URL + "?why=cold");
+            }
         } else {
             sWebCtx.setBaseContext(this);
             webView = sWebView;
@@ -303,7 +315,8 @@ public class MainActivity extends Activity {
         webSettings.setMediaPlaybackRequiresUserGesture(false);
         wv.clearCache(true);
 
-        wv.setWebViewClient(new OfflineShellWebViewClient(app));
+        sClient = new OfflineShellWebViewClient(app);
+        wv.setWebViewClient(sClient);
         // Custom chrome client so <input type="file"> (e.g. book-cover Upload on
         // the Books page) actually opens the system photo picker. (#98)
         wv.setWebChromeClient(new WebChromeClient() {
@@ -391,6 +404,15 @@ public class MainActivity extends Activity {
     // assets/web by build-app.sh from web/.
     private static final String SHELL_HOST = "100.69.184.113";
     private static final String HOME_URL = "http://" + SHELL_HOST + ":8090/greatreads/";
+    // #275: the offline landing. A bundled page that rebuilds GreatReads Home from
+    // what an online visit cached (IndexedDB) — NOT the legacy ereader grid, which
+    // is no longer on the offline path at all. Same origin as the online app, so
+    // the cached books/covers/audiobooks are visible to it.
+    private static final String OFFLINE_HOME_PATH = "/offline-home.html";
+    private static final String OFFLINE_HOME_URL = "http://" + SHELL_HOST + ":8090" + OFFLINE_HOME_PATH;
+    // The client owning the retained WebView, so resume/watchdog paths can force
+    // the bundled shell for the next load instead of waiting out a TCP timeout.
+    private static OfflineShellWebViewClient sClient;
 
     // #211: the WebView's render process died (fold/OOM). The retained view is
     // now a frozen brick — it ignores taps, JS, even loadUrl — and the OS
@@ -443,8 +465,22 @@ public class MainActivity extends Activity {
                 // NOTE: the root URL ("http://host:8090") has an EMPTY path, not
                 // "/", so we must treat null/""/"/" all as the offline home.
                 String path = url.getPath();
-                if (path == null || path.isEmpty() || path.equals("/") || path.equals("/index.html")) {
-                    path = "/index.html";   // offline home = the cached ereader grid
+                if (path == null) path = "";
+                // Any main-frame navigation to the server-rendered app — the root
+                // bootstrap or /greatreads/… — becomes the offline Home (#275).
+                // Sub-resources are left alone so they still resolve from the
+                // bundle by their own path (or fail and let the page cope).
+                boolean rootish = path.isEmpty() || path.equals("/") || path.equals("/index.html");
+                boolean mainFrame = request.isForMainFrame();
+                if (mainFrame && (rootish || path.startsWith("/greatreads"))) {
+                    path = OFFLINE_HOME_PATH;
+                } else if (rootish) {
+                    path = OFFLINE_HOME_PATH;
+                }
+                if (mainFrame) {
+                    NativeDiag.note(app, "intercept", NativeDiag.d(
+                        "requested", url.getPath(), "serving", path,
+                        "online", isOnline(app), "forced", forcedOfflineReload));
                 }
                 String assetPath = "web" + path;   // e.g. web/reader.html, web/vendor/pdf.min.js
                 try {
@@ -456,6 +492,9 @@ public class MainActivity extends Activity {
                     // Not part of the shell (API, covers, /greatreads/, …) → let
                     // it hit the network and fail; the page handles offline.
                     android.util.Log.i("EreaderOffline", "not bundled (network): " + path);
+                    if (mainFrame) {
+                        NativeDiag.note(app, "intercept_passthru", NativeDiag.d("path", path));
+                    }
                     return null;
                 }
             } catch (Exception e) {
@@ -470,6 +509,13 @@ public class MainActivity extends Activity {
             // to the bundled shell by reloading the SAME http URL — shouldInter-
             // ceptRequest then serves it from assets, keeping the origin (so the
             // IndexedDB cache stays visible). Guard against a reload loop.
+            if (request != null && request.isForMainFrame()) {
+                NativeDiag.note(app, "load_error", NativeDiag.d(
+                    "url", String.valueOf(request.getUrl()),
+                    "code", (error != null ? error.getErrorCode() : 0),
+                    "desc", (error != null ? String.valueOf(error.getDescription()) : ""),
+                    "already_forced", forcedOfflineReload));
+            }
             if (request != null && request.isForMainFrame() && !forcedOfflineReload) {
                 forcedOfflineReload = true;
                 // Retry the URL that actually FAILED, not the root — reloading
@@ -479,7 +525,7 @@ public class MainActivity extends Activity {
                 // Only retry same-URL when the bundled shell can serve that
                 // path; otherwise (API pages, /greatreads/…) fall back to root
                 // as before so the user at least gets the offline home.
-                String target = "http://" + SHELL_HOST + ":8090/";
+                String target = OFFLINE_HOME_URL + "?why=error";
                 Uri failed = request.getUrl();
                 if (failed != null && SHELL_HOST.equals(failed.getHost())) {
                     String path = failed.getPath();
@@ -499,12 +545,68 @@ public class MainActivity extends Activity {
             super.onReceivedError(view, request, error);
         }
 
+        // Let resume/watchdog paths pin the next load to the bundled shell instead
+        // of making the user wait out a TCP timeout to the missing host (#275).
+        void forceOffline() { forcedOfflineReload = true; }
+
+        // The main-frame URL currently loading, for the stall watchdog below.
+        private String pendingMainUrl = null;
+
+        @Override
+        public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+            super.onPageStarted(view, url, favicon);
+            if (url == null || !url.contains(SHELL_HOST)) return;
+            if (isBundledPage(url)) return;   // local once intercepted; cannot stall
+            // A server-rendered page against an unreachable host does not fail fast —
+            // it hangs on the connect timeout, which is what produced the black
+            // screen (#270). If it hasn't painted in 6s, ask the network directly
+            // and land on the offline Home rather than waiting it out (#275).
+            final String started = url;
+            pendingMainUrl = url;
+            view.postDelayed(() -> {
+                if (!started.equals(pendingMainUrl)) return;      // finished or superseded
+                new Thread(() -> {
+                    final boolean up = hostReachable();
+                    view.post(() -> {
+                        if (!started.equals(pendingMainUrl) || up) return;
+                        android.util.Log.i("EreaderOffline",
+                            "main-frame load stalled + host unreachable → offline home");
+                        NativeDiag.note(app, "stalled", NativeDiag.d("url", started));
+                        forcedOfflineReload = true;
+                        pendingMainUrl = null;
+                        view.loadUrl(OFFLINE_HOME_URL + "?why=stalled");
+                    });
+                }).start();
+            }, 6000);
+        }
+
         @Override
         public void onPageFinished(WebView view, String url) {
             // A page loaded successfully — clear the forced-offline latch so the
             // next navigation tries the network (live) again.
             forcedOfflineReload = false;
+            pendingMainUrl = null;
             super.onPageFinished(view, url);
+
+            // Whatever the device recorded while it was cut off goes out now.
+            if (isOnline(app)) new Thread(() -> NativeDiag.flush(app)).start();
+
+            // Last-resort net for the black screen (#275): a "finished" load that
+            // produced an EMPTY document renders as the WebView's black background
+            // with no error and no page to report it. If that happens on a
+            // server-rendered URL, land on the offline Home instead of a void.
+            if (url == null || isBundledPage(url) || !url.contains(SHELL_HOST)) return;
+            view.evaluateJavascript(
+                "(function(){try{return document.body?document.body.childElementCount:0;}catch(e){return -1;}})()",
+                v -> {
+                    int kids;
+                    try { kids = Integer.parseInt(String.valueOf(v).trim()); } catch (Exception e) { kids = -1; }
+                    if (kids > 0) return;
+                    NativeDiag.note(app, "blank_page", NativeDiag.d("url", url, "children", kids));
+                    android.util.Log.i("EreaderOffline", "blank document after load → offline home: " + url);
+                    forcedOfflineReload = true;
+                    view.loadUrl(OFFLINE_HOME_URL + "?why=blank");
+                });
         }
 
         @Override
@@ -514,6 +616,103 @@ public class MainActivity extends Activity {
             MainActivity.recoverFromRenderGone(view);
             return true;   // handled — do NOT let the OS kill the whole app
         }
+    }
+
+    // ---- Native launch diagnostics (#275) -----------------------------------
+    // gr-diag.js can only report from a page that rendered — useless for the exact
+    // failure we are chasing, where nothing renders and the WebView's black
+    // background is all you see. So the shell keeps its own ring buffer on disk and
+    // ships it to the server the next time a page loads online. This is the device
+    // visibility the #270 post-mortem said we had to get before anything else.
+    static class NativeDiag {
+        private static final String PREFS = "ereader_diag";
+        private static final String KEY = "queue";
+        private static final int MAX = 40;
+
+        static synchronized void note(android.content.Context app, String event, org.json.JSONObject detail) {
+            try {
+                android.content.SharedPreferences p =
+                    app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE);
+                org.json.JSONArray q = new org.json.JSONArray(p.getString(KEY, "[]"));
+                org.json.JSONObject o = new org.json.JSONObject();
+                o.put("event", event);
+                o.put("at", new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+                        java.util.Locale.US).format(new java.util.Date()));
+                org.json.JSONObject d = (detail != null) ? detail : new org.json.JSONObject();
+                d.put("src", "native");
+                o.put("detail", d);
+                q.put(o);
+                while (q.length() > MAX) q.remove(0);   // ring buffer: a long trip must not grow forever
+                p.edit().putString(KEY, q.toString()).apply();
+                android.util.Log.i("EreaderOffline", "diag " + event + " " + d);
+            } catch (Exception ignored) {}
+        }
+
+        static org.json.JSONObject d(Object... kv) {
+            org.json.JSONObject o = new org.json.JSONObject();
+            try {
+                for (int i = 0; i + 1 < kv.length; i += 2) o.put(String.valueOf(kv[i]), kv[i + 1]);
+            } catch (Exception ignored) {}
+            return o;
+        }
+
+        // Ship everything queued, then clear. Background thread only.
+        static void flush(android.content.Context app) {
+            String payload;
+            synchronized (NativeDiag.class) {
+                String q = app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                              .getString(KEY, "[]");
+                if (q == null || "[]".equals(q) || q.isEmpty()) return;
+                payload = "{\"events\":" + q + "}";
+            }
+            java.net.HttpURLConnection c = null;
+            try {
+                c = (java.net.HttpURLConnection) new java.net.URL(
+                        "http://" + SHELL_HOST + ":8092/api/client-events").openConnection();
+                c.setRequestMethod("POST");
+                c.setRequestProperty("Content-Type", "application/json");
+                c.setDoOutput(true);
+                c.setConnectTimeout(3000);
+                c.setReadTimeout(3000);
+                c.getOutputStream().write(payload.getBytes("UTF-8"));
+                int code = c.getResponseCode();
+                if (code >= 200 && code < 300) {
+                    synchronized (NativeDiag.class) {
+                        app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
+                           .edit().putString(KEY, "[]").apply();
+                    }
+                }
+            } catch (Exception ignored) {
+            } finally {
+                if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+            }
+        }
+    }
+
+    // A bundled page keeps working with no host — never redirect away from one.
+    private static boolean isBundledPage(String url) {
+        return url.contains("offline-home.html") || url.contains("reader.html") || url.contains("player.html");
+    }
+
+    // Is the actual host reachable? ConnectivityManager only knows the radio is up,
+    // which is exactly wrong for the camping case (WiFi present, Tailscale host
+    // gone) and for a laggy reconnect. Two quick tries so a single dropped packet
+    // doesn't bounce the user out of a working page. Never call on the main thread.
+    private static boolean hostReachable() {
+        for (int i = 0; i < 2; i++) {
+            java.net.HttpURLConnection c = null;
+            try {
+                c = (java.net.HttpURLConnection) new java.net.URL(HOME_URL).openConnection();
+                c.setRequestMethod("HEAD");
+                c.setConnectTimeout(2000);
+                c.setReadTimeout(2000);
+                if (c.getResponseCode() > 0) return true;
+            } catch (Exception ignored) {
+            } finally {
+                if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+            }
+        }
+        return false;
     }
 
     private static boolean isOnline(android.content.Context ctx) {
@@ -838,6 +1037,29 @@ public class MainActivity extends Activity {
         // paths that stop→resume the activity without a full recreate, so the
         // physical-session screen brightness never drops back to system default.
         applyWindowPowerState();
+        // #275: the retained WebView (#210) means resuming does NOT re-run the load,
+        // so coming back after losing signal leaves a server page that is stale, blank,
+        // or about to fail. Check the host and land on the offline Home if it's gone.
+        maybeLandOfflineOnResume();
+    }
+
+    // Probe off the main thread; only redirect a server-rendered page, never a
+    // bundled one the user is actively reading in. The offline Home returns to the
+    // real Home by itself once the host answers again.
+    private void maybeLandOfflineOnResume() {
+        final WebView wv = webView;
+        if (wv == null) return;
+        final String u = wv.getUrl();
+        if (u == null || !u.contains(SHELL_HOST) || isBundledPage(u)) return;
+        new Thread(() -> {
+            if (hostReachable()) return;
+            wv.post(() -> {
+                android.util.Log.i("EreaderOffline", "resume with host unreachable → offline home");
+                NativeDiag.note(getApplicationContext(), "resume_offline", NativeDiag.d("url", u));
+                if (sClient != null) sClient.forceOffline();
+                wv.loadUrl(OFFLINE_HOME_URL + "?why=resume");
+            });
+        }).start();
     }
 
     @Override

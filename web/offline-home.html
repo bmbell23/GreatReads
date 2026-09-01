@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+<title>GreatReads — Offline</title>
+<!--
+  Offline Home (#275).
+
+  Served from the APK bundle by MainActivity.shouldInterceptRequest whenever the
+  host is unreachable, at the SAME origin as the online app (http://<host>:8090)
+  so every blob already in IndexedDB — books, covers, audiobooks — is visible here.
+  Replaces the legacy ereader grid (web/index.html) as the offline landing.
+
+  Fully self-contained: no external CSS, fonts, or scripts. The only data it uses
+  is what an online visit left behind (EreaderDB: cacheMeta 'offline:home', covers,
+  books, audio).
+-->
+<style>
+    :root {
+        --gr-primary: #667eea;
+        --gr-secondary: #764ba2;
+        --gr-ink: #212529;
+        --gr-muted: #6c757d;
+        --gr-bg: #f8f9fa;
+        --gr-card: #ffffff;
+        --gr-line: rgba(0, 0, 0, 0.08);
+    }
+    * { box-sizing: border-box; }
+    html, body {
+        margin: 0; padding: 0;
+        font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+        background: var(--gr-bg); color: var(--gr-ink);
+        overflow-x: clip;
+    }
+    /* Same bookish header as the online app, so this reads as GreatReads. */
+    header {
+        background: linear-gradient(135deg, #1a2332 0%, #2d3748 50%, #1a2332 100%);
+        border-bottom: 2px solid rgba(102, 126, 234, 0.3);
+        padding: calc(0.75rem + env(safe-area-inset-top)) 1rem 0.75rem;
+        display: flex; align-items: center; justify-content: space-between; gap: 0.75rem;
+    }
+    .brand { color: #fff; font-size: 1.25rem; font-weight: 700; letter-spacing: 0.3px; }
+    .brand span { color: var(--gr-primary); }
+    .pill {
+        display: inline-flex; align-items: center; gap: 0.4rem;
+        background: rgba(255, 193, 7, 0.15); color: #ffc107;
+        border: 1px solid rgba(255, 193, 7, 0.5);
+        border-radius: 999px; padding: 0.3rem 0.7rem;
+        font-size: 0.75rem; font-weight: 600; white-space: nowrap;
+    }
+    .dot { width: 7px; height: 7px; border-radius: 50%; background: #ffc107; }
+    main { padding: 1rem 1rem 3rem; max-width: 900px; margin: 0 auto; }
+    h2 {
+        font-size: 0.8rem; text-transform: uppercase; letter-spacing: 1px;
+        color: var(--gr-muted); margin: 1.25rem 0 0.6rem;
+    }
+    .card {
+        background: var(--gr-card); border: 1px solid var(--gr-line);
+        border-radius: 0.6rem; padding: 0.75rem; margin-bottom: 0.6rem;
+        display: flex; gap: 0.75rem; box-shadow: 0 1px 3px rgba(0, 0, 0, 0.05);
+    }
+    .cover {
+        width: 62px; height: 93px; flex: 0 0 62px; border-radius: 0.3rem;
+        object-fit: cover; background: #e9ecef;
+        display: flex; align-items: center; justify-content: center;
+        color: #adb5bd; font-size: 1.4rem;
+    }
+    .meta { flex: 1; min-width: 0; }
+    .title { font-weight: 600; line-height: 1.25; }
+    .author { color: var(--gr-muted); font-size: 0.85rem; margin-top: 0.1rem; }
+    .series { color: var(--gr-muted); font-size: 0.75rem; font-style: italic; }
+    .track { height: 5px; background: #e9ecef; border-radius: 3px; margin: 0.5rem 0 0.35rem; overflow: hidden; }
+    .fill { height: 100%; background: linear-gradient(90deg, var(--gr-primary), var(--gr-secondary)); }
+    .pct { font-size: 0.75rem; color: var(--gr-muted); }
+    .actions { display: flex; gap: 0.4rem; margin-top: 0.55rem; flex-wrap: wrap; }
+    .btn {
+        border: 1px solid var(--gr-primary); color: var(--gr-primary); background: transparent;
+        border-radius: 0.4rem; padding: 0.35rem 0.8rem; font-size: 0.78rem; font-weight: 600;
+        text-decoration: none; display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer;
+    }
+    .btn-solid { background: var(--gr-primary); color: #fff; }
+    .btn[disabled], .btn.off {
+        border-color: #dee2e6; color: #adb5bd; cursor: default; pointer-events: none;
+    }
+    .note { color: var(--gr-muted); font-size: 0.8rem; line-height: 1.5; }
+    .empty {
+        background: var(--gr-card); border: 1px dashed var(--gr-line); border-radius: 0.6rem;
+        padding: 1.5rem; text-align: center; color: var(--gr-muted);
+    }
+    footer { margin-top: 1.5rem; padding-top: 0.9rem; border-top: 1px solid var(--gr-line); }
+    .retry {
+        background: var(--gr-primary); color: #fff; border: none; border-radius: 0.4rem;
+        padding: 0.5rem 1rem; font-size: 0.85rem; font-weight: 600; cursor: pointer;
+    }
+</style>
+</head>
+<body>
+<header>
+    <div class="brand">Great<span>Reads</span></div>
+    <div class="pill"><span class="dot"></span> <span id="conn">Offline</span></div>
+</header>
+
+<main>
+    <h2>Continue reading</h2>
+    <div id="cards"></div>
+
+    <footer>
+        <p class="note" id="status">Loading what's on this device…</p>
+        <button class="retry" onclick="goOnline()">Try the server again</button>
+    </footer>
+</main>
+
+<script src="gr-diag.js"></script>
+<script>
+'use strict';
+
+// The snapshot an online visit left behind (written by the GreatReads app's
+// offline_snapshot.js) plus the blob stores the reader/player fill.
+var SNAPSHOT_KEY = 'offline:home';
+var db = null;
+var objectUrls = [];
+// How the native shell decided to land here — cold intercept, a failed load, a
+// stalled load, or a resume with the host gone. Reported to /logs so the offline
+// paths are distinguishable after the fact instead of guessed at (#275).
+var WHY = (new URLSearchParams(location.search).get('why') || 'intercept');
+
+function openDB() {
+    return new Promise(function (resolve) {
+        try {
+            // No version: never upgrade from here. If the stores don't exist the
+            // reader has never run, and there is nothing cached to show anyway.
+            var req = indexedDB.open('EreaderDB');
+            req.onsuccess = function () { resolve(req.result || null); };
+            req.onerror = function () { resolve(null); };
+            req.onblocked = function () { resolve(null); };
+        } catch (_) { resolve(null); }
+    });
+}
+function idbGet(store, key) {
+    return new Promise(function (resolve) {
+        if (!db || !db.objectStoreNames.contains(store)) return resolve(null);
+        try {
+            var req = db.transaction([store], 'readonly').objectStore(store).get(key);
+            req.onsuccess = function () { resolve(req.result || null); };
+            req.onerror = function () { resolve(null); };
+        } catch (_) { resolve(null); }
+    });
+}
+function idbCount(store) {
+    return new Promise(function (resolve) {
+        if (!db || !db.objectStoreNames.contains(store)) return resolve(0);
+        try {
+            var req = db.transaction([store], 'readonly').objectStore(store).count();
+            req.onsuccess = function () { resolve(req.result || 0); };
+            req.onerror = function () { resolve(0); };
+        } catch (_) { resolve(0); }
+    });
+}
+
+function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+        return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+}
+
+// What can this book actually do right now, with no network?
+async function availability(card) {
+    var out = { ebook: false, audio: false };
+    if (card.calibreId) {
+        var rec = await idbGet('books', String(card.calibreId));
+        out.ebook = !!(rec && rec.blob);
+    }
+    if (card.absId) {
+        var manifest = await idbGet('cacheMeta', 'manifest:' + card.absId);
+        if (manifest && manifest.manifest) {
+            var tracks = (manifest.manifest.tracks || []);
+            if (tracks.length) {
+                // One cached track is enough to start listening; the player handles
+                // the rest (and reports what it's missing).
+                var first = await idbGet('audio', card.absId + ':' + tracks[0].ino);
+                out.audio = !!(first && first.blob);
+            }
+        }
+    }
+    return out;
+}
+
+async function coverFor(card) {
+    if (!card.coverUrl) return null;
+    var rec = await idbGet('covers', card.coverUrl);
+    if (!rec || !rec.blob) return null;
+    var url = URL.createObjectURL(rec.blob);
+    objectUrls.push(url);
+    return url;
+}
+
+function cardHTML(card, avail, coverSrc) {
+    var pct = (typeof card.percent === 'number') ? Math.max(0, Math.min(100, card.percent)) : null;
+    var titleEnc = encodeURIComponent(card.title || '');
+    var authorEnc = encodeURIComponent(card.author || '');
+    var readHref = 'reader.html?id=' + encodeURIComponent(card.calibreId) +
+                   '&format=epub&title=' + titleEnc;
+    var listenHref = 'player.html?absId=' + encodeURIComponent(card.absId) +
+                     '&title=' + titleEnc + '&author=' + authorEnc +
+                     (card.calibreId ? '&bookId=' + encodeURIComponent(card.calibreId) + '&format=epub&hasEbook=1' : '');
+
+    var buttons = '';
+    if (card.calibreId) {
+        buttons += avail.ebook
+            ? '<a class="btn btn-solid" href="' + readHref + '">Read</a>'
+            : '<span class="btn off" title="Not downloaded to this device">Read · not downloaded</span>';
+    }
+    if (card.absId) {
+        buttons += avail.audio
+            ? '<a class="btn" href="' + listenHref + '">Listen</a>'
+            : '<span class="btn off" title="Not downloaded to this device">Listen · not downloaded</span>';
+    }
+    if (!buttons) {
+        buttons = '<span class="btn off">Physical book</span>';
+    }
+
+    return '<div class="card">' +
+        (coverSrc
+            ? '<img class="cover" src="' + coverSrc + '" alt="">'
+            : '<div class="cover">\u{1F4D6}</div>') +
+        '<div class="meta">' +
+            '<div class="title">' + esc(card.title) + '</div>' +
+            '<div class="author">' + esc(card.author) + '</div>' +
+            (card.series
+                ? '<div class="series">' + esc(card.series) +
+                  (card.seriesNumber ? ' #' + esc(card.seriesNumber) : '') + '</div>'
+                : '') +
+            (pct !== null
+                ? '<div class="track"><div class="fill" style="width:' + pct.toFixed(1) + '%"></div></div>' +
+                  '<div class="pct">' + pct.toFixed(1) + '% · ' + esc(card.media || '') + '</div>'
+                : '') +
+            '<div class="actions">' + buttons + '</div>' +
+        '</div>' +
+    '</div>';
+}
+
+function ageText(ts) {
+    if (!ts) return 'unknown age';
+    var mins = Math.round((Date.now() - ts) / 60000);
+    if (mins < 60) return mins + ' min ago';
+    var hrs = Math.round(mins / 60);
+    if (hrs < 48) return hrs + ' hr ago';
+    return Math.round(hrs / 24) + ' days ago';
+}
+
+async function render() {
+    db = await openDB();
+    var snap = await idbGet('cacheMeta', SNAPSHOT_KEY);
+    var host = document.getElementById('cards');
+    var status = document.getElementById('status');
+
+    if (!snap || !Array.isArray(snap.books) || !snap.books.length) {
+        host.innerHTML = '<div class="empty">' +
+            "<div style=\"font-size:2rem\">\u{1F4F4}</div>" +
+            '<p style="margin:0.6rem 0 0"><strong>Nothing saved for offline yet.</strong></p>' +
+            '<p class="note" style="margin:0.4rem 0 0">Open GreatReads once while you have signal — ' +
+            'your in-progress books are saved automatically, and this page will show them here.</p>' +
+            '</div>';
+        status.textContent = 'No offline snapshot on this device.';
+        if (window.GRDiag) GRDiag.log('offline_home', { why: WHY, snapshot: false }, 'warning');
+        return;
+    }
+
+    var html = '';
+    var readable = 0, listenable = 0;
+    for (var i = 0; i < snap.books.length; i++) {
+        var card = snap.books[i];
+        var avail = await availability(card);
+        if (avail.ebook) readable++;
+        if (avail.audio) listenable++;
+        html += cardHTML(card, avail, await coverFor(card));
+    }
+    host.innerHTML = html;
+
+    var books = await idbCount('books');
+    var audio = await idbCount('audio');
+    status.innerHTML = 'Offline · snapshot from ' + esc(ageText(snap.ts)) + '. ' +
+        'On this device: <strong>' + books + '</strong> ebook' + (books === 1 ? '' : 's') +
+        ', <strong>' + audio + '</strong> audio track' + (audio === 1 ? '' : 's') + '. ' +
+        'Reading progress is saved locally and syncs when you’re back on the network.';
+
+    if (window.GRDiag) {
+        GRDiag.log('offline_home', {
+            why: WHY, snapshot: true, snapshot_age_min: Math.round((Date.now() - (snap.ts || 0)) / 60000),
+            books: snap.books.length, readable: readable, listenable: listenable,
+            cached_ebooks: books, cached_tracks: audio,
+        });
+    }
+}
+
+// ---- Reconnect ------------------------------------------------------------
+// The point of this page is that the host is unreachable; the moment it isn't,
+// hand the user back to the real Home without making them do anything.
+var HOME = '/greatreads/';
+function goOnline() { location.href = HOME; }
+
+function probe() {
+    // A HEAD to the real app with a short timeout — navigator.onLine only knows
+    // about the radio, not whether the Tailscale host is actually reachable.
+    var ctl = new AbortController();
+    var t = setTimeout(function () { ctl.abort(); }, 2500);
+    return fetch(HOME, { method: 'HEAD', signal: ctl.signal, cache: 'no-store' })
+        .then(function (r) { clearTimeout(t); return r.ok; })
+        .catch(function () { clearTimeout(t); return false; });
+}
+
+async function watchForHost() {
+    for (;;) {
+        await new Promise(function (r) { setTimeout(r, 15000); });
+        if (navigator.onLine === false) continue;
+        if (await probe()) {
+            if (window.GRDiag) { GRDiag.log('offline_home', { why: WHY, event: 'host_back' }); GRDiag.flush(); }
+            goOnline();
+            return;
+        }
+    }
+}
+
+window.addEventListener('pagehide', function () {
+    objectUrls.forEach(function (u) { try { URL.revokeObjectURL(u); } catch (_) {} });
+});
+
+render().catch(function (e) {
+    document.getElementById('status').textContent = 'Offline. (Could not read the local cache: ' + e + ')';
+});
+watchForHost();
+</script>
+</body>
+</html>

@@ -414,6 +414,8 @@
          #loading-state where you wait for data (TBR/Journal/Library/Books), else the
          full-screen overlay (Home/Stats, which hold it via window.__pageReady). -->
     <script src="{{ url_for('static', path='/js/quotes.js') }}?v={{ asset_ver }}"></script>
+    <!-- Leaves an offline-usable snapshot of Home behind on every online visit (#275). -->
+    <script src="{{ url_for('static', path='/js/offline_snapshot.js') }}?v={{ asset_ver }}"></script>
     <script>
         (function () {
             var overlay = document.getElementById('app-loading');
