@@ -4,4 +4,6 @@
      exposed — JsBridge.shareImage() writes generated PNGs there. -->
 <paths>
     <cache-path name="shared" path="share/" />
+    <!-- #277: the downloaded APK the package installer reads back through us. -->
+    <cache-path name="updates" path="updates/" />
 </paths>

@@ -14,6 +14,120 @@
 
 <div class="row">
     <div class="col-lg-8">
+        <!-- App Update Card (#277) — Android app only; hidden in a browser. -->
+        <div class="card mb-4" id="app-update-card" style="display:none;">
+            <div class="card-header">
+                <h5 class="mb-0"><i class="fas fa-download me-2"></i>App Update</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-3" id="app-update-summary">Checking for a new build\u2026</p>
+                <div class="progress mb-3 d-none" id="app-update-progress" style="height:8px;">
+                    <div class="progress-bar" id="app-update-bar" role="progressbar" style="width:0%"></div>
+                </div>
+                <button class="btn btn-primary" id="app-update-btn" disabled>Check</button>
+                <div class="small mt-2 text-muted" id="app-update-msg"></div>
+            </div>
+        </div>
+        <script>
+        (function () {
+            // The card ALWAYS renders — a hidden card is a feature nobody can find or
+            // review. Only the one-tap Update *button* needs the Android bridge; a
+            // browser (or an app build older than #277, which has no bridge) gets the
+            // same version info plus a direct download link.
+            const A = window.Android;
+            const canSelfUpdate = !!(A && typeof A.appVersion === 'function'
+                                       && typeof A.updateApp === 'function');
+
+            const card    = document.getElementById('app-update-card');
+            const summary = document.getElementById('app-update-summary');
+            const btn     = document.getElementById('app-update-btn');
+            const msg     = document.getElementById('app-update-msg');
+            const wrap    = document.getElementById('app-update-progress');
+            const bar     = document.getElementById('app-update-bar');
+            card.style.display = '';
+
+            const installed = canSelfUpdate ? (A.appVersion() || '').trim() : '';
+            const APK_URL = 'http://100.69.184.113:8090/ereader.apk';
+            let latest = null;
+
+            function fmtSize(b) { return (b / 1048576).toFixed(1) + ' MB'; }
+            function fmtBuilt(iso) {
+                try { return new Date(iso).toLocaleString(); } catch (_) { return iso || ''; }
+            }
+
+            // The native side calls this as it downloads/verifies/installs.
+            window.grUpdateProgress = function (state, pct, text) {
+                msg.textContent = text || '';
+                if (state === 'downloading') {
+                    wrap.classList.remove('d-none');
+                    bar.style.width = Math.max(0, Math.min(100, pct)) + '%';
+                    btn.disabled = true;
+                    btn.textContent = 'Downloading\u2026';
+                } else if (state === 'installing') {
+                    bar.style.width = '100%';
+                    btn.textContent = 'Opening installer\u2026';
+                } else if (state === 'permission') {
+                    wrap.classList.add('d-none');
+                    btn.disabled = false;
+                    btn.textContent = 'Update';
+                } else if (state === 'error') {
+                    wrap.classList.add('d-none');
+                    btn.disabled = false;
+                    btn.textContent = 'Try again';
+                    msg.classList.add('text-danger');
+                }
+            };
+
+            async function check() {
+                try {
+                    const r = await fetch(GR_EREADER_API + '/app/latest', { cache: 'no-store' });
+                    if (!r.ok) throw new Error('HTTP ' + r.status);
+                    latest = await r.json();
+                } catch (e) {
+                    summary.textContent = (installed ? 'Installed ' + installed + ' \u00b7 ' : '') +
+                        'Could not reach the server to check for updates.';
+                    btn.textContent = 'Retry';
+                    btn.disabled = false;
+                    btn.onclick = check;
+                    return;
+                }
+                const newer = latest.version && latest.version !== installed;
+                summary.innerHTML = (canSelfUpdate
+                        ? 'Installed <strong>' + installed + '</strong> \u00b7 available <strong>' + latest.version + '</strong>'
+                        : 'Available <strong>' + latest.version + '</strong>') +
+                    '<br><span class="text-muted">Built ' + fmtBuilt(latest.built_at) +
+                    ' \u00b7 ' + fmtSize(latest.size) + '</span>';
+
+                if (!canSelfUpdate) {
+                    // Either a browser, or an app build from before the updater existed.
+                    // Both need the manual install once; after that it is one tap here.
+                    msg.innerHTML = A
+                        ? 'This build cannot update itself yet. Install this APK once the old way, ' +
+                          'and from then on updating is one tap on this screen.'
+                        : 'Open this page in the GreatReads Android app to update in place. ' +
+                          'From a browser you can only download the APK.';
+                    btn.outerHTML = '<a class="btn btn-primary" href="' + APK_URL + '" download>' +
+                                    'Download APK (' + fmtSize(latest.size) + ')</a>';
+                    return;
+                }
+                btn.disabled = false;
+                btn.textContent = newer ? ('Update to ' + latest.version) : 'Reinstall ' + latest.version;
+                btn.className = newer ? 'btn btn-primary' : 'btn btn-outline-secondary';
+                btn.onclick = function () {
+                    msg.classList.remove('text-danger');
+                    if (!A.canInstallPackages()) {
+                        msg.textContent = 'Android needs permission to install apps from GreatReads \u2014 ' +
+                                          'allow it on the next screen, then tap Update again.';
+                        A.requestInstallPermission();
+                        return;
+                    }
+                    A.updateApp(latest.url, latest.sha256 || '');
+                };
+            }
+            check();
+        })();
+        </script>
+
         <!-- App Icon Card (#242) -->
         <div class="card mb-4">
             <div class="card-header">

@@ -44,6 +44,13 @@ cp "$SRC" "$DEST"
 SIZE=$(stat -c%s "$DEST" 2>/dev/null || stat -f%z "$DEST")
 STAMP=$(date '+%Y-%m-%d %H:%M:%S')
 
+# Sidecar for the in-app updater (#277). The APK's versionName is baked from
+# version.txt AT BUILD TIME, so the repo's current version.txt is NOT what the
+# staged APK reports once version.txt moves on — without this, the app would
+# compare against the wrong number and nag forever about an update it already has.
+printf '{"version":"%s","built_at":"%s"}\n' \
+    "$VERSION" "$(date -Iseconds)" > "$DEST.json"
+
 echo
 echo "✅ Staged: $DEST"
 echo "   size:  $SIZE bytes"

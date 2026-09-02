@@ -3951,6 +3951,61 @@ def get_version():
     modified = os.environ.get('GREATREADS_BUILD_MODIFIED', '').strip()
     return {'version': version, 'modified': modified, 'display': version + modified}
 
+# ---- In-app APK updater (#277) ----------------------------------------------
+# Updating the phone used to mean typing a URL, downloading, confirming, finding
+# the file and tapping it. The app can do all of that itself — it just needs to
+# know what is on the server. web/ is mounted read-only at /app/src/web, so the
+# staged APK is right here.
+# web/ is mounted at /app/src/web — a sibling of the package dir, not a child.
+_APK_PATH = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                         'web', 'ereader.apk')
+_apk_hash_cache = {}     # (mtime, size) -> sha256, so we hash a 6 MB file once per build
+
+def _apk_sha256(path, st):
+    key = (st.st_mtime_ns, st.st_size)
+    hit = _apk_hash_cache.get(key)
+    if hit:
+        return hit
+    import hashlib
+    h = hashlib.sha256()
+    with open(path, 'rb') as f:
+        for chunk in iter(lambda: f.read(1024 * 1024), b''):
+            h.update(chunk)
+    digest = h.hexdigest()
+    _apk_hash_cache.clear()          # only ever one build in flight
+    _apk_hash_cache[key] = digest
+    return digest
+
+@router.get('/api/app/latest')
+def app_latest():
+    """What APK the server has staged: version, build time, size, and a sha256 the
+    device verifies before installing — a half-downloaded APK over a flaky link
+    must fail loudly, not install as a corrupt package."""
+    try:
+        st = os.stat(_APK_PATH)
+    except OSError:
+        return JSONResponse({'error': 'no APK staged'}, status_code=404)
+    from datetime import datetime
+    # The APK's versionName is baked at build time; version.txt may have moved on
+    # since. build-app.sh drops a sidecar recording what was actually staged, so the
+    # device compares against the real thing (#277).
+    version, built_at = _read_version(), datetime.fromtimestamp(st.st_mtime).isoformat(timespec='seconds')
+    try:
+        with open(_APK_PATH + '.json') as f:
+            side = json.load(f)
+        version = side.get('version') or version
+        built_at = side.get('built_at') or built_at
+    except (OSError, ValueError):
+        pass          # no sidecar (pre-#277 build) → mtime + version.txt is close enough
+    return {
+        'version': version,
+        'built_at': built_at,
+        'size': st.st_size,
+        'sha256': _apk_sha256(_APK_PATH, st),
+        # Served by the :8090 static server (same host the app already talks to).
+        'url': 'http://100.69.184.113:8090/ereader.apk',
+    }
+
 @router.get('/api/build-time')
 def get_build_time():
     """When the running container image was built (#101). Stamped into the image

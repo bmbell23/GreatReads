@@ -957,6 +957,139 @@ public class MainActivity extends Activity {
         // FileProvider content:// URI around it, and fire ACTION_SEND. The
         // system chooser includes "Save to Photos", every messaging app,
         // Drive, etc.
+        // ---- In-app updater (#277) ------------------------------------------
+        // Installing a new build used to be: type a URL, download, confirm, find
+        // the file, tap it, confirm. Everything except Android's own install
+        // confirmation can be done from here.
+
+        /** The running build's versionName, so the page can compare against the server. */
+        @JavascriptInterface
+        public String appVersion() {
+            try {
+                return app.getPackageManager().getPackageInfo(app.getPackageName(), 0).versionName;
+            } catch (Exception e) {
+                return "";
+            }
+        }
+
+        /** Has the user allowed us to install packages? (Always true below API 26.) */
+        @JavascriptInterface
+        public boolean canInstallPackages() {
+            try {
+                if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.O) return true;
+                return app.getPackageManager().canRequestPackageInstalls();
+            } catch (Exception e) {
+                return false;
+            }
+        }
+
+        /** Send the user to the one-time "install unknown apps" toggle for this app. */
+        @JavascriptInterface
+        public void requestInstallPermission() {
+            main.post(() -> {
+                try {
+                    Intent i = new Intent(android.provider.Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
+                        Uri.parse("package:" + app.getPackageName()));
+                    i.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+                    app.startActivity(i);
+                } catch (Exception e) {
+                    android.util.Log.e("Ereader", "requestInstallPermission failed", e);
+                }
+            });
+        }
+
+        /**
+         * Download the staged APK, verify it against the server's sha256, and hand it
+         * to the package installer. Progress is reported back to the page through
+         * window.grUpdateProgress(state, pct, message).
+         */
+        @JavascriptInterface
+        public void updateApp(final String url, final String expectedSha) {
+            new Thread(() -> {
+                java.net.HttpURLConnection c = null;
+                try {
+                    progress("downloading", 0, "Starting download\u2026");
+                    java.io.File dir = new java.io.File(app.getCacheDir(), "updates");
+                    if (!dir.exists()) dir.mkdirs();
+                    java.io.File out = new java.io.File(dir, "ereader.apk");
+
+                    c = (java.net.HttpURLConnection) new java.net.URL(url).openConnection();
+                    c.setConnectTimeout(10000);
+                    c.setReadTimeout(30000);
+                    int code = c.getResponseCode();
+                    if (code < 200 || code >= 300) throw new java.io.IOException("HTTP " + code);
+                    int total = c.getContentLength();
+
+                    java.security.MessageDigest md = java.security.MessageDigest.getInstance("SHA-256");
+                    java.io.InputStream in = c.getInputStream();
+                    java.io.FileOutputStream fos = new java.io.FileOutputStream(out);
+                    try {
+                        byte[] buf = new byte[64 * 1024];
+                        long got = 0;
+                        int lastPct = -1, n;
+                        while ((n = in.read(buf)) > 0) {
+                            fos.write(buf, 0, n);
+                            md.update(buf, 0, n);
+                            got += n;
+                            int pct = (total > 0) ? (int) (got * 100 / total) : 0;
+                            if (pct != lastPct) {           // don't spam the WebView
+                                lastPct = pct;
+                                progress("downloading", pct, (got / 1048576) + " of " + (total / 1048576) + " MB");
+                            }
+                        }
+                    } finally {
+                        try { fos.close(); } catch (Exception ignored) {}
+                        try { in.close(); } catch (Exception ignored) {}
+                    }
+
+                    // A truncated download over a flaky Tailscale link must fail here,
+                    // not become a corrupt install.
+                    StringBuilder sb = new StringBuilder();
+                    for (byte b : md.digest()) sb.append(String.format("%02x", b));
+                    String got = sb.toString();
+                    if (expectedSha != null && !expectedSha.isEmpty()
+                            && !expectedSha.equalsIgnoreCase(got)) {
+                        out.delete();
+                        progress("error", 0, "Download corrupted (checksum mismatch) \u2014 not installed");
+                        NativeDiag.note(app, "app_update", NativeDiag.d("result", "sha_mismatch"));
+                        return;
+                    }
+
+                    if (!canInstallPackages()) {
+                        progress("permission", 100, "Allow installing apps from GreatReads, then tap Update again");
+                        requestInstallPermission();
+                        return;
+                    }
+
+                    NativeDiag.note(app, "app_update", NativeDiag.d("result", "installer_opened", "bytes", out.length()));
+                    progress("installing", 100, "Opening installer\u2026");
+                    android.net.Uri uri = androidx.core.content.FileProvider.getUriForFile(
+                        app, app.getPackageName() + ".fileprovider", out);
+                    Intent i = new Intent(Intent.ACTION_VIEW);
+                    i.setDataAndType(uri, "application/vnd.android.package-archive");
+                    i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
+                    app.startActivity(i);
+                } catch (Exception e) {
+                    android.util.Log.e("Ereader", "updateApp failed", e);
+                    progress("error", 0, String.valueOf(e.getMessage()));
+                    NativeDiag.note(app, "app_update", NativeDiag.d("result", "error", "msg", String.valueOf(e.getMessage())));
+                } finally {
+                    if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+                }
+            }).start();
+        }
+
+        private void progress(final String state, final int pct, final String msg) {
+            main.post(() -> {
+                WebView wv = sWebView;
+                if (wv == null) return;
+                String js = "window.grUpdateProgress && window.grUpdateProgress("
+                    + org.json.JSONObject.quote(state) + "," + pct + ","
+                    + org.json.JSONObject.quote(msg == null ? "" : msg) + ")";
+                try { wv.evaluateJavascript(js, null); } catch (Exception ignored) {}
+            });
+        }
+
         @JavascriptInterface
         public void shareImage(final String base64Png, final String chooserTitle) {
             main.post(() -> {
