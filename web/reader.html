@@ -2140,8 +2140,24 @@
         }
         let _seededFromPrefetch = false;
 
+        // Where the seconds actually go when opening a book (#276). Marks are stamped
+        // through loadEPUB and reported once the first page paints — the only number
+        // that matches what the user experiences as "how long it took".
+        let _openMarks = null;
+        // Work that must not compete with getting the book on screen (#276).
+        let _firstPaintDone = false;
+        const _afterPaintQueue = [];
+        function _afterFirstPaint(fn) {
+            if (_firstPaintDone) fn();
+            else _afterPaintQueue.push(fn);
+        }
+        function _mark(name) {
+            if (_openMarks) _openMarks[name] = Math.round(performance.now() - _openMarks._t0);
+        }
+
         async function loadEPUB() {
             try {
+                _openMarks = { _t0: performance.now() };
                 _seededFromPrefetch = seedReadingStateFromPrefetch();
                 console.log('🚀 ========== LOADING EPUB ==========');
                 console.log('📚 Book ID:', bookId);
@@ -2153,6 +2169,7 @@
                 await openBookDB();
                 let arrayBuffer = null;
                 const cached = await getCachedBookBlob(bookId);
+                _mark('cache_lookup');
                 if (window.GRDiag) {
                     GRDiag.log('reader_open', {
                         bookId: String(bookId), format: 'epub',
@@ -2177,7 +2194,9 @@
                     putCachedBookBlob(bookId, 'epub', blob, { title }); // fire-and-forget; author backfilled post-parse
                 }
 
+                _mark('blob_ready');
                 const zip = await JSZip.loadAsync(arrayBuffer);
+                _mark('zip_open');
                 const fileList = Object.keys(zip.files);
                 console.log('📂 ZIP loaded,', fileList.length, 'files inside');
                 console.log('📂 First 10 files:', fileList.slice(0, 10));
@@ -2233,17 +2252,20 @@
                 try { tocTree = await parseEpubToc(zip, opfPath, opfDoc); }
                 catch (e) { console.warn('TOC nav parse skipped:', e.message); }
 
-                // Extract all images and convert to data URLs
+                // Extract all images. Two changes for open speed (#276): decompress in
+                // PARALLEL rather than awaiting each file in turn, and mint ONE object
+                // URL per blob instead of two (the basename alias now points at the same
+                // URL — it used to allocate a second, identical blob URL per image).
                 const imageMap = {};
-                for (let filename of Object.keys(zip.files)) {
-                    if (!zip.files[filename].dir && /\.(jpg|jpeg|png|gif|svg|webp)$/i.test(filename)) {
-                        const blob = await zip.files[filename].async('blob');
-                        imageMap[filename] = URL.createObjectURL(blob);
-                        // Also store with just the basename for relative references
-                        const basename = filename.split('/').pop();
-                        imageMap[basename] = URL.createObjectURL(blob);
-                    }
-                }
+                const imageNames = Object.keys(zip.files).filter(fn =>
+                    !zip.files[fn].dir && /\.(jpg|jpeg|png|gif|svg|webp)$/i.test(fn));
+                await Promise.all(imageNames.map(async (filename) => {
+                    const blob = await zip.files[filename].async('blob');
+                    const url = URL.createObjectURL(blob);
+                    imageMap[filename] = url;
+                    imageMap[filename.split('/').pop()] = url;   // relative refs
+                }));
+                _mark('images');
 
                 // Pull the EPUB's own stylesheet(s) and inject the inline-format
                 // rules (italic/bold/underline/super-sub) scoped to #epub-content.
@@ -2322,9 +2344,12 @@
                 const reader = document.getElementById('epub-reader');
                 reader.style.display = 'block';
                 reader.style.visibility = 'hidden';
+                _mark('spine_assembled');
+                if (_openMarks) _openMarks.spine_items = itemrefs.length;
 
                 // NEW: Column-based rendering
                 setTimeout(() => {
+                    _mark('render_start');
                     renderEpubContent(htmlContent, imageMap);
                     setupNavigation();
                 }, 100);
@@ -2739,23 +2764,48 @@
             // restoring the reading-speed buffer). When there's no prefetch
             // (e.g. reader opened directly), keep it on the blocking path so the
             // first paint still lands on the server position.
-            const gating = [
+            // #276: first paint must NOT wait on the network. These five calls used to
+            // sit in a Promise.all() that gated calculatePages — so opening a book that
+            // is already fully downloaded still waited for highlights, bookmarks, word
+            // count, summaries and the reading baseline to come back. Measured cost:
+            // 6.2s on the first open of a session (cold connections to :8092), ~0.5s
+            // once they are warm. Offline it is worse — every one of them has to time
+            // out first, which is minutes with an unreachable host.
+            //
+            // None of them affect geometry: highlights render through the CSS Custom
+            // Highlight API (no DOM mutation) and the rest are metadata that apply
+            // whenever they land. The ONLY thing that can move the first page is the
+            // reading position, and on the common path the library prefetch has already
+            // seeded it (#54/#28).
+            const background = [
                 loadHighlightsForBook(),
                 loadBookmarksForBook(),
                 loadBookWordCount(),
                 loadBookSummaries(),
                 loadReadingBaseline()
             ];
-            if (!_seededFromPrefetch) gating.push(syncReadingStateFromServer());
-            Promise.all(gating).finally(() => {
-                setTimeout(calculatePages, 100);
-            });
-            if (_seededFromPrefetch) syncReadingStateFromServer().catch(() => {});
+            background.forEach(p => { if (p && p.catch) p.catch(() => {}); });
+
+            // Paint from the LOCAL position immediately — always. Measured on device:
+            // waiting for the position round-trip cost ~1.5s of a 2.3s open, on a book
+            // that is entirely on the device; offline it is a timeout. The local state
+            // is what this device last saved, so it is right except when you read the
+            // same book elsewhere — and that case is handled by seeking once the server
+            // answers, which is a page turn rather than a stalled open (#276).
+            _mark('paint_unblocked');
+            setTimeout(calculatePages, 100);
+            syncReadingStateFromServer()
+                .then(() => { if (_adoptedRemotePosition) _afterFirstPaint(_applyServerPosition); })
+                .catch(() => {});
             // Cross-format cache symmetry (#264): the reader already caches this
             // EPUB on open; also pre-download the linked AUDIOBOOK so both formats
             // are local regardless of which one you entered through. Delayed +
             // fire-and-forget + storage-guarded so it never competes with paint.
-            setTimeout(() => { cacheLinkedAudiobook().catch(() => {}); }, 5000);
+            // The comment claimed that, but a 5s wall-clock timer fires while a long
+            // book is still paginating — so a 1-2 GB download was competing with the
+            // open it was supposed to stay out of. Now it waits for the actual first
+            // paint, then idles 5s more (#276).
+            _afterFirstPaint(() => setTimeout(() => { cacheLinkedAudiobook().catch(() => {}); }, 5000));
         }
 
         // ---------- Word-anchored reading position ----------
@@ -3436,6 +3486,20 @@
             if (firstPaint) {
                 const ld = document.querySelector('.loading');
                 if (ld) ld.style.display = 'none';
+                // First paint = "the book is open". Report the breakdown once (#276).
+                if (_openMarks && window.GRDiag) {
+                    _mark('first_paint');
+                    const m = _openMarks; _openMarks = null;
+                    delete m._t0;
+                    GRDiag.log('reader_timing', Object.assign(
+                        { bookId: String(bookId), pages: totalPages }, m));
+                }
+                if (!_firstPaintDone) {
+                    _firstPaintDone = true;
+                    while (_afterPaintQueue.length) {
+                        try { _afterPaintQueue.shift()(); } catch (_) {}
+                    }
+                }
             }
 
             console.log('📄 Page', currentEpubPage + 1, '/', totalPages,
@@ -4201,6 +4265,27 @@
         // calculatePages runs its first paint. Candidates are this ebook's own
         // record and the matching audiobook's; newest `updated` wins, beating
         // the local copy by ts. The reader then reads localStorage as usual.
+        // Set by syncReadingStateFromServer when the SERVER's position beat the local
+        // one — the only case where a late sync should move the page under the reader.
+        let _adoptedRemotePosition = false;
+
+        // Apply a server position that landed after the page was already painted.
+        // Pagination is unchanged, so this is a seek, not a re-layout (#276).
+        function _applyServerPosition() {
+            try {
+                if (!_adoptedRemotePosition || !totalPages) return;
+                const raw = localStorage.getItem(STATE_KEY);
+                if (!raw) return;
+                const st = JSON.parse(raw) || {};
+                if (typeof st.anchor !== 'number') return;
+                const p = findPageForAnchor(st.anchor);
+                if (p == null || p === currentEpubPage) return;
+                currentEpubPage = Math.min(totalPages - 1, Math.max(0, p));
+                renderEpubPage();
+                console.log('☁️  Applied newer server position after paint → page', currentEpubPage + 1);
+            } catch (_) {}
+        }
+
         async function syncReadingStateFromServer() {
             if (!bookId) return;
             try {
@@ -4266,6 +4351,7 @@
                     }));
                     console.log('☁️  Restored reading position from server:', remote,
                         isAudio ? `(anchor ${audioAnchor} via ${audioAnchorSrc})` : '');
+                    _adoptedRemotePosition = true;
                 }
                 // Restore reading-speed buffer from THIS ebook's own record
                 // (the audiobook has none) regardless of who won on position.

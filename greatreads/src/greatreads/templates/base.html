@@ -430,7 +430,13 @@
                 .then(function (r) { return r.ok ? r.json() : null; })
                 .then(function (j) {
                     if (!j || !j.version) return;
-                    if (String(j.version) === String(A.appVersion() || '').trim()) return;
+                    // Compare build stamps — version.txt only moves on a commit, so
+                    // semver would hide a rebuilt APK (#277).
+                    var mine = (typeof A.appBuildStamp === 'function') ? (A.appBuildStamp() || '').trim() : '';
+                    var same = mine
+                        ? (String(j.built_at || '') === mine)
+                        : (String(j.version) === String(A.appVersion() || '').trim());
+                    if (same) return;
                     var dot = document.getElementById('gr-update-dot');
                     if (dot) dot.style.display = '';
                 })

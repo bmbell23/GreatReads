@@ -70,3 +70,6 @@ simple-app/app/src/main/assets/web/
 
 # Build artifact: metadata for the staged APK, written by build-app.sh (#277)
 web/ereader.apk.json
+
+# Build artifact: the stamp baked into the APK, written by build-app.sh (#277)
+web/build-stamp.txt

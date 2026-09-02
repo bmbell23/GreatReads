@@ -29,7 +29,12 @@
             </div>
         </div>
         <script>
-        (function () {
+        // Deferred to `load`: this card lives in the content block, which is parsed
+        // BEFORE base.html's scripts at the bottom of the page. Reading GR_EREADER_API /
+        // APP_BASE_PATH at parse time threw a ReferenceError that the catch turned into
+        // "could not reach the server" + a Retry button — which then worked, because by
+        // the time you tapped it the scripts had loaded (#277).
+        window.addEventListener('load', function () {
             // The card ALWAYS renders — a hidden card is a feature nobody can find or
             // review. Only the one-tap Update *button* needs the Android bridge; a
             // browser (or an app build older than #277, which has no bridge) gets the
@@ -47,6 +52,12 @@
             card.style.display = '';
 
             const installed = canSelfUpdate ? (A.appVersion() || '').trim() : '';
+            // The build this APK was compiled from. version.txt only moves on a commit
+            // while the APK is rebuilt many times in between, so semver alone reports
+            // "up to date" for a build that is hours old (#277). Empty on a pre-stamp
+            // build, in which case we fall back to comparing versions.
+            const installedBuild = (canSelfUpdate && typeof A.appBuildStamp === 'function')
+                ? (A.appBuildStamp() || '').trim() : '';
             const APK_URL = 'http://100.69.184.113:8090/ereader.apk';
             let latest = null;
 
@@ -80,23 +91,34 @@
 
             async function check() {
                 try {
-                    const r = await fetch(GR_EREADER_API + '/app/latest', { cache: 'no-store' });
+                    // Same-origin through the :8090 proxy — no CORS, and no dependency on
+                    // a constant defined in a script that loads after this one.
+                    const r = await fetch((window.APP_BASE_PATH || '') + '/api/app/latest',
+                                          { cache: 'no-store' });
                     if (!r.ok) throw new Error('HTTP ' + r.status);
                     latest = await r.json();
                 } catch (e) {
                     summary.textContent = (installed ? 'Installed ' + installed + ' \u00b7 ' : '') +
                         'Could not reach the server to check for updates.';
+                    msg.textContent = String(e && e.message ? e.message : e);
+                    if (window.GRDiag) GRDiag.log('app_update_check', { error: String(e) }, 'warning');
                     btn.textContent = 'Retry';
                     btn.disabled = false;
                     btn.onclick = check;
                     return;
                 }
-                const newer = latest.version && latest.version !== installed;
+                // Prefer build stamps; fall back to semver when this build predates them.
+                const newer = installedBuild
+                    ? (latest.built_at && latest.built_at !== installedBuild)
+                    : (latest.version && latest.version !== installed);
                 summary.innerHTML = (canSelfUpdate
-                        ? 'Installed <strong>' + installed + '</strong> \u00b7 available <strong>' + latest.version + '</strong>'
+                        ? 'Installed <strong>' + installed + '</strong>' +
+                          (installedBuild ? ' <span class="text-muted">(' + fmtBuilt(installedBuild) + ')</span>' : '') +
+                          '<br>Available <strong>' + latest.version + '</strong>'
                         : 'Available <strong>' + latest.version + '</strong>') +
-                    '<br><span class="text-muted">Built ' + fmtBuilt(latest.built_at) +
-                    ' \u00b7 ' + fmtSize(latest.size) + '</span>';
+                    ' <span class="text-muted">(' + fmtBuilt(latest.built_at) + ')</span>' +
+                    '<br><span class="text-muted">' + fmtSize(latest.size) +
+                    (newer ? '' : ' \u00b7 up to date') + '</span>';
 
                 if (!canSelfUpdate) {
                     // Either a browser, or an app build from before the updater existed.
@@ -111,7 +133,7 @@
                     return;
                 }
                 btn.disabled = false;
-                btn.textContent = newer ? ('Update to ' + latest.version) : 'Reinstall ' + latest.version;
+                btn.textContent = newer ? 'Update to the latest build' : 'Reinstall';
                 btn.className = newer ? 'btn btn-primary' : 'btn btn-outline-secondary';
                 btn.onclick = function () {
                     msg.classList.remove('text-danger');
@@ -125,7 +147,7 @@
                 };
             }
             check();
-        })();
+        });
         </script>
 
         <!-- App Icon Card (#242) -->

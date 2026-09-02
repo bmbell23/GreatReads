@@ -13,7 +13,13 @@ REPO_ROOT="$(cd "$(dirname "$0")" && pwd)"
 cd "$REPO_ROOT/simple-app"
 
 VERSION="$(cat "$REPO_ROOT/version.txt" 2>/dev/null || echo unknown)"
-echo "🔨 Building debug APK (version: $VERSION)"
+# version.txt only moves on a commit, but the APK gets rebuilt many times between
+# commits — so semver alone cannot answer "is the staged build newer than mine?"
+# (#277). This stamp is baked into the APK assets and repeated in the sidecar the
+# updater endpoint reads, so the two are directly comparable.
+BUILD_STAMP="$(date -Iseconds)"
+echo "🔨 Building debug APK (version: $VERSION, build: $BUILD_STAMP)"
+printf '%s\n' "$BUILD_STAMP" > "$REPO_ROOT/web/build-stamp.txt"
 
 # Stage the web shell into APK assets so the app can serve it offline (#23).
 # Always re-copied from web/ so the bundled shell can't drift from the live one.
@@ -49,7 +55,7 @@ STAMP=$(date '+%Y-%m-%d %H:%M:%S')
 # staged APK reports once version.txt moves on — without this, the app would
 # compare against the wrong number and nag forever about an update it already has.
 printf '{"version":"%s","built_at":"%s"}\n' \
-    "$VERSION" "$(date -Iseconds)" > "$DEST.json"
+    "$VERSION" "$BUILD_STAMP" > "$DEST.json"
 
 echo
 echo "✅ Staged: $DEST"

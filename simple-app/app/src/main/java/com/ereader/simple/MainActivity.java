@@ -972,6 +972,25 @@ public class MainActivity extends Activity {
             }
         }
 
+        /**
+         * The build stamp baked into THIS APK's assets (#277). versionName only moves
+         * on a commit, while the APK is rebuilt many times in between — comparing
+         * semver alone reports "up to date" for a build that is hours older than the
+         * one on the server. This is the comparable value.
+         */
+        @JavascriptInterface
+        public String appBuildStamp() {
+            try (java.io.InputStream in = app.getAssets().open("web/build-stamp.txt")) {
+                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[256];
+                int n;
+                while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                return out.toString("UTF-8").trim();
+            } catch (Exception e) {
+                return "";      // pre-#277 build → caller falls back to version compare
+            }
+        }
+
         /** Has the user allowed us to install packages? (Always true below API 26.) */
         @JavascriptInterface
         public boolean canInstallPackages() {
