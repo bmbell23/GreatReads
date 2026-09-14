@@ -1316,7 +1316,9 @@ let bdCurrent = null, bdNav = [], bdIndex = -1, bdSeriesKey = null, bdAuthorKey 
 // unreachable now — retire in #122.
 function grBooksOpenDetails(key, navList) {
     const list = navList || visibleCards();
-    const toItem = x => (x.kind === 'local' && x.book_id != null) ? x.book_id : x;
+    // A tracked remote card (an Upcoming/New release already in the DB) carries the
+    // matched book_id — open its real record, not the "Add to Wishlist" news popup (#280).
+    const toItem = x => (x.book_id != null) ? x.book_id : x;
     const idx = list.findIndex(x => cardKey(x) === key);
     if (idx >= 0) { GreatReads.openBookNav(list.map(toItem), idx); return; }
     const only = cardReg[key] || cards.find(x => cardKey(x) === key);

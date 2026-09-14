@@ -1057,6 +1057,16 @@ function grCardToBook(c) {
 function grNewsOpts(c) {
     const b = [];
     if (c.preview_link) b.push(`<a class="btn btn-sm btn-outline-secondary" href="${c.preview_link}" target="_blank" rel="noopener"><i class="fas fa-eye me-2"></i>Preview</a>`);
+    // Already in the DB as a (still-unowned) Wishlist record — don't offer to re-add it.
+    // Open the existing record instead; keep metadata refresh + ignore. (#280)
+    if (c.tracked && c.book_id != null) {
+        b.push(`<button class="btn btn-sm btn-outline-primary" onclick="GreatReads.openBookById(${c.book_id})"><i class="fas fa-bookmark me-2"></i>In your Wishlist — open</button>`);
+        if (c.news_id != null) {
+            b.push(`<button class="btn btn-sm btn-outline-info" onclick="saveLocally(${c.news_id}, true)"><i class="fas fa-magnifying-glass me-2"></i>Get metadata</button>`);
+            b.push(`<button class="btn btn-sm btn-outline-secondary" onclick="ignoreRelease(${c.news_id})"><i class="fas fa-ban me-2"></i>Ignore</button>`);
+        }
+        return { actionsHtml: b.join(''), editBook: false, sessions: false, highlights: false };
+    }
     if (c.news_id != null) {
         b.push(`<button class="btn btn-sm btn-outline-success" onclick="saveLocally(${c.news_id})"><i class="fas fa-bookmark me-2"></i>Add to Wishlist</button>`);
         b.push(`<button class="btn btn-sm btn-outline-info" onclick="saveLocally(${c.news_id}, true)"><i class="fas fa-magnifying-glass me-2"></i>Get metadata</button>`);

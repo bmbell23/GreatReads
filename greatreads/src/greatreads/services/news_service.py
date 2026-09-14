@@ -920,26 +920,53 @@ def list_shelf(db: Session, status: str = "owned", search: str = None,
         if like:
             q = q.filter(or_(NewsItem.title.ilike(like), NewsItem.author_name.ilike(like),
                              NewsItem.matched_series.ilike(like)))
-        items = q.all()
+        remote_items = q.all()
+
+        # #280: the Upcoming shelf is the UNION of the news feed and your own Wishlist
+        # books whose publication date is still in the future — a future-dated book you
+        # saved belongs on Upcoming even if the poll never surfaced it. Books with no
+        # pub date are excluded by definition. A book that's in both sources shows once,
+        # as its richer local record (its news twin is dropped).
+        local_cards: list[dict] = []
+        if status == "upcoming":
+            from ..models.external_import import ExternalImport
+            today = date.today()
+            owned_ids = _owned_book_id_subq(db)
+            ext_ids = db.query(ExternalImport.book_id).distinct()
+            lq = (db.query(Book)
+                  .filter(Book.date_published.isnot(None), Book.date_published > today)
+                  .filter(~Book.id.in_(owned_ids), ~Book.id.in_(ext_ids)))
+            if like:
+                lq = lq.filter(or_(Book.title.ilike(like), Book.series.ilike(like),
+                                   Book.author_name_first.ilike(like),
+                                   Book.author_name_second.ilike(like)))
+            local_books = [b for b in lq.all() if (b.title or "").strip()]  # drop empty-title placeholders
+            local_ids = {b.id for b in local_books}
+            remote_items = [i for i in remote_items if i.matched_book_id not in local_ids]
+            local_cards = [_local_card(b, "upcoming", 0) for b in local_books]
+
+        cards_all = local_cards + [_remote_card(i, status) for i in remote_items]
         if cover == "yes":
-            items = [i for i in items if i.thumbnail_url]
+            cards_all = [c for c in cards_all if c.get("has_cover")]
         elif cover == "no":
-            items = [i for i in items if not i.thumbnail_url]
+            cards_all = [c for c in cards_all if not c.get("has_cover")]
+        # Sort the normalized card dicts (local + remote share the same keys). ISO date
+        # strings sort chronologically; missing values sink via the "" / "~~~" / 0 defaults.
         keyf = {
-            "title": lambda i: (i.title or "").lower(),
+            "title": lambda c: (c.get("title") or "").lower(),
             # within an author, group by series then number (no-series last via "~~~")
-            "author": lambda i: ((i.author_name or "").lower(), (i.matched_series or "~~~").lower(),
-                                 i.series_number or 0, (i.title or "").lower()),
-            "series": lambda i: ((i.matched_series or "~~~").lower(), i.series_number or 0,
-                                 (i.title or "").lower()),
-            "date": lambda i: i.published_date or date.min,
-            "words": lambda i: i.word_count or 0,
-        }.get(sort_by, lambda i: i.published_date or date.min)
+            "author": lambda c: ((c.get("author") or "").lower(), (c.get("series") or "~~~").lower(),
+                                 c.get("series_number") or 0, (c.get("title") or "").lower()),
+            "series": lambda c: ((c.get("series") or "~~~").lower(), c.get("series_number") or 0,
+                                 (c.get("title") or "").lower()),
+            "date": lambda c: c.get("date") or "",
+            "words": lambda c: c.get("word_count") or 0,
+        }.get(sort_by, lambda c: c.get("date") or "")
         # default date direction differs per kind; explicit sort_order wins
         rev = desc if sort_by in ("title", "author", "series", "date", "words") else (status == "new")
-        items.sort(key=keyf, reverse=rev)
-        total = len(items)
-        cards = [_remote_card(i, status) for i in items[skip:skip + limit]]
+        cards_all.sort(key=keyf, reverse=rev)
+        total = len(cards_all)
+        cards = cards_all[skip:skip + limit]
         return {"status": status, "total": total, "cards": cards}
 
     # "In library" = an owned inventory copy OR a Calibre/Audiobookshelf import (a book
