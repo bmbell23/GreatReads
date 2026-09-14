@@ -82,11 +82,23 @@
             background: var(--brand-grad);
         }
         .meta { text-align: center; max-width: 92%; }
-        .meta .title { font-size: 20px; font-weight: 700; line-height: 1.3; }
-        .meta .author { font-size: 14px; color: var(--muted); margin-top: 4px; }
+        /* Stacked order under the cover: author, title, chapter (#281). */
+        .meta .author { font-size: 14px; color: var(--muted);
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 92vw; }
+        .meta .title { font-size: 20px; font-weight: 700; line-height: 1.3; margin-top: 2px; }
         .chapter { font-size: 13px; color: var(--brand-pink); margin-top: 6px; min-height: 18px;
             font-weight: 600;
             overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 90vw; }
+        /* #281: the chapter line doubles as the chapter picker — tap it to open the
+           drawer (the separate bottom 'Chapters' button is gone). Styled as a pill with
+           a caret so it reads as tappable; collapses when there's no chapter. */
+        #meta-chapter { display: inline-block; cursor: pointer; padding: 3px 12px;
+            border: 1px solid var(--border); border-radius: 999px;
+            -webkit-tap-highlight-color: transparent; }
+        #meta-chapter:empty { display: none; }
+        #meta-chapter:not(:empty)::after { content: ' ▾'; font-size: 11px; opacity: .65; }
+        #meta-chapter:active { background: var(--border); }
+        #meta-chapter:focus-visible { outline: 2px solid var(--brand-pink); outline-offset: 2px; }
 
         /* ---- Progress bars (book + chapter) ---- */
         .bars { width: 100%; max-width: 560px; display: flex; flex-direction: column; gap: 14px; }
@@ -329,8 +341,9 @@
              becomes a real flex column so the cover can sit beside it. -->
         <div class="stage-main">
         <div class="meta">
-            <div class="title" id="title"></div>
             <div class="author" id="author"></div>
+            <div class="title" id="title"></div>
+            <div class="chapter" id="meta-chapter" role="button" tabindex="0" aria-label="Chapters — tap to change"></div>
         </div>
 
         <div class="bars">
@@ -367,9 +380,8 @@
         </div><!-- /.stage-main -->
     </div>
 
-    <div class="bottom-bar">
-        <button class="text-btn" id="chapters-btn2">Chapters</button>
-    </div>
+    <!-- #281: the chapter line under the title IS the chapter picker now (tap it);
+         the separate bottom 'Chapters' button was removed. -->
 
     <!-- Speed popup (#265): tapping the speed button (bottom-left of the controls)
          reveals this vertical slider — 1.0× at the bottom, 3.0× at the top. -->

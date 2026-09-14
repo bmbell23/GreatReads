@@ -360,6 +360,15 @@ async function precacheThisBook() {
 async function init() {
     $('title').textContent = TITLE;
     $('author').textContent = AUTHOR;
+    // #281: the URL param carries only the primary author. Ask our record for the full
+    // ordered author list (co-authors from book_contributors) and show them on one line;
+    // failure or a single-author book just leaves the param name in place.
+    if (TITLE) {
+        fetch(`${API_URL}/books/authors-by-title?title=${encodeURIComponent(TITLE)}&author=${encodeURIComponent(AUTHOR)}`)
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d && d.display) $('author').textContent = d.display; })
+            .catch(() => {});
+    }
     // Start (or coalesce) the listening session for this sitting (#57).
     if (PROGRESS_KEY) initSession();
     // Saved-highlight quotes while we resolve resume + spin up the ABS session.
@@ -716,7 +725,8 @@ function updateUI() {
     const ch = ci >= 0 ? chapters[ci] : null;
     let ctitle = ch ? (ch.title || `Chapter ${ci + 1}`) : '';
     if (PARTS.length > 1) ctitle = (ctitle ? ctitle + ' · ' : '') + `Part ${curPart + 1}/${PARTS.length}`;
-    $('chapter-title').textContent = ctitle;
+    // #281: chapter now lives in the .meta block under author + title, not the top bar.
+    $('meta-chapter').textContent = ctitle;
     const rows = $('chapter-list').children;
     for (let i = 0; i < rows.length; i++) rows[i].classList.toggle('active', i === ci);
     NativeMedia.state();  // throttled position push to the lock-screen scrubber
@@ -890,7 +900,12 @@ function renderChapters() {
 }
 function openDrawer() { $('drawer-backdrop').classList.add('open'); }
 function closeDrawer() { $('drawer-backdrop').classList.remove('open'); }
-$('chapters-btn2').addEventListener('click', openDrawer);
+// #281: the chapter line under the title is the chapter picker (the separate bottom
+// 'Chapters' button was removed). Tap or Enter/Space opens the drawer.
+$('meta-chapter').addEventListener('click', openDrawer);
+$('meta-chapter').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); openDrawer(); }
+});
 $('drawer-backdrop').addEventListener('click', (e) => { if (e.target === $('drawer-backdrop')) closeDrawer(); });
 
 // ---------- Bookmarks ----------

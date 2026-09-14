@@ -358,6 +358,53 @@ async def cover_by_title(title: str, author: str = "", db: Session = Depends(get
     return FileResponse(p, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
 
+def _join_authors(names: list) -> str:
+    """Join author display names for a single header line: 'A', 'A & B', 'A, B & C'."""
+    names = [n for n in (names or []) if n]
+    if len(names) <= 1:
+        return names[0] if names else ""
+    if len(names) == 2:
+        return f"{names[0]} & {names[1]}"
+    return ", ".join(names[:-1]) + f" & {names[-1]}"
+
+
+@router.get("/authors-by-title")
+async def authors_by_title(title: str, author: str = "", db: Session = Depends(get_db)):
+    """Resolve (title, author) to the ORDERED author list of OUR matching book (#281),
+    so the audiobook player can show co-authors (from book_contributors) instead of the
+    single primary name it receives in the URL. Subtitle-tolerant match like
+    cover-by-title; falls back to the book's denormalized author, then to the passed-in
+    author. Unauthenticated by design, like cover-by-title."""
+    from .libby import _core_tokens, _title_sim, _tokens
+    from ..services.contributor_service import contributors_for
+    fallback = (author or "").strip()
+    in_t, in_a, in_core = _tokens(title), _tokens(author or ""), _core_tokens(title)
+    if not in_t:
+        return {"authors": [fallback] if fallback else [], "display": fallback}
+    best, best_sim = None, 0.0
+    for b in db.query(Book).all():
+        sim = _title_sim(in_t, in_core, _tokens(b.title), _core_tokens(b.title))
+        if sim < 0.6:
+            continue
+        if in_a:
+            at = _tokens(((b.author_name_first or "") + " " + (b.author_name_second or "")).strip())
+            if at:
+                au = len(in_a | at)
+                asim = len(in_a & at) / au if au else 0.0
+                if asim < 0.34 and sim < 0.9:
+                    continue   # title-only coincidence without author agreement
+        if sim > best_sim:
+            best, best_sim = b, sim
+    names = []
+    if best is not None:
+        names = [a["name"] for a in contributors_for(db, best.id)["authors"] if a.get("name")]
+        if not names and best.author:
+            names = [best.author]
+    if not names and fallback:
+        names = [fallback]
+    return {"authors": names, "display": _join_authors(names)}
+
+
 @router.get("/{book_id}")
 async def get_book(
     request: Request,
