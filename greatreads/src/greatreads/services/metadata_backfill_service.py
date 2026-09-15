@@ -79,14 +79,20 @@ def _needs_fields_filter():
 
 
 def candidate_query(db: Session):
-    """Books still missing fields, ordered so OWNED (library) books are enriched first,
-    then Wishlist/unowned, then the rest (#178)."""
+    """Books still missing fields, ordered so LIBRARY books are enriched first, then
+    everyone else (unowned = your Wishlist) (#178). "Library" is the #185 definition:
+    an owned inventory copy OR a Calibre/Audiobookshelf import (a book from a library
+    source is owned even if its inv flag was never set). Every non-library book is on
+    the Wishlist in the current model, so this is two tiers — the "then the rest" of
+    the original three-tier ask is a vacuous third bucket here."""
+    from ..models.external_import import ExternalImport
     conds = _needs_fields_filter()
     owned_q = db.query(Inventory.book_id).filter(
         or_(Inventory.owned_ebook == True, Inventory.owned_audio == True,  # noqa: E712
             Inventory.owned_physical == True)
     )
-    priority = case((Book.id.in_(owned_q), 0), else_=1)
+    ext_q = db.query(ExternalImport.book_id)
+    priority = case((or_(Book.id.in_(owned_q), Book.id.in_(ext_q)), 0), else_=1)
     return db.query(Book).filter(*conds).order_by(priority, Book.id)
 
 
