@@ -119,6 +119,11 @@
             <li class="catItem" style="display:none;"><h6 class="dropdown-header">Releases</h6></li>
             <li class="catItem" style="display:none;"><a class="dropdown-item" href="#" id="catComics" onclick="toggleCat('comics');return false;"><i class="fas fa-check me-2 invisible"></i>Show Graphic Novels</a></li>
             <li class="catItem" style="display:none;"><a class="dropdown-item" href="#" id="catReprints" onclick="toggleCat('reprints');return false;"><i class="fas fa-check me-2 invisible"></i>Show Reprints</a></li>
+            <li class="catItem" style="display:none;"><h6 class="dropdown-header">Wishlist</h6></li>
+            <li class="catItem" style="display:none;"><a class="dropdown-item" href="#" id="wishAll" onclick="setWishFilter('all');return false;"><i class="fas fa-check me-2"></i>Show all</a></li>
+            <li class="catItem" style="display:none;"><a class="dropdown-item" href="#" id="wishOn" onclick="setWishFilter('on');return false;"><i class="fas fa-check me-2 invisible"></i>On Wishlist only</a></li>
+            <li class="catItem" style="display:none;"><a class="dropdown-item" href="#" id="wishOff" onclick="setWishFilter('off');return false;"><i class="fas fa-check me-2 invisible"></i>Not on Wishlist</a></li>
+            <li class="catItem" style="display:none;"><a class="dropdown-item" href="#" id="wishFirst" onclick="toggleWishFirst();return false;"><i class="fas fa-check me-2"></i>Wishlist first</a></li>
         </ul>
     </div>
 </div>
@@ -425,6 +430,11 @@ let showComics = false, showReprints = false;
 let cardReg = {};   // cardKey → card, persists across shelves so siblings stay openable
 let cards = [], shelfTotal = 0, shelfSkip = 0, shelfLoading = false, _searchTimer = null, shelfGen = 0;
 let sortBy = 'author', sortDir = 'asc', coverFilter = 'all';
+// Store shelves (#285): filter by wishlist membership + group wishlist-first (client-side,
+// on the already-loaded cards). Upcoming/New default to date-asc, wishlist-first.
+let wishFilter = 'all';   // all | on | off
+let wishFirst = true;     // group saved (wishlist) books above discoveries
+const isOnWishlist = c => c.kind === 'local' || (c.tracked && c.book_id != null);
 const SORT_LABELS = { author: 'Author', title: 'Title', series: 'Series', date: 'Release date', words: 'Word count' };
 const PAGE = 60;
 
@@ -557,6 +567,11 @@ function setStatus(s) {
         document.getElementById('st' + x).classList.toggle('active', x.toLowerCase() === s));
     // Show/Reprints toggles apply to releases only (#151).
     document.querySelectorAll('.catItem, #catSection').forEach(el => el.style.display = isRemote() ? '' : 'none');
+    // Per-shelf default sort (#285): Store shelves want publication date, oldest first;
+    // library shelves keep author. (The user can still change it while on the shelf.)
+    if (s === 'upcoming' || s === 'new') { sortBy = 'date'; sortDir = 'asc'; }
+    else { sortBy = 'author'; sortDir = 'asc'; }
+    updateSortUI(); updateWishUI();
     // Libby search mode: repurpose the search box as the query; hint when empty.
     const si = document.getElementById('searchInput');
     si.placeholder = (s === 'libby')
@@ -591,6 +606,14 @@ function toggleCat(c) {
 function updateCatUI() {
     const chk = (id, on) => { const el = document.getElementById(id); if (el) el.querySelector('i').classList.toggle('invisible', !on); };
     chk('catComics', showComics); chk('catReprints', showReprints);
+}
+// Wishlist filter + grouping (#285). Client-side over already-loaded cards → re-render only.
+function setWishFilter(v) { wishFilter = v; updateWishUI(); renderAll(); }
+function toggleWishFirst() { wishFirst = !wishFirst; updateWishUI(); renderAll(); }
+function updateWishUI() {
+    const chk = (id, on) => { const el = document.getElementById(id); if (el) el.querySelector('i').classList.toggle('invisible', !on); };
+    chk('wishAll', wishFilter === 'all'); chk('wishOn', wishFilter === 'on');
+    chk('wishOff', wishFilter === 'off'); chk('wishFirst', wishFirst);
 }
 
 function onSearch() {
@@ -718,6 +741,11 @@ function visibleCards() {
             (!c.is_comic && !c.is_reprint)
             || (c.is_comic && showComics)
             || (c.is_reprint && showReprints));
+        // Wishlist filter + wishlist-first grouping (#285). Stable partition keeps the
+        // server's sort order (date-asc by default) within each group.
+        if (wishFilter === 'on') list = list.filter(isOnWishlist);
+        else if (wishFilter === 'off') list = list.filter(c => !isOnWishlist(c));
+        if (wishFirst) list = [...list.filter(isOnWishlist), ...list.filter(c => !isOnWishlist(c))];
     }
     return list;
 }
@@ -783,6 +811,13 @@ function cardHtml(c) {
         if (c._onHold) wishRibbon = wishlistRibbon('On hold', '#0dcaf0', '#000');
         else if (isUpcoming) wishRibbon = wishlistRibbon('Upcoming', '#e0a800', '#000');
     }
+    // Store shelves (#285): flag cards already saved to the Wishlist, so a discovery is
+    // distinguishable from a book you already have listed. A wishlist book appears as a
+    // local card, or as a remote card still tracked to a saved (unowned) record.
+    let onWishRibbon = '';
+    if ((shelfStatus === 'upcoming' || shelfStatus === 'new') && isOnWishlist(c)) {
+        onWishRibbon = wishlistRibbon('On Wishlist', '#0d6efd', '#fff');
+    }
     const libbyOwned = (c.kind === 'libby' && libbyIsOwned(c))
         ? '<div class="books-badge-tl"><span class="books-readcount" title="Already in your library"><i class="fas fa-check"></i></span></div>' : '';
     // Format chips (ebook/audiobook) top-left for unowned Libby results (#197).
@@ -792,7 +827,7 @@ function cardHtml(c) {
             <div class="books-cover">${cover}
                 ${tl || libbyOwned}${libbyFmtChips}
                 ${badges ? `<div class="books-badge-tr">${badges}</div>` : ''}
-                ${libbyRibbon}${wishRibbon}
+                ${libbyRibbon}${wishRibbon}${onWishRibbon}
             </div>
         </div>
     </div>`;

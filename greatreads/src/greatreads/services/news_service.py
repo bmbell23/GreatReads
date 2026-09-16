@@ -922,28 +922,33 @@ def list_shelf(db: Session, status: str = "owned", search: str = None,
                              NewsItem.matched_series.ilike(like)))
         remote_items = q.all()
 
-        # #280: the Upcoming shelf is the UNION of the news feed and your own Wishlist
-        # books whose publication date is still in the future — a future-dated book you
-        # saved belongs on Upcoming even if the poll never surfaced it. Books with no
-        # pub date are excluded by definition. A book that's in both sources shows once,
-        # as its richer local record (its news twin is dropped).
+        # #280/#285: Upcoming AND New are each the UNION of the news feed and your own
+        # Wishlist books in that shelf's date window — a book you saved belongs on the
+        # shelf even if the poll never surfaced it. Upcoming = future pub date; New =
+        # published within the last NEW_WINDOW_DAYS (up to today). Books with no pub date
+        # are excluded by definition. A book in both sources shows once, as its richer
+        # local record (its news twin, matched by matched_book_id, is dropped).
         local_cards: list[dict] = []
+        from ..models.external_import import ExternalImport
+        today = date.today()
+        owned_ids = _owned_book_id_subq(db)
+        ext_ids = db.query(ExternalImport.book_id).distinct()
+        lq = (db.query(Book)
+              .filter(Book.date_published.isnot(None))
+              .filter(~Book.id.in_(owned_ids), ~Book.id.in_(ext_ids)))
         if status == "upcoming":
-            from ..models.external_import import ExternalImport
-            today = date.today()
-            owned_ids = _owned_book_id_subq(db)
-            ext_ids = db.query(ExternalImport.book_id).distinct()
-            lq = (db.query(Book)
-                  .filter(Book.date_published.isnot(None), Book.date_published > today)
-                  .filter(~Book.id.in_(owned_ids), ~Book.id.in_(ext_ids)))
-            if like:
-                lq = lq.filter(or_(Book.title.ilike(like), Book.series.ilike(like),
-                                   Book.author_name_first.ilike(like),
-                                   Book.author_name_second.ilike(like)))
-            local_books = [b for b in lq.all() if (b.title or "").strip()]  # drop empty-title placeholders
-            local_ids = {b.id for b in local_books}
-            remote_items = [i for i in remote_items if i.matched_book_id not in local_ids]
-            local_cards = [_local_card(b, "upcoming", 0) for b in local_books]
+            lq = lq.filter(Book.date_published > today)
+        else:  # new: published within the last NEW_WINDOW_DAYS, up to today
+            lq = lq.filter(Book.date_published <= today,
+                           Book.date_published >= today - timedelta(days=NEW_WINDOW_DAYS))
+        if like:
+            lq = lq.filter(or_(Book.title.ilike(like), Book.series.ilike(like),
+                               Book.author_name_first.ilike(like),
+                               Book.author_name_second.ilike(like)))
+        local_books = [b for b in lq.all() if (b.title or "").strip()]  # drop empty-title placeholders
+        local_ids = {b.id for b in local_books}
+        remote_items = [i for i in remote_items if i.matched_book_id not in local_ids]
+        local_cards = [_local_card(b, status, 0) for b in local_books]
 
         cards_all = local_cards + [_remote_card(i, status) for i in remote_items]
         if cover == "yes":
