@@ -2,7 +2,7 @@
 
 from datetime import date
 from typing import Optional, List
-from sqlalchemy import Column, Integer, String, Date, Float, Boolean, VARCHAR
+from sqlalchemy import Column, Integer, String, Date, DateTime, Float, Boolean, VARCHAR
 from sqlalchemy.orm import relationship
 from pydantic import BaseModel
 
@@ -43,6 +43,10 @@ class Book(Base):
     content_end_page = Column(Integer)
     content_start_seconds = Column(Float)
     content_end_seconds = Column(Float)
+    # Metadata-backfill cursor (#282): stamped on EVERY enrichment attempt (success or
+    # miss) so the sweep advances past un-enrichable books instead of re-trying the same
+    # head-of-queue rows every run. NULL = never attempted (processed first).
+    metadata_attempted_at = Column(DateTime)
 
     # Relationships
     readings = relationship("Reading", back_populates="book", cascade="all, delete-orphan")

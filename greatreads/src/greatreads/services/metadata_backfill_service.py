@@ -93,7 +93,13 @@ def candidate_query(db: Session):
     )
     ext_q = db.query(ExternalImport.book_id)
     priority = case((or_(Book.id.in_(owned_q), Book.id.in_(ext_q)), 0), else_=1)
-    return db.query(Book).filter(*conds).order_by(priority, Book.id)
+    # Order: never-attempted first (NULL sorts first in SQLite ASC), then oldest-attempted;
+    # LIBRARY-vs-Wishlist is only the TIEBREAK. This gives every book one attempt before
+    # any retry, so a wall of un-enrichable LIBRARY leftovers can't re-cycle forever and
+    # starve the Wishlist (#282) — while still honouring #178 (among never-attempted books,
+    # library goes first via the `priority` tiebreak; on retries, oldest first, library-preferred).
+    return (db.query(Book).filter(*conds)
+            .order_by(Book.metadata_attempted_at.asc(), priority, Book.id))
 
 
 def _get_or_create_tags(db: Session, names) -> list:
@@ -196,8 +202,14 @@ def backfill_one(db: Session, book: Book, vocab: Optional[dict] = None) -> list:
             book.page_count = pc
             applied.append("page_count")
 
+    # Advance the backfill cursor on EVERY attempt (success or miss) and commit, so the
+    # sweep moves past un-enrichable head-of-queue books instead of re-trying them each
+    # run (#282). candidate_query orders never-attempted (NULL) first, then oldest.
+    from datetime import datetime as _dt
+    book.metadata_attempted_at = _dt.utcnow()
+    db.commit()
+
     if applied:
-        db.commit()
         try:
             from .event_log_service import log_event
             got = {}
