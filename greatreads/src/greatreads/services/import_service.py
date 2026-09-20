@@ -173,6 +173,30 @@ def _get_calibre_word_count(conn: sqlite3.Connection, book_id: int) -> Optional[
         return None
 
 
+def _calibre_has_format(conn: sqlite3.Connection, book_id: int) -> bool:
+    """True when the Calibre book actually has a downloadable file behind it.
+
+    Calibre keeps one `data` row per stored format (EPUB/AZW3/…). A record with
+    zero rows is a *ghost*: metadata with no file — the library reports
+    `formats: []` and every download 404s. Ghosts are enumerated by
+    CALIBRE_QUERY like any other book (it only LEFT JOINs, and never touches
+    `data`), so without this check an import would claim `owned_ebook = True`
+    for a book that can't be opened — which both breaks the reader and makes
+    Libby suppress the borrow as already-owned. (#286)
+
+    Fails CLOSED (returns False) if `data` can't be read: better to not claim
+    ownership than to assert a file we couldn't verify.
+    """
+    try:
+        row = conn.execute(
+            "SELECT 1 FROM data WHERE book = ? LIMIT 1", (book_id,)
+        ).fetchone()
+        return row is not None
+    except Exception as exc:
+        logger.warning("Could not read Calibre formats for book %s: %s", book_id, exc)
+        return False
+
+
 def _get_calibre_tags(conn: sqlite3.Connection, book_id: int) -> list[str]:
     """Genre-ish tags for a Calibre book. Skips Calibre's structured metadata tags
     (containing ':' or '=', e.g. 'series:…', 'genre:fantasy', 'nyt:…=…') so only
@@ -619,6 +643,9 @@ def import_calibre_book(
     universe = _get_calibre_universe(conn, int(cal_id))
     word_count = _get_calibre_word_count(conn, int(cal_id))
     cal_tags = _get_calibre_tags(conn, int(cal_id))
+    # Does this Calibre record have a real file behind it? Ghost records (no
+    # `data` rows) must not assert ebook ownership. (#286)
+    has_format = _calibre_has_format(conn, int(cal_id))
     conn.close()
 
     cal_description = row[9] or None                 # comments.text = synopsis
@@ -676,9 +703,11 @@ def import_calibre_book(
                 book.cover = True
 
         # Create inventory entry (ebook)
+        # owned_ebook only when Calibre actually holds a file — a ghost record
+        # (no formats) is metadata, not an owned ebook. (#286)
         inv = Inventory(
             book_id=book.id,
-            owned_ebook=True,
+            owned_ebook=has_format,
             isbn_13=isbn_13,
             isbn_10=isbn_10,
         )
@@ -719,11 +748,15 @@ def import_calibre_book(
         # Mark ebook ownership on the existing inventory row (create one if absent)
         inv = db.query(Inventory).filter_by(book_id=book.id).first()
         if inv is None:
-            inv = Inventory(book_id=book.id, owned_ebook=True,
+            inv = Inventory(book_id=book.id, owned_ebook=has_format,
                             isbn_13=isbn_13, isbn_10=isbn_10)
             db.add(inv)
         else:
-            inv.owned_ebook = True
+            # Only ever ASSERT ownership, never revoke it: a False here means
+            # "Calibre has no file", which must not clobber an ebook the user
+            # owns from another source or set by hand. (#286)
+            if has_format:
+                inv.owned_ebook = True
             if isbn_13 and not inv.isbn_13:
                 inv.isbn_13 = isbn_13
             if isbn_10 and not inv.isbn_10:
