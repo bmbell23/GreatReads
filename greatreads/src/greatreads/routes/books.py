@@ -609,10 +609,18 @@ class MergeRequest(BaseModel):
 
 
 # Scalar book columns the merge can carry over / let the user pick.
+# #290: the audio columns and the #10 content anchors belong here too — the loser is
+# usually the ABS-created record, so narrator/audio_duration_seconds live ONLY on the
+# row about to be deleted, and audio_duration_seconds is the denominator for audiobook
+# progress + anchor fractions (readings.py, ereader_api.py). Dropping it left the
+# survivor owning audio with no length.
 _MERGE_SCALARS = (
     "title", "author_name_first", "author_name_second", "author_gender",
     "word_count", "page_count", "date_published", "universe", "series",
     "series_number", "genre", "isbn_id",
+    "narrator", "audio_duration_seconds", "description", "public_rating",
+    "content_start_pct", "content_end_pct", "content_start_page",
+    "content_end_page", "content_start_seconds", "content_end_seconds",
 )
 
 
@@ -624,8 +632,9 @@ async def merge_books(
     current_user: User = Depends(get_current_user),
 ):
     """Merge ``loser_id`` into ``survivor_id`` (#131): OR inventory ownership, move
-    external links + readings + tags onto the survivor, fill/override survivor scalar
-    fields, adopt the loser's cover when the survivor lacks one, then delete the loser.
+    external links + readings + tags + contributors onto the survivor, fill/override
+    survivor scalar fields, adopt the loser's cover when the survivor lacks one, then
+    delete the loser.
 
     reading_sessions / reading_activity / ereader_progress / ereader_highlights key off
     the external (Calibre/ABS) id, not the GreatReads book id, so they follow the moved
@@ -670,16 +679,60 @@ async def merge_books(
             survivor.tags.append(t)
     loser.tags = []
 
+    # 2b) Contributors (#192): move the loser's authors/narrators over, deduped on
+    #     (role, normalized name). book_contributors has no ON DELETE CASCADE and Book
+    #     has no relationship for it, so anything left behind is ORPHANED — and since
+    #     books.id is a plain rowid (max+1, no AUTOINCREMENT), deleting the highest id
+    #     lets the NEXT new book be born into those orphans (#290). So: move what's
+    #     new, hard-delete the rest. The survivor keeps its own primary.
+    def _cname(c) -> str:
+        return " ".join(f"{c.first or ''} {c.last or ''}".split()).lower()
+
+    s_contribs = db.query(BookContributor).filter_by(book_id=survivor.id).all()
+    seen = {(c.role, _cname(c)) for c in s_contribs}
+    has_primary = {c.role for c in s_contribs if c.is_primary}
+    last_pos: dict = {}
+    for c in s_contribs:
+        last_pos[c.role] = max(last_pos.get(c.role, -1), c.position or 0)
+    for c in (db.query(BookContributor).filter_by(book_id=loser.id)
+              .order_by(BookContributor.role, BookContributor.is_primary.desc(),
+                        BookContributor.position, BookContributor.id).all()):
+        key = (c.role, _cname(c))
+        if key[1] and key not in seen:
+            seen.add(key)
+            last_pos[c.role] = last_pos.get(c.role, -1) + 1
+            c.book_id = survivor.id
+            c.position = last_pos[c.role]
+            if c.role in has_primary:
+                c.is_primary = False        # demote — the survivor already has one
+            elif c.is_primary:
+                has_primary.add(c.role)
+        else:
+            db.delete(c)                    # duplicate or nameless — never orphan it
+
     # 3) Scalar fields: apply user-chosen values, else fill survivor gaps from loser.
     #    The UI sends chosen values as JSON, so date_published arrives as a string —
     #    coerce it to a Python date or the SQLite Date column rejects it on flush.
-    from ..services.import_service import _coerce_date
+    from ..services.import_service import _coerce_date, _split_author
     for f in _MERGE_SCALARS:
         if f in chosen:
             val = _coerce_date(chosen[f]) if f == "date_published" else chosen[f]
             setattr(survivor, f, val)
         elif getattr(survivor, f, None) in (None, "", 0) and getattr(loser, f, None) not in (None, "", 0):
             setattr(survivor, f, getattr(loser, f))
+
+    # 3b) Keep contributors in step with the scalars (#290): if step 3 just adopted the
+    #     loser's narrator, mirror it into book_contributors too, or the merged book has
+    #     a narrator on the card and none in the edit modal / contributor search (#192).
+    narrator_name = " ".join((survivor.narrator or "").split())
+    if narrator_name:
+        rows = db.query(BookContributor).filter_by(book_id=survivor.id, role="narrator").all()
+        if not any(_cname(r) == narrator_name.lower() for r in rows):
+            f, l = _split_author(narrator_name)
+            db.add(BookContributor(
+                book_id=survivor.id, role="narrator", first=f or None, last=l or None,
+                is_primary=not any(r.is_primary for r in rows),
+                position=max([r.position or 0 for r in rows], default=-1) + 1))
 
     # 4) Cover: adopt the loser's if the survivor has none (or the user picked it).
     if (chosen.get("cover") == "loser" or not survivor.cover) and loser.cover:

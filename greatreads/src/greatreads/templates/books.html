@@ -1938,10 +1938,20 @@ function renderMergeSel(slot) {
         <span class="text-muted">${_mesc(d.author || '')}${d.series ? (' · ' + _mesc(d.series) + (d.series_number != null ? ' #' + d.series_number : '')) : ''}</span><br>
         <span class="text-muted">Owned: ${_mesc(media)}</span></div>`;
 }
+// #290: narrator + audio length are shown too — the record being removed is usually the
+// ABS-created one, so those two live ONLY on it and the merge was silently eating them.
+// Third element = optional display formatter.
+function _mfDur(sec) {
+    sec = Number(sec) || 0;
+    if (!sec) return '';
+    const h = Math.floor(sec / 3600), m = Math.round((sec % 3600) / 60);
+    return h ? `${h}h ${m}m` : `${m}m`;
+}
 const MERGE_FIELDS = [
     ['title', 'Title'], ['author', 'Author'], ['series', 'Series'], ['series_number', 'Series #'],
     ['universe', 'Universe'], ['genre', 'Genre'], ['word_count', 'Words'], ['page_count', 'Pages'],
-    ['date_published', 'Published']
+    ['date_published', 'Published'],
+    ['narrator', 'Narrator'], ['audio_duration_seconds', 'Audio length', _mfDur]
 ];
 function renderMergeCompare() {
     const A = mergeSel.A, B = mergeSel.B, cmp = document.getElementById('mergeCompare');
@@ -1950,13 +1960,19 @@ function renderMergeCompare() {
     if (!A || !B) { cmp.innerHTML = ''; return; }
     if (A.id === B.id) { cmp.innerHTML = '<div class="alert alert-warning py-2 small mb-0">Pick two different books.</div>'; return; }
     const fmt = v => (v == null || v === '') ? '<span class="text-muted">—</span>' : _mesc(v);
-    let rows = MERGE_FIELDS.map(([f, label]) => {
+    const blank = v => v == null || v === '';
+    let rows = MERGE_FIELDS.map(([f, label, fn]) => {
         const av = A[f], bv = B[f];
+        const show = v => blank(v) ? '<span class="text-muted">—</span>' : _mesc(fn ? fn(v) : v);
         if (String(av == null ? '' : av) === String(bv == null ? '' : bv))
-            return `<tr><td class="text-muted">${label}</td><td colspan="2">${fmt(av)}</td></tr>`;
+            return `<tr><td class="text-muted">${label}</td><td colspan="2">${show(av)}</td></tr>`;
+        // #290: where Keep is blank and Remove has a value, pre-select Remove. The backend
+        // fills survivor gaps from the loser regardless, so defaulting to the blank side
+        // showed an outcome that wasn't the one about to happen.
+        const takeB = blank(av) && !blank(bv);
         return `<tr><td class="text-muted">${label}</td>
-            <td><label class="d-block"><input type="radio" name="mf_${f}" value="A" checked> ${fmt(av)}</label></td>
-            <td><label class="d-block"><input type="radio" name="mf_${f}" value="B"> ${fmt(bv)}</label></td></tr>`;
+            <td><label class="d-block"><input type="radio" name="mf_${f}" value="A" ${takeB ? '' : 'checked'}> ${show(av)}</label></td>
+            <td><label class="d-block"><input type="radio" name="mf_${f}" value="B" ${takeB ? 'checked' : ''}> ${show(bv)}</label></td></tr>`;
     }).join('');
     const base = window.APP_BASE_PATH || '';
     const covImg = d => d.cover ? `<img src="${base}/static/covers/${d.id}.jpg?v=${Date.now()}" style="height:60px;border-radius:3px;">` : '<span class="text-muted">none</span>';
@@ -1964,7 +1980,7 @@ function renderMergeCompare() {
         <td><label><input type="radio" name="mf_cover" value="A" ${A.cover ? 'checked' : ''} ${A.cover ? '' : 'disabled'}> ${covImg(A)}</label></td>
         <td><label><input type="radio" name="mf_cover" value="B" ${(!A.cover && B.cover) ? 'checked' : ''} ${B.cover ? '' : 'disabled'}> ${covImg(B)}</label></td></tr>`;
     const mediaUnion = [...new Set([...(A.media_owned || []), ...(B.media_owned || [])])].join(', ') || 'none';
-    cmp.innerHTML = `<hr><div class="small text-muted mb-1">Pick the value to keep for each differing field. Owned formats are combined: <strong>${_mesc(mediaUnion)}</strong>. Readings, sessions, highlights & tags are preserved on the kept record.</div>
+    cmp.innerHTML = `<hr><div class="small text-muted mb-1">Pick the value to keep for each differing field. Owned formats are combined: <strong>${_mesc(mediaUnion)}</strong>. Readings, sessions, highlights, tags &amp; contributors are preserved on the kept record.</div>
         <table class="table table-sm align-middle"><thead><tr><th></th><th class="text-success">Keep #${A.id}</th><th class="text-danger">Remove #${B.id}</th></tr></thead><tbody>${rows}</tbody></table>`;
 }
 function mergeSwap() {
