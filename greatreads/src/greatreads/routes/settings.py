@@ -26,6 +26,22 @@ class WpdModeRequest(BaseModel):
     mode: str  # "manual" or "auto"
 
 
+class FormatTrackingSettings(BaseModel):
+    """Which formats are tracked against a DAILY reading goal (#289).
+
+    Independent of the per-format words-per-day values on purpose: `*_wpd` still
+    drives TBR/chain estimates (chain_calculator does
+    `days_remaining = words_remaining / wpd`), so switching a format off must NOT
+    zero its speed — that would divide-by-zero the queue the user explicitly
+    wants left untouched. Turning a format off only removes its daily goal bar
+    from Home + Stats; reading in it is still recorded and still counts toward
+    book progress and year/stats totals.
+    """
+    ebook: bool = True
+    physical: bool = True
+    audio: bool = True
+
+
 class AutoWpdResponse(BaseModel):
     ebook: Optional[int] = None
     physical: Optional[int] = None
@@ -150,6 +166,60 @@ async def update_reading_speeds(
     return speeds
 
 
+# NOTE: these literal routes MUST stay above the dynamic "/{setting_key}"
+# routes below — FastAPI matches in registration order, so a later literal
+# path is swallowed by the earlier catch-all and 404s "Setting not found".
+FORMAT_TRACKING_KEY = "format_tracking"
+
+
+def _read_format_tracking(db: Session) -> FormatTrackingSettings:
+    """Stored tracking flags, defaulting every format to ON (current behaviour)."""
+    setting = db.query(UserSettings).filter(
+        UserSettings.setting_key == FORMAT_TRACKING_KEY
+    ).first()
+    if not setting:
+        return FormatTrackingSettings()
+    try:
+        return FormatTrackingSettings(**json.loads(setting.setting_value))
+    except (ValueError, TypeError):
+        # Corrupt/legacy value: fall back to "track everything" rather than
+        # silently hiding the user's goal bars.
+        return FormatTrackingSettings()
+
+
+@router.get("/format-tracking", response_model=FormatTrackingSettings)
+async def get_format_tracking(db: Session = Depends(get_db)):
+    """Per-format daily-goal tracking flags (#289)."""
+    return _read_format_tracking(db)
+
+
+@router.put("/format-tracking", response_model=FormatTrackingSettings)
+async def update_format_tracking(
+    tracking: FormatTrackingSettings,
+    db: Session = Depends(get_db),
+):
+    """Set per-format daily-goal tracking flags (#289).
+
+    Writes only this key — `reading_speeds` is deliberately left alone so the
+    estimates keep working exactly as before.
+    """
+    payload = json.dumps({
+        "ebook": bool(tracking.ebook),
+        "physical": bool(tracking.physical),
+        "audio": bool(tracking.audio),
+    })
+    setting = db.query(UserSettings).filter(
+        UserSettings.setting_key == FORMAT_TRACKING_KEY
+    ).first()
+    if setting:
+        setting.setting_value = payload
+    else:
+        setting = UserSettings(setting_key=FORMAT_TRACKING_KEY, setting_value=payload)
+        db.add(setting)
+    db.commit()
+    db.refresh(setting)
+    return tracking
+
 @router.get("/all")
 async def get_all_settings(db: Session = Depends(get_db)):
     """Get all user settings."""
@@ -227,4 +297,3 @@ async def create_setting(
     db.refresh(db_setting)
 
     return db_setting
-

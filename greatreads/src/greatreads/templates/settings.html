@@ -329,6 +329,58 @@
             </div>
         </div>
 
+        <!-- Daily Goal Tracking Card (#289) -->
+        <div class="card mb-4">
+            <div class="card-header">
+                <h5 class="mb-0">
+                    <i class="fas fa-bullseye me-2"></i>
+                    Daily Goal Tracking
+                </h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted mb-4">
+                    Choose which formats you want a <strong>daily reading goal</strong> for.
+                    Switching a format off hides its progress bar on Home and its goal
+                    dots on Stats &mdash; useful when you're not reading that format
+                    consistently right now.
+                </p>
+                <div class="alert alert-light border small mb-4">
+                    <i class="fas fa-info-circle me-1"></i>
+                    This only affects <em>daily goals</em>. Your TBR queue, its order and
+                    all estimated start dates stay exactly the same, a book already in
+                    progress stays in progress, and any reading you do in that format is
+                    still recorded and still counts toward your totals.
+                </div>
+
+                <form id="format-tracking-form">
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" role="switch" id="trackEbook" checked>
+                        <label class="form-check-label" for="trackEbook">
+                            <span class="media-badge-large ebook me-2">Ebook</span>
+                            Track a daily goal
+                        </label>
+                    </div>
+                    <div class="form-check form-switch mb-3">
+                        <input class="form-check-input" type="checkbox" role="switch" id="trackPhysical" checked>
+                        <label class="form-check-label" for="trackPhysical">
+                            <span class="media-badge-large physical me-2">Physical</span>
+                            Track a daily goal
+                        </label>
+                    </div>
+                    <div class="form-check form-switch mb-4">
+                        <input class="form-check-input" type="checkbox" role="switch" id="trackAudio" checked>
+                        <label class="form-check-label" for="trackAudio">
+                            <span class="media-badge-large audio me-2">Audio</span>
+                            Track a daily goal
+                        </label>
+                    </div>
+                    <button type="submit" class="btn btn-primary">
+                        <i class="fas fa-save me-2"></i>Save Goal Tracking
+                    </button>
+                </form>
+            </div>
+        </div>
+
         <!-- Chart Preferences Card -->
         <div class="card mb-4">
             <div class="card-header">
@@ -913,6 +965,7 @@ async function mmPick(relPath, filename) {
 document.addEventListener('DOMContentLoaded', function() {
     loadWpdMode();
     loadReadingSpeeds();
+    loadFormatTracking();
     loadChartPreferences();
     loadLeftHandedMode();
     loadBackfillStatus();
@@ -1112,6 +1165,19 @@ async function runAutofulfill() {
     if (btn) btn.disabled = false;
 }
 
+// ── Daily goal tracking per format (#289) ────────────────────────────────────
+async function loadFormatTracking() {
+    try {
+        const t = await GreatReads.apiCall('/settings/format-tracking') || {};
+        document.getElementById('trackEbook').checked = t.ebook !== false;
+        document.getElementById('trackPhysical').checked = t.physical !== false;
+        document.getElementById('trackAudio').checked = t.audio !== false;
+    } catch (e) {
+        // Fail open: leave every switch on rather than imply tracking is off.
+        console.error('Error loading format tracking:', e);
+    }
+}
+
 async function loadWpdMode() {
     try {
         const modeResp = await GreatReads.apiCall('/settings/wpd-mode');
@@ -1232,6 +1298,21 @@ function applyLeftHandedMode(isLeftHanded) {
 }
 
 // Handle form submission
+document.getElementById('format-tracking-form').addEventListener('submit', async function(e) {
+    e.preventDefault();
+    const data = {
+        ebook: document.getElementById('trackEbook').checked,
+        physical: document.getElementById('trackPhysical').checked,
+        audio: document.getElementById('trackAudio').checked,
+    };
+    try {
+        await GreatReads.apiCall('/settings/format-tracking', { method: 'PUT', data });
+        GreatReads.showToast('Goal tracking saved', 'success');
+    } catch (err) {
+        GreatReads.showToast('Failed to save goal tracking', 'error');
+    }
+});
+
 document.getElementById('reading-speeds-form').addEventListener('submit', async function(e) {
     e.preventDefault();
 

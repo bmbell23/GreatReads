@@ -218,10 +218,14 @@ async function loadDailyGoals() {
     const host = document.getElementById('daily-goals');
     if (!card || !host) return;
     try {
-        const [speeds, activity] = await Promise.all([
+        const [speeds, activity, tracking] = await Promise.all([
             GreatReads.apiCall('/settings/reading-speeds'),
             GreatReads.apiCall('/stats/activity'),
+            // #289: per-format daily-goal tracking. Fails OPEN (track everything)
+            // so a settings hiccup never silently hides the user's goal bars.
+            GreatReads.apiCall('/settings/format-tracking').catch(() => null),
         ]);
+        const isTracked = (fmt) => !tracking || tracking[fmt.toLowerCase()] !== false;
         const d = new Date(), p = n => String(n).padStart(2, '0');
         const today = `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
         const dailyWords = (activity && activity.daily_words) || {};
@@ -230,6 +234,10 @@ async function loadDailyGoals() {
         const FMTS = [['Audio', 'audio_wpd'], ['Ebook', 'ebook_wpd'], ['Physical', 'physical_wpd']];
         let tW = 0, tG = 0, tM = 0;   // combined totals across shown formats (#246)
         const rows = FMTS.map(([fmt, key]) => {
+            // Switched off for daily tracking (#289): no bar, and excluded from
+            // the combined total below — we're not expecting to read it. The
+            // format's *_wpd is untouched, so TBR estimates are unaffected.
+            if (!isTracked(fmt)) return '';
             const goal = (speeds && speeds[key]) || 0;
             if (goal <= 0) return '';
             const words = ((dailyWords[fmt] || {})[today]) || 0;

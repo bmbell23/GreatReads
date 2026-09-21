@@ -1972,6 +1972,13 @@ function renderActivity() {
 // Goal = the per-format words/day from settings (reading-speeds). A day is
 // "met" for a format when that day's logged words reach the format's goal.
 const GOAL_FMTS = [['Ebook','ebook_wpd'],['Audio','audio_wpd'],['Physical','physical_wpd']];
+// #289: formats switched off for daily-goal tracking. Only the GOAL machinery
+// (legend, calendar dots, met/celebration, goal totals) honours this — the
+// actual-reading readouts (per-format words/time and the day total) still cover
+// every format, because an untracked format is still READ and still counts.
+let goalTracking = { ebook: true, physical: true, audio: true };
+const _isTracked = (f) => goalTracking[String(f).toLowerCase()] !== false;
+const trackedGoalFmts = () => GOAL_FMTS.filter(([f]) => _isTracked(f));
 let goalChart = null;
 let goalGoals = {};          // {ebook_wpd, audio_wpd, physical_wpd}
 let goalMonth = null;        // Date pinned to the 1st of the displayed month
@@ -1984,7 +1991,7 @@ function _ymd(y, m, d) { return `${y}-${String(m + 1).padStart(2, '0')}-${String
 function _todayStr() { const t = new Date(); return _ymd(t.getFullYear(), t.getMonth(), t.getDate()); }
 function _wordsOn(fmt, ds) { const dw = (activityData && activityData.daily_words) || {}; return (dw[fmt] && dw[fmt][ds]) || 0; }
 function _minutesOn(fmt, ds) { const dm = (activityData && activityData.daily_minutes) || {}; return (dm[fmt] && dm[fmt][ds]) || 0; }
-function _dailyGoalTotal() { return GOAL_FMTS.reduce((s, [, k]) => s + (Number(goalGoals[k]) || 0), 0); }
+function _dailyGoalTotal() { return trackedGoalFmts().reduce((s, [, k]) => s + (Number(goalGoals[k]) || 0), 0); }
 function _daysInMonth(y, m) { return new Date(y, m + 1, 0).getDate(); }
 function _daysInYear(y) { return ((y % 4 === 0 && y % 100 !== 0) || y % 400 === 0) ? 366 : 365; }
 // Fetch & cache a day's reading sessions for the intraday 'Today' chart (#83).
@@ -1996,6 +2003,9 @@ async function ensureDaySessions(ds) {
 
 async function loadGoals() {
     try { goalGoals = await GreatReads.apiCall('/settings/reading-speeds') || {}; } catch (_) { goalGoals = {}; }
+    // #289: which formats still get a daily goal. Fails OPEN (track everything)
+    // so a settings hiccup never silently hides the user's goals.
+    try { goalTracking = await GreatReads.apiCall('/settings/format-tracking') || goalTracking; } catch (_) {}
     if (!activityData) { try { activityData = await GreatReads.apiCall('/stats/activity'); } catch (_) { activityData = {}; } }
     await ensureDaySessions(_todayStr());
     if (!goalMonth) { const t = new Date(); goalMonth = new Date(t.getFullYear(), t.getMonth(), 1); }
@@ -2012,7 +2022,7 @@ async function loadGoals() {
 function renderGoalCalendar() {
     const y = goalMonth.getFullYear(), m = goalMonth.getMonth();
     document.getElementById('goalMonthLabel').textContent = goalMonth.toLocaleDateString('en-US', { month: 'long', year: 'numeric' });
-    document.getElementById('goalLegend').innerHTML = GOAL_FMTS.map(([f, k]) =>
+    document.getElementById('goalLegend').innerHTML = trackedGoalFmts().map(([f, k]) =>
         (goalGoals[k] ? `<span class="me-3 d-inline-block"><span class="goal-dot met" style="background:${COLORS[f]}"></span> ${f} ${Number(goalGoals[k]).toLocaleString()}/day</span>` : '')).join('') ||
         '<span class="text-muted">No per-format word goals set (Settings → reading speeds).</span>';
 
@@ -2022,10 +2032,10 @@ function renderGoalCalendar() {
     const n = _daysInMonth(y, m);
     for (let i = 0; i < startDow; i++) html += '<div class="goal-cal-day empty"></div>';
     const today = _todayStr();
-    const goalsSet = GOAL_FMTS.filter(([, k]) => (goalGoals[k] || 0) > 0);
+    const goalsSet = trackedGoalFmts().filter(([, k]) => (goalGoals[k] || 0) > 0);
     for (let d = 1; d <= n; d++) {
         const ds = _ymd(y, m, d);
-        const dots = GOAL_FMTS.map(([f, k]) => {
+        const dots = trackedGoalFmts().map(([f, k]) => {
             const goal = goalGoals[k] || 0, w = _wordsOn(f, ds);
             if (!goal && !w) return '';
             const met = goal > 0 && w >= goal;
@@ -2055,7 +2065,9 @@ function renderGoalDayDetail() {
     const date = new Date(ds + 'T00:00:00');
     // Per format: words (vs goal) plus time spent, so the day detail shows both.
     const parts = GOAL_FMTS.map(([f, k]) => {
-        const goal = goalGoals[k] || 0, w = _wordsOn(f, ds), mn = _minutesOn(f, ds);
+        // Untracked formats (#289) still show what was read — just no goal.
+        const goal = _isTracked(f) ? (goalGoals[k] || 0) : 0;
+        const w = _wordsOn(f, ds), mn = _minutesOn(f, ds);
         if (!goal && !w && !mn) return null;
         const met = goal > 0 && w >= goal;
         const tbit = mn ? ` <span class="text-muted">(${_fmtHours(mn)})</span>` : '';
