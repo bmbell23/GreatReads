@@ -1781,6 +1781,12 @@ async function grSaveRatings() {
     catch (e) { if (typeof showToast === 'function') showToast('Save failed', 'danger'); return; }
     const reading = grRatingsState.readings.find(x => x.id === rid);
     if (reading) GR_RATING_CATS.forEach(([key]) => { reading['rating_' + key] = data['rating_' + key]; });
+    // Dismiss on a SUCCESSFUL save only (#287). The early `return` in the catch
+    // above leaves the modal open on failure, so a failed save keeps the entered
+    // ratings on screen instead of discarding them. Mirrors grOpenRatings()'s
+    // getOrCreateInstance(...).show().
+    const modalEl = document.getElementById('viewRatingsModal');
+    if (modalEl) bootstrap.Modal.getOrCreateInstance(modalEl).hide();
     if (typeof showToast === 'function') showToast('Ratings saved', 'success');
     if (typeof window.refreshReadings === 'function') { try { window.refreshReadings(); } catch (e) {} }
 }
