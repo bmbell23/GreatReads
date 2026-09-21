@@ -1335,14 +1335,14 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
                     <i class="fas fa-pen-to-square me-2 text-primary"></i>Edit Book
                 </button>` : '';
 
-    // Check Libby (#154, widened #215): show whenever a DIGITAL format is still
-    // missing — owning the audiobook must not hide the path to borrow the ebook
-    // (and vice versa; physical-only ownership doesn't hide it either). The Libby
-    // panel it opens shows BOTH format rows — the owned one as 'Borrow again',
-    // the missing one as Borrow & Download. Hidden only when ebook AND audiobook
-    // are both owned.
-    const grDigitallyComplete = grOwnsFormat('owned_ebook') && grOwnsFormat('owned_audio');
-    const libbyCheckLink = (!grDigitallyComplete && book.title && typeof grCheckLibby === 'function') ? `
+    // Check Libby (#154, widened #215, ungated #292): always available for a
+    // titled book. It used to be hidden once ebook AND audiobook were both owned
+    // (`grDigitallyComplete`) on the theory that there was nothing left to get —
+    // but owning a format says nothing about whether the FILE is any good, and
+    // that gate left no way to replace a bad or incomplete copy (Black House).
+    // The panel it opens now offers a deliberate 'Borrow again' on owned formats
+    // (#292), so there is always something actionable behind this button.
+    const libbyCheckLink = (book.title && typeof grCheckLibby === 'function') ? `
                 <button type="button" class="btn btn-sm btn-outline-info"
                         onclick="grCheckLibby('${titleEnc}','${authorEnc}')">
                     <i class="fas fa-building-columns me-2"></i>Check Libby

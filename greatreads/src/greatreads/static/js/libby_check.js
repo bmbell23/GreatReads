@@ -234,12 +234,31 @@ function libbyFormatsHtml(c) {
         const libs = _libbyFmtLibs(fmt);
         const sel = _libbyFmtSelected(s.media, fmt);
         const card = sel ? String(sel.cardId) : '';
-        // Per-format ownership (#225): show "In Library" for a format you own
-        // instead of "Borrow again", and hide its library chooser.
+        // Per-format ownership (#225): an owned format leads with "In Library"
+        // rather than a primary Borrow button — but still offers a deliberate
+        // re-borrow so a bad copy can be replaced (#292).
         const ownThis = (s.media === 'ebook' && c.grOwnedEbook) || (s.media === 'audiobook' && c.grOwnedAudio);
         let action, avail;
         if (ownThis) {
-            action = '<span class="badge bg-success"><i class="fas fa-check me-1"></i>In Library</span>';
+            // #292: owning a format is NOT evidence the file is any good — a bad
+            // or incomplete copy can only be replaced by borrowing it again, and
+            // #225 had made owned rows completely inert (badge only, chooser
+            // hidden), so a book owned in both formats offered nothing to click.
+            // Keep "In Library" as the primary signal, but attach a deliberate,
+            // visually-subordinate re-borrow (outline, never primary) so it can
+            // never be mistaken for the normal borrow path.
+            const badge = '<span class="badge bg-success"><i class="fas fa-check me-1"></i>In Library</span>';
+            let again;
+            if (fmt.onHold) {
+                again = '<span class="badge bg-info text-dark ms-1"><i class="fas fa-clock me-1"></i>On hold</span>';
+            } else if (sel && sel.isAvailable) {
+                again = `<button class="btn btn-sm btn-outline-secondary ms-1" title="Borrow again to replace your copy"
+                    onclick="${s.fn}('${fmt.titleId}','${card}',this)"><i class="fas fa-rotate me-1"></i>Borrow again</button>`;
+            } else {
+                again = `<button class="btn btn-sm btn-outline-secondary ms-1" title="Place a hold to replace your copy"
+                    onclick="libbyPlaceHoldFmt('${fmt.titleId}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
+            }
+            action = badge + again;
             avail = '<span class="text-success small">In your library</span>';
         } else if (fmt.onHold) {
             action = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>On hold</span>';
@@ -254,8 +273,10 @@ function libbyFormatsHtml(c) {
         // Library chooser (#214): always show WHERE this borrow/hold goes — a
         // select when there's a choice, plain text when there's exactly one.
         // Owned formats (#225) don't need it.
+        // Owned rows now DO get the chooser (#292) — a re-borrow still has to say
+        // which library it comes from. Only an on-hold row has nothing to choose.
         let fromHtml = '';
-        if (ownThis) {
+        if (ownThis && fmt.onHold) {
             fromHtml = '';
         } else if (libs.length > 1) {
             const opts = libs.map(l =>
