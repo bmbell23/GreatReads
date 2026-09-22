@@ -2057,6 +2057,23 @@ def get_book_cover(book_id, type: str = 'cover'):
         placeholder = '<svg width="200" height="300" xmlns="http://www.w3.org/2000/svg"><rect fill="#333"/></svg>'
         return Response(content=placeholder, media_type='image/svg+xml')
 
+@router.get('/api/ebooks/{book_id}/fingerprint')
+def ebook_fingerprint(book_id, format: str | None = None):
+    """#294: the size Calibre would serve, so the reader can tell whether the copy
+    it cached is still the current file. A HEAD -- no book body is transferred."""
+    fmt = (format or 'epub').lower()
+    try:
+        r = requests.head(f'{CALIBRE_URL}/get/{fmt}/{book_id}/{CALIBRE_LIBRARY}',
+                          timeout=10, allow_redirects=True)
+        if r.status_code >= 400:
+            return JSONResponse({'ok': False}, status_code=r.status_code)
+        n = r.headers.get('Content-Length')
+        return {'ok': True, 'bytes': int(n) if n and n.isdigit() else None,
+                'etag': r.headers.get('ETag')}
+    except Exception as exc:                                  # noqa: BLE001
+        return JSONResponse({'ok': False, 'error': str(exc)[:200]}, status_code=502)
+
+
 @router.get('/api/ebooks/{book_id}/download')
 def download_book(book_id, format: str | None = None):
     """Download a book file from Calibre"""

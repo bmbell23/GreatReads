@@ -2178,7 +2178,25 @@
                         online: navigator.onLine !== false,
                     });
                 }
-                if (cached && cached.blob) {
+                // #294: a cached blob must not outrank a file that changed on the
+                // server. Black House kept showing its broken one-entry TOC on this
+                // device long after the EPUB was repaired. Cheap size check; if we
+                // are offline or the check fails, the cached copy still opens.
+                let staleCache = false, freshBlob = null;
+                if (cached && cached.blob && navigator.onLine !== false) {
+                    const probe = await serverEpubProbe(bookId);
+                    staleCache = !!probe.bytes && probe.bytes !== cached.blob.size;
+                    if (staleCache) {
+                        console.log('♻️ Server copy changed', cached.blob.size,
+                                    '→', probe.bytes, '- replacing cached copy');
+                        freshBlob = probe.blob;
+                        putCachedBookBlob(bookId, 'epub', probe.blob, { title });
+                    }
+                }
+                _mark('cache_freshness');
+                if (freshBlob) {
+                    arrayBuffer = await freshBlob.arrayBuffer();
+                } else if (cached && cached.blob && !staleCache) {
                     console.log('📦 Using cached blob, size:', cached.blob.size);
                     arrayBuffer = await cached.blob.arrayBuffer();
                 } else {
@@ -6640,6 +6658,33 @@
                 } catch (e) { resolve(null); }
             });
         }
+        // #294: what the server currently holds for this book, so a cached copy
+        // can be checked against it. Prefers the cheap fingerprint endpoint (size
+        // only, no body). A server that predates it forces the honest route: pull
+        // the file and hand the blob back so the caller reuses it rather than
+        // downloading twice. {bytes: 0} means "could not tell" -> keep the cache.
+        async function serverEpubProbe(bookId) {
+            const ctl = new AbortController();
+            const abort = setTimeout(() => ctl.abort(), 20000);
+            try {
+                const fp = await fetch(`${API_URL}/ebooks/${bookId}/fingerprint?format=epub`,
+                                       { signal: ctl.signal, cache: 'no-store' });
+                if (fp.ok) {
+                    const info = await fp.json();
+                    if (info && info.bytes) return { bytes: Number(info.bytes), blob: null };
+                }
+                const r = await fetch(`${API_URL}/ebooks/${bookId}/download?format=epub`,
+                                      { signal: ctl.signal, cache: 'no-store' });
+                if (!r.ok) return { bytes: 0, blob: null };
+                const blob = await r.blob();
+                return { bytes: blob.size, blob };
+            } catch (e) {
+                return { bytes: 0, blob: null };   // offline, slow, or blocked
+            } finally {
+                clearTimeout(abort);
+            }
+        }
+
         // Persist the EPUB blob. Merges over any existing record (read→modify
         // →write within one tx) so we never clobber title/author already
         // annotated by a prior open. `meta` is optional {title, author} (#54).

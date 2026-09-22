@@ -482,15 +482,112 @@ async def libby_audiobook_download(
         "borrow": payload.borrow,
         "return_after": payload.return_after,
     }, timeout=45.0)
+
+    from ..services.event_log_service import log_event
+
+    # The engine's /api/audiobook/download only STARTS a background thread and
+    # returns immediately, so `resp.status_code < 400` means "the job was
+    # accepted", NOT "MP3s landed". Logging success here was a lie: harvests that
+    # produced nothing still wrote `audiobook_download success` (#238). A failed
+    # kick-off is still a genuine, immediate failure — log that one now.
+    if resp.status_code >= 400:
+        try:
+            log_event("libby", "audiobook_download_failed", level="error",
+                      title=payload.title or "",
+                      detail={"title_id": payload.title_id, "manual": True,
+                              "phase": "start", "error": f"HTTP {resp.status_code}"})
+        except Exception:
+            pass
+        return resp
+
     try:
-        from ..services.event_log_service import log_event
-        ok = resp.status_code < 400
-        log_event("libby", "audiobook_download" if ok else "audiobook_download_failed",
-                  level="success" if ok else "error", title=payload.title or "",
-                  detail={"title_id": payload.title_id, "manual": True})
+        log_event("libby", "audiobook_download_start", level="info",
+                  title=payload.title or "",
+                  detail={"title_id": payload.title_id, "manual": True,
+                          "borrowed": bool(payload.borrow)})
     except Exception:
         pass
+    _watch_audiobook_download(payload.title_id, payload.title or "", bool(payload.borrow),
+                              bool(payload.return_after))
     return resp
+
+
+# Poll cadence/ceiling for the harvest watcher. A full audiobook is tens of
+# minutes of real downloading, so the ceiling is generous; the watcher exits the
+# moment the engine reports a terminal phase.
+_AUDIOBOOK_POLL_SECONDS = 10.0
+_AUDIOBOOK_MAX_WATCH_SECONDS = 90 * 60
+
+
+def _watch_audiobook_download(title_id: str, title: str, borrowed: bool, return_after: bool) -> None:
+    """Follow an audiobook harvest to its TERMINAL state and log what really happened (#238).
+
+    The engine exposes a single global job whose status carries `active` plus a
+    `phase` of 'done' or 'error'. We poll until one of those appears and only
+    then write the activity-log outcome — so `audiobook_download success` means
+    files actually landed, and a failure carries the engine's real error instead
+    of being silently recorded as a success.
+    """
+    from ..services.event_log_service import log_event
+
+    async def _run():
+        deadline = time.time() + _AUDIOBOOK_MAX_WATCH_SECONDS
+        try:
+            while time.time() < deadline:
+                await asyncio.sleep(_AUDIOBOOK_POLL_SECONDS)
+                try:
+                    async with httpx.AsyncClient(timeout=20.0) as client:
+                        r = await client.get(f"{LIBBY_ENGINE_URL}/api/audiobook/download/status")
+                    st = r.json() or {}
+                except Exception:
+                    continue          # transient engine blip — keep watching
+
+                # The engine runs ONE job at a time and its status is global, so a
+                # different title_id means ours was superseded. Stop watching
+                # rather than report another book's outcome as ours.
+                got_id = str(st.get("title_id") or "")
+                if got_id and got_id != str(title_id):
+                    logger.info("audiobook watcher for %s superseded by %s", title_id, got_id)
+                    return
+
+                phase = str(st.get("phase") or "")
+                if st.get("active") or phase not in ("done", "error"):
+                    continue
+
+                if phase == "done":
+                    log_event("libby", "audiobook_download", level="success", title=title,
+                              detail={"title_id": title_id, "manual": True,
+                                      "parts": st.get("parts_done"),
+                                      "parts_total": st.get("parts_total"),
+                                      "bytes": st.get("bytes"),
+                                      "folder": st.get("folder"),
+                                      "message": str(st.get("message") or "")[:300]})
+                else:
+                    # The loan is deliberately NOT auto-returned on failure: the
+                    # fallback harvest (AnyLibro) needs it still checked out. But
+                    # it must not be silently orphaned either (#238) — say so.
+                    loan_state = ("still checked out" if (borrowed and not return_after)
+                                  else "not borrowed by this run")
+                    log_event("libby", "audiobook_download_failed", level="error", title=title,
+                              detail={"title_id": title_id, "manual": True,
+                                      "phase": str(st.get("phase") or ""),
+                                      "loan": loan_state,
+                                      "parts": st.get("parts_done"),
+                                      "error": str(st.get("error") or st.get("message") or "")[:400]})
+                return
+
+            log_event("libby", "audiobook_download_failed", level="error", title=title,
+                      detail={"title_id": title_id, "manual": True, "phase": "timeout",
+                              "loan": ("still checked out" if (borrowed and not return_after)
+                                       else "not borrowed by this run"),
+                              "error": f"No terminal status after {_AUDIOBOOK_MAX_WATCH_SECONDS // 60} min"})
+        except Exception as exc:
+            logger.warning("audiobook watcher %s failed: %s", title_id, exc)
+        finally:
+            _bg_downloads.discard(task)
+
+    task = asyncio.create_task(_run())
+    _bg_downloads.add(task)
 
 
 @router.get("/audiobook/download/status")

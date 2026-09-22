@@ -211,9 +211,32 @@ function _idbGet(store, key) {
         } catch (_) { resolve(null); }
     }));
 }
+// #294: the cached manifest carries the chapter list, so a book downloaded
+// before its chapters were fixed shows the old junk TOC for ever (Black House
+// still listed "Black House_1..28" long after ABS held 30 real chapters). The
+// blobs are what matter offline; the metadata is tiny, so refresh it whenever we
+// are online and keep the cached copy otherwise.
 async function getCachedManifest(absId) {
     const rec = await _idbGet('cacheMeta', 'manifest:' + absId);
-    return rec && rec.manifest ? rec.manifest : null;
+    const cached = rec && rec.manifest ? rec.manifest : null;
+    if (!cached || navigator.onLine === false) return cached;
+    try {
+        const r = await fetch(`${API_URL}/audiobooks/${encodeURIComponent(absId)}/tracks`,
+                              { cache: 'no-store' });
+        if (!r.ok) return cached;
+        const fresh = await r.json();
+        if (!fresh || !(fresh.tracks || []).length) return cached;
+        const before = JSON.stringify((cached.chapters || []).map(c => c.title));
+        const after = JSON.stringify((fresh.chapters || []).map(c => c.title));
+        if (before !== after) {
+            console.log('[#294] chapters changed on the server - refreshing cached manifest',
+                        (cached.chapters || []).length, '→', (fresh.chapters || []).length);
+        }
+        _idbPut('cacheMeta', { id: 'manifest:' + absId, manifest: fresh, cachedAt: Date.now() });
+        return fresh;
+    } catch (_) {
+        return cached;                       // offline or blocked: cache still plays
+    }
 }
 async function getCachedTrackBlob(absId, ino) {
     const rec = await _idbGet('audio', absId + ':' + ino);
