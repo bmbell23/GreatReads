@@ -1520,7 +1520,7 @@
 
     <!-- Transparent page progress bar at bottom — two stacked rows.
          Row 1 (metrics, top):  chapter time left | time on current page |
-                                WPM / WPP | avg sec/page | book time left
+                                "<n>wpm·<n>wpp" | avg sec/page | book time left
          Row 2 (progress, btm): chapter page x/y | chapter title | book x/y
          Row 1 is hidden until we have ≥3 valid page samples to avoid
          flashing meaningless "—" values before the reader settles. -->
@@ -1532,9 +1532,13 @@
         <!-- Row 1: live reading-speed metrics. Floated ~10px above Row 2 via margin-bottom. -->
         <div id="progress-metrics" style="display:none;align-items:baseline;line-height:1.4;margin-bottom:5px;">
             <span id="metric-chapter-remain" style="flex:0 0 auto;white-space:nowrap;"></span>
-            <span id="metric-page-now"       style="flex:1;text-align:left;padding-left:16px;white-space:nowrap;"></span>
-            <span id="metric-wpm-wpp"        style="flex:0 0 auto;white-space:nowrap;text-align:center;padding:0 8px;"></span>
-            <span id="metric-page-avg"       style="flex:1;text-align:right;padding-right:16px;white-space:nowrap;"></span>
+            <!-- #293: spacer padding trimmed 16->8 (and 8->6 on the middle cell)
+                 to pay for the longer, labelled wpm/wpp text below. These are
+                 minimum gaps only — both flex:1 cells still absorb slack on a
+                 wide screen, so the row looks unchanged there. -->
+            <span id="metric-page-now"       style="flex:1;text-align:left;padding-left:8px;white-space:nowrap;"></span>
+            <span id="metric-wpm-wpp"        style="flex:0 0 auto;white-space:nowrap;text-align:center;padding:0 6px;"></span>
+            <span id="metric-page-avg"       style="flex:1;text-align:right;padding-right:8px;white-space:nowrap;"></span>
             <span id="metric-book-remain"    style="flex:0 0 auto;white-space:nowrap;text-align:right;"></span>
         </div>
         <!-- Row 2: existing chapter/book progress (unchanged behaviour) -->
@@ -4057,8 +4061,18 @@
             document.getElementById('metric-chapter-remain').textContent =
                 chRemain != null ? _fmtHMS(chRemain) : '—';
             document.getElementById('metric-page-now').textContent = pageSecNow + 's';
+            // #293: label both values and separate them with '·', not '/'.
+            // words-per-MINUTE over words-per-PAGE is not a ratio — the bare
+            // "250 / 310" read as a fraction of something. Each value now
+            // carries its own unit and falls back to '—' independently.
+            // The '·' is deliberately UNSPACED: measured at 11px monospace,
+            // "999wpm · 999wpp" needs a ~388px viewport and overflowed the row
+            // on a 360px phone; unspaced (plus the trimmed spacer padding on
+            // the markup above) it fits 360px with worst-case 3-digit values.
             document.getElementById('metric-wpm-wpp').textContent =
-                (wpm != null && wpp != null) ? `${wpm} / ${Math.round(wpp)}` : '—';
+                (wpm != null || wpp != null)
+                    ? `${wpm != null ? wpm : '—'}wpm·${wpp != null ? Math.round(wpp) : '—'}wpp`
+                    : '—';
             document.getElementById('metric-page-avg').textContent =
                 avgSec != null ? Math.round(avgSec) + 's' : '—';
             document.getElementById('metric-book-remain').textContent =
