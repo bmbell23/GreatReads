@@ -581,13 +581,52 @@ def _gr_book_id_for(book_key):
     except Exception:
         return None
 
+# #295: MediaForge publishes a chapter-anchor map per audiobook, built from the
+# EPUB's character offsets and ABS's verified chapter times. It needs no reader
+# involvement, so it covers books nobody has opened here yet — where the only
+# alternative is a global percentage (23 minutes out, on Black House).
+SYNC_MAP_DIR = os.environ.get('SYNC_MAP_DIR', '/media/sync-maps')
+_sync_map_cache = {}
+
+def _mediaforge_align_map(abs_id):
+    """[{title, ef, af}] from MediaForge's map for this ABS item, or None."""
+    if not abs_id:
+        return None
+    path = os.path.join(SYNC_MAP_DIR, f'{abs_id}.json')
+    try:
+        mtime = os.path.getmtime(path)
+    except OSError:
+        return None
+    hit = _sync_map_cache.get(abs_id)
+    if hit and hit[0] == mtime:
+        return hit[1]
+    try:
+        with open(path) as fh:
+            data = json.load(fh)
+        pts = [{'title': f"Chapter {a['n']}" if a.get('n') else '',
+                'ef': float(a['ebook_frac']), 'af': float(a['audio_frac'])}
+               for a in (data.get('anchors') or [])
+               if a.get('ebook_frac') is not None and a.get('audio_frac') is not None]
+    except (OSError, ValueError, KeyError, TypeError):
+        return None
+    pts = pts if len(pts) >= 2 else None
+    _sync_map_cache[abs_id] = (mtime, pts)
+    return pts
+
 def _load_align_map(book_key):
-    """Dense alignment map for a reader book_key, or None. Best-effort."""
+    """Dense alignment map for a reader book_key, or None. Best-effort.
+
+    The reader's own upload wins when it has one: its `ef` is a fraction of the
+    reader's anchors, while MediaForge's is a fraction of the book's characters,
+    and the two axes are not interchangeable until measured against each other.
+    """
     bid = _gr_book_id_for(book_key)
     if bid is None:
         return None
     m = _kv_get(f'align:{bid}')
-    return m if (isinstance(m, list) and len(m) >= 2) else None
+    if isinstance(m, list) and len(m) >= 2:
+        return m
+    return _mediaforge_align_map(_abs_id_for_book(bid))
 
 def _writer_fmt_nf(item):
     """(format, native-fraction) that a progress record was written in.
