@@ -464,6 +464,47 @@ class AudiobookDownloadRequest(BaseModel):
     return_after: bool = False
 
 
+class AudiobookManualBorrowRequest(BaseModel):
+    title_id: str
+    card_id: str
+    title: str | None = ""
+
+
+@router.post("/audiobook/borrow-manual")
+async def libby_audiobook_borrow_manual(
+    payload: AudiobookManualBorrowRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Borrow an audiobook on a card that CAN'T harvest (#298) — borrow only.
+
+    Harvest needs the browser chip, which only some cards are attached to; on any
+    other card a harvest is certain to fail, so we skip it entirely and leave the
+    loan checked out for the external tool (AnyLibro) and a manual return. Logged
+    as a deliberate manual borrow (level info), never as a failure."""
+    if not payload.title_id or not payload.card_id:
+        raise HTTPException(status_code=400, detail="title_id and card_id are required.")
+    resp = await _engine_post("/api/borrow", {
+        "title_id": payload.title_id,
+        "card_id": payload.card_id,
+        "title_format": "audiobook-mp3",
+    }, timeout=60.0)
+    try:
+        from ..services.event_log_service import log_event
+        if resp.status_code >= 400:
+            log_event("libby", "borrow_failed", level="error", title=payload.title or "",
+                      detail={"title_id": payload.title_id, "card_id": payload.card_id,
+                              "manual": True, "media": "audiobook",
+                              "error": f"HTTP {resp.status_code}"})
+        else:
+            log_event("libby", "audiobook_borrow_manual", level="info", title=payload.title or "",
+                      detail={"title_id": payload.title_id, "card_id": payload.card_id,
+                              "harvest": "skipped: card not harvest-capable",
+                              "loan": "still checked out for manual fetch + return"})
+    except Exception:
+        pass
+    return resp
+
+
 @router.post("/audiobook/download")
 async def libby_audiobook_download(
     payload: AudiobookDownloadRequest = Body(...),
