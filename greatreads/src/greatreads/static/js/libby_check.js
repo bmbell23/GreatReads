@@ -234,6 +234,10 @@ function libbyFormatsHtml(c) {
         const libs = _libbyFmtLibs(fmt);
         const sel = _libbyFmtSelected(s.media, fmt);
         const card = sel ? String(sel.cardId) : '';
+        // #310: the engine collapses editions, so fmt.titleId may be an edition the
+        // chosen library doesn't own (Piranesi: PPLD owns 13355896, not 6320985 →
+        // TitleNoLongerAvailable). Borrow/hold with the selected library's own edition.
+        const tid = (sel && sel.titleId) || fmt.titleId;
         // Per-format ownership (#225): an owned format leads with "In Library"
         // rather than a primary Borrow button — but still offers a deliberate
         // re-borrow so a bad copy can be replaced (#292).
@@ -253,10 +257,10 @@ function libbyFormatsHtml(c) {
                 again = '<span class="badge bg-info text-dark ms-1"><i class="fas fa-clock me-1"></i>On hold</span>';
             } else if (sel && sel.isAvailable) {
                 again = `<button class="btn btn-sm btn-outline-secondary ms-1" title="Borrow again to replace your copy"
-                    onclick="${s.fn}('${fmt.titleId}','${card}',this)"><i class="fas fa-rotate me-1"></i>Borrow again</button>`;
+                    onclick="${s.fn}('${tid}','${card}',this)"><i class="fas fa-rotate me-1"></i>Borrow again</button>`;
             } else {
                 again = `<button class="btn btn-sm btn-outline-secondary ms-1" title="Place a hold to replace your copy"
-                    onclick="libbyPlaceHoldFmt('${fmt.titleId}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
+                    onclick="libbyPlaceHoldFmt('${tid}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
             }
             action = badge + again;
             avail = '<span class="text-success small">In your library</span>';
@@ -264,10 +268,10 @@ function libbyFormatsHtml(c) {
             action = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>On hold</span>';
             avail = '<span class="text-info small">On hold</span>';
         } else if (sel && sel.isAvailable) {
-            action = `<button class="btn btn-sm btn-primary" onclick="${s.fn}('${fmt.titleId}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>Borrow &amp; Download</button>`;
+            action = `<button class="btn btn-sm btn-primary" onclick="${s.fn}('${tid}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>Borrow &amp; Download</button>`;
             avail = '<span class="text-success small fw-semibold">Available now</span>';
         } else {
-            action = `<button class="btn btn-sm btn-outline-warning" onclick="libbyPlaceHoldFmt('${fmt.titleId}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
+            action = `<button class="btn btn-sm btn-outline-warning" onclick="libbyPlaceHoldFmt('${tid}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
             avail = `<span class="text-warning small">${esc(libbyWaitText(sel ? sel.estimatedWaitDays : fmt.estimatedWaitDays))}</span>`;
         }
         // Library chooser (#214): always show WHERE this borrow/hold goes — a
@@ -452,6 +456,13 @@ function _libbySelectedCard() {
     const first = (libbyActive && libbyActive.libraries || [])[0];
     return first ? String(first.cardId) : '';
 }
+// The edition the given card's library actually owns (#310); falls back to the
+// row's collapsed id until every engine response carries libraries[].titleId.
+function _libbyTitleIdFor(cardId) {
+    const c = libbyActive; if (!c) return '';
+    const lib = (c.libraries || []).find(l => String(l.cardId) === String(cardId));
+    return String((lib && lib.titleId) || c.title_id);
+}
 
 // Borrow → fulfill → .acsm → watcher → Calibre → GreatReads. ASYNC (#186): the engine
 // borrow can take minutes via the OverDrive-website path — long enough to trip a
@@ -471,8 +482,8 @@ function _libbyResetBorrowBtn() {
 }
 async function libbyBorrow(titleId, cardId, btn) {
     const c = libbyActive; if (!c) return;
-    titleId = titleId || c.title_id;
     cardId = cardId || _libbySelectedCard();
+    titleId = titleId || _libbyTitleIdFor(cardId);   // #310: that library's own edition
     btn = btn || document.getElementById('libbyBorrowBtn');
     if (!cardId) { showToast('No library card available to borrow on.', 'warning'); return; }
     const orig = btn ? btn.innerHTML : '';
@@ -524,8 +535,8 @@ async function libbyBorrow(titleId, cardId, btn) {
 // background job in the engine (single global status), pollable while it runs.
 async function libbyBorrowAudiobook(titleId, cardId, btn) {
     const c = libbyActive; if (!c) return;
-    titleId = titleId || c.title_id;
     cardId = cardId || _libbySelectedCard();
+    titleId = titleId || _libbyTitleIdFor(cardId);   // #310: that library's own edition
     btn = btn || document.getElementById('libbyBorrowBtn');
     if (!cardId) { showToast('No library card available to borrow on.', 'warning'); return; }
     const orig = btn ? btn.innerHTML : '';
@@ -593,7 +604,7 @@ async function libbyPlaceHold() {
     const btn = document.getElementById('libbyHoldBtn');
     if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Placing hold…'; }
     try {
-        await GreatReads.apiCall('/libby/holds/place', { method: 'POST', data: { title_id: c.title_id, card_id: cardId }, silent: true });
+        await GreatReads.apiCall('/libby/holds/place', { method: 'POST', data: { title_id: _libbyTitleIdFor(cardId), card_id: cardId }, silent: true });
         showToast('Hold placed.', 'success');
         if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>On hold';
         grLibbyAddWishlist(c, true);   // #170: anything on hold is also on the Wishlist
