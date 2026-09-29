@@ -588,6 +588,38 @@ def _gr_book_id_for(book_key):
 SYNC_MAP_DIR = os.environ.get('SYNC_MAP_DIR', '/media/sync-maps')
 _sync_map_cache = {}
 
+def _abs_chapters_hash(abs_id):
+    """MediaForge's chapters_hash recomputed from the LIVE ABS item, or None.
+
+    Their definition, recovered by matching a known map's value rather than guessed:
+    sha256 of "|".join(f"{round(start,3)}:{title}") over chapters in ABS order, first
+    16 hex. The separator and the number formatting BOTH matter — "\n" as separator,
+    or "%.3f" instead of str(round(...)), each produce a different digest and would
+    make every map look stale (they did: all 80 were refused before this was pinned
+    down). Used only to detect a map that predates the current chapters.
+    """
+    try:
+        chapters, _dur = _abs_chapters_and_duration(abs_id)
+        chapters = chapters or []
+        if not chapters:
+            return None
+        # Coercion matches MediaForge's `chapters_hash_algo` exactly: a missing or
+        # non-numeric start becomes 0.0 and a missing title becomes "" rather than
+        # raising. They coerce, so we must too — otherwise one malformed chapter
+        # makes us throw where they produce a digest, and the map looks stale.
+        parts = []
+        for c in chapters:
+            try:
+                start = round(float(c.get('start') or 0), 3)
+            except (TypeError, ValueError):
+                start = 0.0
+            parts.append(f"{start}:{c.get('title') or ''}")
+        import hashlib
+        return hashlib.sha256('|'.join(parts).encode('utf-8')).hexdigest()[:16]
+    except Exception:
+        return None
+
+
 def _mediaforge_align_map(abs_id):
     """[{title, ef, af}] from MediaForge's map for this ABS item, or None."""
     if not abs_id:
@@ -603,6 +635,37 @@ def _mediaforge_align_map(abs_id):
     try:
         with open(path) as fh:
             data = json.load(fh)
+        # ── Provenance gate (#298, agreed with MediaForge on agent-bus thread 001) ──
+        # MediaForge stamps every map with where the chapters came from and, when it
+        # installed them, how well they verified. Skipping a book that verified
+        # `wrong` is done on their side (no file is published at all), but an absent
+        # verdict is NOT automatically safe, so gate explicitly:
+        #   original            → the PUBLISHER's chapters, never touched. Trust.
+        #   mediaforge/verified → installed and checked. Trust.
+        #   mediaforge/partial  → installed, ~80-84% of marks land. Usable.
+        #   mediaforge/unchecked→ installed, never verified. REFUSE — better to fall
+        #                         back to the reader's own map (#266) than to move the
+        #                         player using marks nobody has checked.
+        source = (data.get('chapters_source') or '').strip().lower()
+        verdict = (data.get('chapters_verdict') or '').strip().lower()
+        if source == 'mediaforge' and verdict not in ('verified', 'partial'):
+            print(f"sync-map {abs_id} refused: source={source} verdict={verdict or 'none'}")
+            _sync_map_cache[abs_id] = (mtime, None)
+            return None
+        # ── Freshness gate ──
+        # `audio_seconds` alone cannot catch a map whose ANCHORS moved while the total
+        # duration stayed identical — exactly what installing new chapters over the
+        # same audio produces. `chapters_hash` (sha256 over "round(start,3):title" per
+        # chapter in ABS order, first 16 hex) does catch it. Recompute from the live
+        # item; a mismatch means the map predates the current chapters.
+        want_hash = (data.get('chapters_hash') or '').strip()
+        if want_hash:
+            live = _abs_chapters_hash(abs_id)
+            if live and live != want_hash:
+                print(f"sync-map {abs_id} refused: stale chapters_hash "
+                      f"(map={want_hash} live={live})")
+                _sync_map_cache[abs_id] = (mtime, None)
+                return None
         pts = [{'title': f"Chapter {a['n']}" if a.get('n') else '',
                 'ef': float(a['ebook_frac']), 'af': float(a['audio_frac'])}
                for a in (data.get('anchors') or [])
@@ -617,8 +680,13 @@ def _load_align_map(book_key):
     """Dense alignment map for a reader book_key, or None. Best-effort.
 
     The reader's own upload wins when it has one: its `ef` is a fraction of the
-    reader's anchors, while MediaForge's is a fraction of the book's characters,
-    and the two axes are not interchangeable until measured against each other.
+    reader's ANCHORS, while MediaForge's is a fraction of the book's CHARACTERS.
+    Those axes are NOT interchangeable — measured on Black House (agent-bus thread
+    001), feeding a reader `ef` into MediaForge's axis lands a median 2626 s and up
+    to 4549 s out, i.e. 4.76% of duration, while the same map fed a genuine character
+    fraction is accurate to a median 1.9 s. The map is excellent on its own axis and
+    catastrophic on the wrong one, so ONE SOURCE PER BOOK — never blend points from
+    both into a single interpolation.
     """
     bid = _gr_book_id_for(book_key)
     if bid is None:
