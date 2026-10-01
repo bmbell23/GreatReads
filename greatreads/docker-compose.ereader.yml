@@ -67,8 +67,11 @@ services:
       # proxy (routes/libby.py) reaches it via the host gateway, same as
       # Calibre/ABS. All Libby secrets stay server-side behind this proxy.
       - LIBBY_ENGINE_URL=http://host.docker.internal:5007
+      # --- Bookworm (#320): book automation → #greatreads in Mattermost ---
+      # Off unless BOOKWORM_TOKEN (secret) is set in .ereader.env.
+      - BOOKWORM_MM_URL=http://host.docker.internal:8015
     env_file:
-      - ./.ereader.env                         # ABS_TOKEN (secret) — gitignored
+      - ./.ereader.env                         # ABS_TOKEN, BOOKWORM_TOKEN (secrets) — gitignored
     extra_hosts:
       - "host.docker.internal:host-gateway"    # reach host-published :8083/:13378
     networks: [greatreads_ereader_net]
