@@ -54,6 +54,12 @@ def log_event(category: str, event: str, *, level: str = "info",
             db.close()
     except Exception as exc:   # noqa: BLE001 — logging must never break the caller
         logger.warning("log_event failed (%s/%s): %s", category, event, exc)
+    # Bookworm (#320): book events also go to #greatreads. Non-blocking, never raises.
+    try:
+        from .bookworm_service import notify
+        notify(str(category), str(event), level=level, book_id=book_id, title=title, detail=merged)
+    except Exception as exc:   # noqa: BLE001
+        logger.warning("bookworm hook failed (%s/%s): %s", category, event, exc)
 
 
 def query_events(db: Session, *, category: Optional[str] = None,
