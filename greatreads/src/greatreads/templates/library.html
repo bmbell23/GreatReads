@@ -79,7 +79,7 @@
     </div>
     <div class="stat-filter stat-chip" style="color:#0066CC;" title="Owns ebook"
          data-filter-type="media-type" data-filter-value="ebook" onclick="toggleFilter(this)">
-        <i class="fas fa-tablet-alt"></i><strong id="ebookCount">-</strong>
+        <i class="fas fa-tablet-alt"></i><strong id="ebookCount">-</strong><span class="chip-sub"></span>
     </div>
     <div class="stat-filter stat-chip" style="color:#6B4BA3;" title="Owns physical"
          data-filter-type="media-type" data-filter-value="physical" onclick="toggleFilter(this)">
@@ -87,7 +87,7 @@
     </div>
     <div class="stat-filter stat-chip" style="color:#FF6600;" title="Owns audiobook"
          data-filter-type="media-type" data-filter-value="audio" onclick="toggleFilter(this)">
-        <i class="fas fa-headphones"></i><strong id="audioCount">-</strong>
+        <i class="fas fa-headphones"></i><strong id="audioCount">-</strong><span class="chip-sub"></span>
     </div>
 </div>
 
@@ -632,6 +632,14 @@
 .stat-chip strong { font-size: 0.9rem; }
 .stat-chip:hover { background: #e9ecef; }
 .stat-chip.active { border-color: currentColor; background: #fff; }
+/* #301: "· no audio" / "· no ebook" suffix + the long-press / right-click menu */
+.stat-chip .chip-sub { font-size: 0.72rem; font-weight: 600; }
+.stat-chip .chip-sub:empty { display: none; }
+.chip-menu { position: absolute; z-index: 1080; background: #fff; border: 1px solid #dee2e6;
+    border-radius: 8px; box-shadow: 0 4px 14px rgba(0,0,0,.15); padding: 4px 0; min-width: 11rem; }
+.chip-menu button { display: block; width: 100%; text-align: left; border: 0; background: none;
+    padding: 6px 14px; font-size: 0.9rem; }
+.chip-menu button:hover, .chip-menu button.active { background: #f1f3f5; }
 
 /* Floating clear (X) inside the search box */
 #searchInput { padding-right: 38px; }
@@ -726,6 +734,7 @@ async function loadLibraryData() {
         // default Author sort is applied on first load (the dropdown already says
         // "Author").
         initializeFiltersFromURL();
+        initChipMenus();   // #301 long-press / right-click sub-filter menus
         applyFilters();
 
         // Deep-link from the cover popup's "Edit Book" action (#27): open the
@@ -1085,6 +1094,14 @@ function applyFilters() {
             }
         }
 
+        // Missing-format sub-filter (#301): e.g. owns ebook but NOT audio.
+        if (activeFilters.excludeMedia && activeFilters.excludeMedia.length) {
+            const owned = (book.media_owned || []).map(m => m.toLowerCase());
+            for (const mt of activeFilters.excludeMedia) {
+                if (owned.includes(mt)) return false;
+            }
+        }
+
         return true;
     });
 
@@ -1179,6 +1196,8 @@ function clearFilters() {
     // Clear stat badge filters
     activeFilters.readStatus = null;
     activeFilters.mediaTypes = [];
+    activeFilters.excludeMedia = [];
+    document.querySelectorAll('.stat-chip .chip-sub').forEach(el => { el.textContent = ''; });
 
     // Remove active class from all stat badges
     document.querySelectorAll('.stat-filter').forEach(el => {
@@ -1722,8 +1741,92 @@ function debounce(func, wait) {
 // Filter functionality for library stats
 let activeFilters = {
     readStatus: null,  // 'read', 'unread', or 'all' (single-select)
-    mediaTypes: []     // any of 'ebook','physical','audio' (multi-select, AND)
+    mediaTypes: [],    // any of 'ebook','physical','audio' (multi-select, AND)
+    excludeMedia: []   // #301: formats the book must NOT own ('audio' or 'ebook')
 };
+
+// #301: long-press (phone) / right-click (desktop) on the Ebook or Audio chip opens
+// a small menu — All, or the "missing the other format" sub-filter. A plain tap
+// still toggles as before (and clears an active sub-filter).
+const CHIP_MISSING = {
+    ebook: { other: 'audio', label: 'Missing audiobook', suffix: '· no audio' },
+    audio: { other: 'ebook', label: 'Missing ebook', suffix: '· no ebook' },
+};
+let _chipLongPressed = false;
+
+function setMissingFilter(fmt, on) {
+    const cfg = CHIP_MISSING[fmt];
+    const chip = document.querySelector(`[data-filter-type="media-type"][data-filter-value="${fmt}"]`);
+    // Only one missing-format view at a time: clear any other first.
+    for (const f of Object.keys(CHIP_MISSING)) {
+        const c = document.querySelector(`[data-filter-type="media-type"][data-filter-value="${f}"] .chip-sub`);
+        if (c) c.textContent = '';
+    }
+    activeFilters.excludeMedia = [];
+    if (on) {
+        // The other format's chip can't also be required — drop it.
+        const oi = activeFilters.mediaTypes.indexOf(cfg.other);
+        if (oi >= 0) {
+            activeFilters.mediaTypes.splice(oi, 1);
+            const oc = document.querySelector(`[data-filter-type="media-type"][data-filter-value="${cfg.other}"]`);
+            if (oc) oc.classList.remove('active');
+        }
+        if (!activeFilters.mediaTypes.includes(fmt)) activeFilters.mediaTypes.push(fmt);
+        activeFilters.excludeMedia = [cfg.other];
+        chip.classList.add('active');
+        chip.querySelector('.chip-sub').textContent = cfg.suffix;
+    } else if (!activeFilters.mediaTypes.includes(fmt)) {
+        activeFilters.mediaTypes.push(fmt);
+        chip.classList.add('active');
+    }
+    filterBooks();
+}
+
+function closeChipMenu() {
+    const m = document.getElementById('chipMenu');
+    if (m) m.remove();
+}
+
+function openChipMenu(chip) {
+    closeChipMenu();
+    const fmt = chip.dataset.filterValue;
+    const cfg = CHIP_MISSING[fmt];
+    const missingOn = activeFilters.excludeMedia.includes(cfg.other);
+    const menu = document.createElement('div');
+    menu.id = 'chipMenu';
+    menu.className = 'chip-menu';
+    menu.innerHTML =
+        `<button type="button" data-act="all" class="${missingOn ? '' : 'active'}">All</button>` +
+        `<button type="button" data-act="missing" class="${missingOn ? 'active' : ''}">${cfg.label}</button>`;
+    menu.addEventListener('click', e => {
+        const b = e.target.closest('button'); if (!b) return;
+        setMissingFilter(fmt, b.dataset.act === 'missing');
+        closeChipMenu();
+    });
+    const r = chip.getBoundingClientRect();
+    menu.style.top = `${r.bottom + window.scrollY + 4}px`;
+    menu.style.left = `${Math.max(8, Math.min(r.left + window.scrollX, window.innerWidth - 190))}px`;
+    document.body.appendChild(menu);
+}
+
+function initChipMenus() {
+    for (const fmt of Object.keys(CHIP_MISSING)) {
+        const chip = document.querySelector(`[data-filter-type="media-type"][data-filter-value="${fmt}"]`);
+        if (!chip) continue;
+        chip.addEventListener('contextmenu', e => { e.preventDefault(); openChipMenu(chip); });
+        let t = null;
+        const cancel = () => { if (t) { clearTimeout(t); t = null; } };
+        chip.addEventListener('pointerdown', e => {
+            if (e.pointerType === 'mouse') return;   // desktop uses right-click
+            _chipLongPressed = false;
+            t = setTimeout(() => { _chipLongPressed = true; t = null; openChipMenu(chip); }, 500);
+        });
+        ['pointerup', 'pointercancel', 'pointerleave'].forEach(ev => chip.addEventListener(ev, cancel));
+    }
+    document.addEventListener('click', e => {
+        if (!e.target.closest('#chipMenu') && !e.target.closest('.stat-chip')) closeChipMenu();
+    });
+}
 
 // Sort state — one control handles field + direction (no separate reverse button).
 let sortAscending = true;
@@ -1773,6 +1876,18 @@ function toggleFilter(element) {
     const filterValue = element.dataset.filterValue;
 
     if (filterType === 'media-type') {
+        // #301: the click that ends a long-press opened the menu — don't also toggle.
+        if (_chipLongPressed) { _chipLongPressed = false; return; }
+        // A tap on a chip showing a missing-format sub-filter clears it entirely.
+        const cfg = CHIP_MISSING[filterValue];
+        if (cfg && activeFilters.excludeMedia.includes(cfg.other)) {
+            activeFilters.excludeMedia = [];
+            element.querySelector('.chip-sub').textContent = '';
+            activeFilters.mediaTypes = activeFilters.mediaTypes.filter(m => m !== filterValue);
+            element.classList.remove('active');
+            filterBooks();
+            return;
+        }
         // Multi-select: toggle membership; books must own ALL selected (AND).
         const i = activeFilters.mediaTypes.indexOf(filterValue);
         if (i >= 0) {
@@ -1814,6 +1929,9 @@ function updateURL() {
     }
     if (activeFilters.mediaTypes && activeFilters.mediaTypes.length) {
         params.set('media', activeFilters.mediaTypes.join(','));
+    }
+    if (activeFilters.excludeMedia && activeFilters.excludeMedia.length) {
+        params.set('missing', activeFilters.excludeMedia.join(','));
     }
 
     const newURL = params.toString() ? `${window.location.pathname}?${params.toString()}` : window.location.pathname;
@@ -2487,6 +2605,18 @@ function initializeFiltersFromURL() {
                 el.classList.add('active');
             }
         });
+    }
+
+    // #301: ?missing=audio (with media=ebook) restores the sub-filter.
+    const missing = params.get('missing');
+    if (missing) {
+        for (const [fmt, cfg] of Object.entries(CHIP_MISSING)) {
+            if (missing === cfg.other && activeFilters.mediaTypes.includes(fmt)) {
+                activeFilters.excludeMedia = [cfg.other];
+                const sub = document.querySelector(`[data-filter-type="media-type"][data-filter-value="${fmt}"] .chip-sub`);
+                if (sub) sub.textContent = cfg.suffix;
+            }
+        }
     }
 }
 
