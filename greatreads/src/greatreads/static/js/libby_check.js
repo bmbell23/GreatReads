@@ -203,8 +203,40 @@ const LIBBY_FORMAT_SPECS = [
 // borrowed from `_libbyBestCard` with no visibility or choice — a library with
 // broken website creds (Pueblo) was impossible to route around. Reset per popup.
 let _libbyFmtSel = {};
+// #298: which cards can actually HARVEST an audiobook. Borrow runs on the odmpy
+// chip (all 12 cards); the harvest runs on the browser chip (only signed-in cards),
+// so a borrow on a non-harvestable card yields a valid loan that NEVER lands —
+// previously offered as "Borrow & Download" with no hint. Empirical set from the
+// engine (a card earns it by a real attach or a completed harvest).
+let _libbyHarvestCards = null;          // Set of cardId strings, null = not loaded
+async function libbyLoadHarvestCards() {
+    if (_libbyHarvestCards) return _libbyHarvestCards;
+    try {
+        const r = await GreatReads.apiCall('/libby/cards/status', { silent: true });
+        _libbyHarvestCards = new Set((r && r.cards || [])
+            .filter(c => c.can_harvest).map(c => String(c.cardId)));
+    } catch (e) {
+        _libbyHarvestCards = new Set();   // fail CLOSED: unknown => warn, never over-promise
+    }
+    return _libbyHarvestCards;
+}
+function libbyCanHarvest(cardId) {
+    return !!(_libbyHarvestCards && _libbyHarvestCards.has(String(cardId)));
+}
+// Explicit Auto / Manual badge for an audiobook row (#298) — shown on BOTH paths so
+// the distinction is visible without first switching to a non-harvestable library.
+function libbyHarvestBadge(cardId) {
+    return libbyCanHarvest(cardId)
+        ? '<span class="badge bg-success ms-1" title="This library downloads the audiobook automatically and returns the loan"><i class="fas fa-bolt me-1"></i>Auto</span>'
+        : '<span class="badge bg-warning text-dark ms-1" title="This library can\'t be downloaded in-app — the loan stays checked out for you to fetch externally and return"><i class="fas fa-hand me-1"></i>Manual</span>';
+}
+
 function _libbyFmtLibs(fmt) {
-    return (fmt.libraries || []).slice().sort((a, b) => (b.isAvailable ? 1 : 0) - (a.isAvailable ? 1 : 0));
+    // Prefer a harvestable library among equally-available ones (#298) so the
+    // default selection is the one that can complete end to end.
+    return (fmt.libraries || []).slice().sort((a, b) =>
+        ((b.isAvailable ? 1 : 0) - (a.isAvailable ? 1 : 0)) ||
+        ((libbyCanHarvest(b.cardId) ? 1 : 0) - (libbyCanHarvest(a.cardId) ? 1 : 0)));
 }
 function _libbyFmtSelected(media, fmt) {
     const libs = _libbyFmtLibs(fmt);
@@ -242,6 +274,14 @@ function libbyFormatsHtml(c) {
         // rather than a primary Borrow button — but still offers a deliberate
         // re-borrow so a bad copy can be replaced (#292).
         const ownThis = (s.media === 'ebook' && c.grOwnedEbook) || (s.media === 'audiobook' && c.grOwnedAudio);
+        // #298: audiobooks only harvest on a card attached to the browser chip. On
+        // any other card the borrow still works, but it's borrow-only (no harvest
+        // attempt) and the loan stays out for manual fetch + return.
+        const manual = s.media === 'audiobook' && sel && sel.isAvailable && !fmt.onHold
+                       && !libbyCanHarvest(sel.cardId);
+        const borrowFn = manual ? 'libbyBorrowAudiobookManual' : s.fn;
+        const harvestBadge = (s.media === 'audiobook' && sel && sel.isAvailable && !fmt.onHold)
+            ? libbyHarvestBadge(sel.cardId) : '';
         let action, avail;
         if (ownThis) {
             // #292: owning a format is NOT evidence the file is any good — a bad
@@ -257,7 +297,7 @@ function libbyFormatsHtml(c) {
                 again = '<span class="badge bg-info text-dark ms-1"><i class="fas fa-clock me-1"></i>On hold</span>';
             } else if (sel && sel.isAvailable) {
                 again = `<button class="btn btn-sm btn-outline-secondary ms-1" title="Borrow again to replace your copy"
-                    onclick="${s.fn}('${tid}','${card}',this)"><i class="fas fa-rotate me-1"></i>Borrow again</button>`;
+                    onclick="${borrowFn}('${tid}','${card}',this)"><i class="fas fa-rotate me-1"></i>Borrow again${manual ? ' (manual)' : ''}</button>`;
             } else {
                 again = `<button class="btn btn-sm btn-outline-secondary ms-1" title="Place a hold to replace your copy"
                     onclick="libbyPlaceHoldFmt('${tid}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
@@ -268,8 +308,14 @@ function libbyFormatsHtml(c) {
             action = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>On hold</span>';
             avail = '<span class="text-info small">On hold</span>';
         } else if (sel && sel.isAvailable) {
-            action = `<button class="btn btn-sm btn-primary" onclick="${s.fn}('${tid}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>Borrow &amp; Download</button>`;
-            avail = '<span class="text-success small fw-semibold">Available now</span>';
+            if (manual) {
+                action = `<button class="btn btn-sm btn-outline-primary" title="This library can't be downloaded automatically — borrow and fetch it with the external tool; the loan stays checked out for you to return"
+                    onclick="${borrowFn}('${tid}','${card}',this)"><i class="fas fa-hand me-1"></i>Borrow (manual)</button>`;
+                avail = '<span class="text-warning small fw-semibold">Available · manual download</span>';
+            } else {
+                action = `<button class="btn btn-sm btn-primary" onclick="${s.fn}('${tid}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>Borrow &amp; Download</button>`;
+                avail = '<span class="text-success small fw-semibold">Available now</span>';
+            }
         } else {
             action = `<button class="btn btn-sm btn-outline-warning" onclick="libbyPlaceHoldFmt('${tid}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
             avail = `<span class="text-warning small">${esc(libbyWaitText(sel ? sel.estimatedWaitDays : fmt.estimatedWaitDays))}</span>`;
@@ -290,8 +336,13 @@ function libbyFormatsHtml(c) {
         } else if (sel) {
             fromHtml = `<div class="small text-muted mt-1">from ${esc((sel.key || '').toUpperCase())}</div>`;
         }
+        const manualNote = manual
+            ? `<div class="small text-warning mt-1"><i class="fas fa-circle-info me-1"></i>` +
+              `This library isn't set up for automatic audiobook download — borrowing here keeps the ` +
+              `loan checked out for you to fetch externally and return manually.</div>`
+            : '';
         rows.push(`<div class="border rounded px-2 py-1 mb-1">
-            <div class="d-flex align-items-center justify-content-between"><span>${label} · ${avail}</span>${action}</div>${fromHtml}</div>`);
+            <div class="d-flex align-items-center justify-content-between"><span>${label}${harvestBadge} · ${avail}</span>${action}</div>${fromHtml}${manualNote}</div>`);
     }
     return rows.length ? rows.join('') : '<div class="small text-muted">Not found on Libby.</div>';
 }
@@ -321,10 +372,13 @@ function libbyRenderAction() {
     // #191: audiobooks download via the bona-fide chip + Listen harvest; ebooks keep
     // the .acsm path. Route the borrow button to the right handler + label.
     const isAudio = (c.mediaType || (c._row && c._row.type)) === 'audiobook';
-    const fn = isAudio ? 'libbyBorrowAudiobook()' : 'libbyBorrow()';
-    const lbl = isAudio ? 'Borrow &amp; Download audiobook' : 'Borrow &amp; Download';
-    const icon = isAudio ? 'fa-headphones' : 'fa-cloud-arrow-down';
-    const borrowBtn = `<button id="libbyBorrowBtn" class="btn btn-sm btn-primary" onclick="${fn}"><i class="fas ${icon} me-2"></i>${lbl}</button>`;
+    // #298: same Auto/Manual split as the per-format rows.
+    const manual = isAudio && available && !libbyCanHarvest(_libbySelectedCard());
+    const fn = manual ? 'libbyBorrowAudiobookManual()' : isAudio ? 'libbyBorrowAudiobook()' : 'libbyBorrow()';
+    const lbl = manual ? 'Borrow audiobook (manual)' : isAudio ? 'Borrow &amp; Download audiobook' : 'Borrow &amp; Download';
+    const icon = manual ? 'fa-hand' : isAudio ? 'fa-headphones' : 'fa-cloud-arrow-down';
+    const badge = (isAudio && available) ? libbyHarvestBadge(_libbySelectedCard()) : '';
+    const borrowBtn = `<button id="libbyBorrowBtn" class="btn btn-sm ${manual ? 'btn-outline-primary' : 'btn-primary'}" onclick="${fn}"><i class="fas ${icon} me-2"></i>${lbl}</button>${badge}`;
     if (libbyIsOwned(c)) {
         // Owned → don't push a borrow; offer it only as a de-emphasized secondary.
         box.innerHTML = available
@@ -347,6 +401,9 @@ async function openLibbyDetails(c) {
     // Resolve real GreatReads ownership BEFORE rendering so the "In library" state is
     // correct on first paint (no flicker / false positive from a pending match).
     if (c.grOwned == null) { try { await annotateLibbyOwnership([c]); } catch (e) { c.grOwned = false; } }
+    // Same for harvest capability (#298) — the Auto/Manual distinction must be right
+    // on first paint, or the user acts on a promise we can't keep. Cached per page load.
+    try { await libbyLoadHarvestCards(); } catch (e) {}
     if (libbyActive !== c) return;   // superseded while awaiting
     const book = {
         id: null, title: c.title, author: c.author, series: '', universe: '',
@@ -578,6 +635,30 @@ async function libbyBorrowAudiobook(titleId, cardId, btn) {
         setTimeout(poll, 4000);
     };
     setTimeout(poll, 3000);
+}
+
+// Manual audiobook borrow (#298): the selected card can't harvest, so this is a
+// borrow ONLY — no harvest attempt that is certain to fail (~10 min) and no
+// auto-return. The loan stays checked out for the external tool; the backend logs
+// it as a deliberate manual borrow, not an error.
+async function libbyBorrowAudiobookManual(titleId, cardId, btn) {
+    const c = libbyActive; if (!c) return;
+    cardId = cardId || _libbySelectedCard();
+    titleId = titleId || _libbyTitleIdFor(cardId);   // #310: that library's own edition
+    btn = btn || document.getElementById('libbyBorrowBtn');
+    if (!cardId) { showToast('No library card available to borrow on.', 'warning'); return; }
+    const orig = btn ? btn.innerHTML : '';
+    if (btn) { btn.disabled = true; btn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>Borrowing…'; }
+    try {
+        await GreatReads.apiCall('/libby/audiobook/borrow-manual', { method: 'POST', silent: true,
+            data: { title_id: titleId, card_id: cardId, title: c.title } });
+    } catch (e) {
+        showToast(libbyErrMsg(e, 'borrow'), 'danger');
+        if (btn) { btn.disabled = false; btn.innerHTML = orig; }
+        return;
+    }
+    showToast(`Borrowed “${c.title}” audiobook — fetch it with the external tool, then return the loan in Libby.`, 'success');
+    if (btn) btn.innerHTML = '<i class="fas fa-check me-2"></i>Borrowed (manual)';
 }
 
 // Human-readable Libby error from a failed borrow/hold (#4): OverDrive/engine statuses
