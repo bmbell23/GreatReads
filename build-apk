@@ -1,0 +1,48 @@
+#!/bin/bash
+# Rebuild the GreatReads APK after a merge (#318, agent-bus thread 017).
+# Called by the merge reconciler from the main clone, after ./deploy.
+#
+# Exit 0  = built; the last stdout line is "<versionName> <download URL>".
+# Exit 75 = nothing under web/ or simple-app/ changed since the last build.
+# Anything else = failed.
+#
+# Thin wrapper over ./build-app.sh. Everything it writes is gitignored
+# (web/ereader.apk + .json, web/build-stamp.txt, assets/web/, build/), so the
+# clone stays clean.
+set -euo pipefail
+
+MAIN_CLONE=/home/brandon/projects/GreatReads
+REPO_ROOT="$(cd "$(dirname "$0")" && pwd -P)"
+URL="http://100.69.184.113:8090/ereader.apk"
+
+# The APK is staged into web/, which :8090 serves from the main clone. Built
+# anywhere else, it would never reach the phones.
+if [ "$REPO_ROOT" != "$(cd "$MAIN_CLONE" && pwd -P)" ]; then
+    echo "❌ build-apk only runs from the main clone ($MAIN_CLONE), not $REPO_ROOT" >&2
+    exit 2
+fi
+cd "$REPO_ROOT"
+
+# No login shell over ssh: find the SDK ourselves.
+export ANDROID_HOME="${ANDROID_HOME:-/home/brandon/android-sdk}"
+
+# Only rebuild when the app's inputs moved since the commit we last built.
+LAST_FILE="simple-app/app/build/build-apk.sha"
+HEAD_SHA="$(git rev-parse HEAD)"
+if [ -f "$LAST_FILE" ] && [ -f web/ereader.apk ]; then
+    LAST_SHA="$(cat "$LAST_FILE")"
+    if git cat-file -e "$LAST_SHA^{commit}" 2>/dev/null \
+        && git diff --quiet "$LAST_SHA" HEAD -- web/ simple-app/; then
+        echo "nothing to rebuild: web/ and simple-app/ unchanged since ${LAST_SHA:0:7}"
+        exit 75
+    fi
+fi
+
+# build-app.sh is chatty; keep stdout for the result line.
+./build-app.sh >&2
+
+mkdir -p "$(dirname "$LAST_FILE")"
+echo "$HEAD_SHA" > "$LAST_FILE"
+
+VERSION="$(python3 -c 'import json; print(json.load(open("web/ereader.apk.json"))["version"])')"
+echo "$VERSION $URL"
