@@ -72,12 +72,16 @@ MESSAGES = {
     ("import", "created"): "📚 {t} from {src} added to GreatReads",
     ("metadata", "enriched"): "🏷️ Metadata filled in for {t}: {fields}",
     ("cover", "upgraded"): "🖼️ Better cover for {t} ({from_px}px → {to_px}px)",
-    # MediaForge, via POST /api/media-events (#326)
+    # MediaForge's answers to our requests (mediaforge_service, #326)
     ("media", "chapters_fixed"): "🧩 Chapters fixed for {t}{text}",
-    ("media", "chapters_skipped"): "👌 Chapters fine as-is for {t}{text}",
-    ("media", "chapters_failed"): "⚠️ Chapter fix failed for {t}{text}",
+    ("media", "chapters_ok"): "👌 Chapters fine as-is for {t}{text}",
+    ("media", "chapters_already_fixed"): "👌 Chapters already fixed for {t}{text}",
+    ("media", "chapters_skipped"): "⏭️ Chapters left alone for {t}{text}",
+    ("media", "chapters_parked"): "⏸️ Chapter fix parked for {t}{text}",
     ("media", "sync_map_built"): "🔄 Sync map ready for {t}{text}",
+    ("media", "sync_map_skipped"): "⏭️ No sync map for {t}{text}",
     ("media", "sync_map_failed"): "⚠️ Sync map failed for {t}{text}",
+    ("media", "unknown"): "❓ MediaForge couldn't find the audiobook of {t} in ABS{text}",
 }
 STARTS = {"libby", "import"}
 REPLY_ONLY = {"metadata", "cover", "media"}
