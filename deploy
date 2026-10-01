@@ -1,0 +1,32 @@
+#!/usr/bin/env bash
+# Rebuild and restart GreatReads from this checkout, then wait until it answers (#315).
+# src/ is baked into the :8092 image (COPY src), so every change needs a rebuild; the
+# DB + covers are a bind mount, so this is data-safe. :8090 (web/serve.py, systemd unit
+# greatreads-web from #313) serves this checkout directly and needs nothing here.
+# Run from the main clone. agent-bus ship-pr / merge-watch call it after a merge.
+# Not covered: the APK (./build-app.sh) and the backend/summaries re-stage stay manual.
+set -euo pipefail
+cd "$(dirname "$0")"
+
+# The compose file mounts ./data relative to itself. From a worktree (no data dir) a
+# rebuild would recreate prod on an EMPTY database — refuse instead.
+if [ ! -s greatreads/data/greatreads.db ]; then
+    echo "deploy: no greatreads/data/greatreads.db here ($(pwd)) — run from the main clone" >&2
+    exit 2
+fi
+
+./scripts/rebuild-ereader.sh
+
+for _ in $(seq 1 45); do
+    if curl -s --max-time 2 localhost:8092/api/health | grep -q '"status":"ok"'; then
+        echo "deploy: greatreads_ereader healthy on :8092 ($(cat version.txt 2>/dev/null || echo 'no version'))"
+        if [ "$(curl -s -o /dev/null -w '%{http_code}' --max-time 4 localhost:8090/greatreads/books)" != 200 ]; then
+            echo "deploy: WARNING :8090 did not answer 200 — check systemctl --user status greatreads-web" >&2
+        fi
+        exit 0
+    fi
+    sleep 2
+done
+echo "deploy: greatreads_ereader did not report healthy on :8092 within 90 s" >&2
+docker logs --tail 20 greatreads_ereader >&2 || true
+exit 1
