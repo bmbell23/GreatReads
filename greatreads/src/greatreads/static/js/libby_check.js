@@ -502,9 +502,22 @@ function libbySeriesMini(r, i) {
         <div>${avail}</div></div></div>`;
 }
 
-function libbyOpenSeriesItem(i) {
+async function libbyOpenSeriesItem(i) {
     const r = libbySeriesRows[i]; if (!r) return;
-    openLibbyDetails(libbyRowToCard(r));
+    // Series rows are ebook-only (#331), so resolve the entry through the same unified
+    // search a direct open uses — that row knows the audiobook too. Match on the
+    // ebook's titleId first, then the title; fall back to the series row.
+    let row = r;
+    try {
+        const d = await GreatReads.apiCall(`/libby/search?q=${encodeURIComponent((r.title + ' ' + (r.author || '')).trim())}&library=all&page=1&per_page=10`);
+        const rows = ((d && d.results) || []).filter(x => x.formats);
+        const m = rows.find(x => x.formats.ebook && String(x.formats.ebook.titleId) === String(r.id))
+            || grPickLibbyMatch(rows, r.title);
+        if (m) row = Object.assign({}, m, { series: m.series || r.series, seriesIndex: m.seriesIndex ?? r.seriesIndex, seriesId: m.seriesId || r.seriesId });
+    } catch (e) { /* best-effort: open the ebook-only row */ }
+    const card = libbyRowToCard(row);
+    try { await annotateLibbyOwnership([card]); } catch (e) { /* best-effort */ }
+    openLibbyDetails(card);
 }
 
 function _libbySelectedCard() {
