@@ -200,7 +200,7 @@ def _process_pending(db: Session, log: list) -> list:
             if status < 400:
                 log.append({"title": title, "event": "returned", "detail": "import confirmed"})
                 log_event("libby", "return", level="success", title=title,
-                          detail={"reason": "import confirmed"})
+                          detail={"reason": "import confirmed", "card_id": item.get("card_id", "")})
             else:
                 # Import is confirmed but the return failed — keep it so we retry
                 # the return next run (the loan is a spare copy, not lost).
@@ -281,7 +281,7 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
             fname = (data or {}).get("filename", "downloaded")
             log.append({"title": title, "event": "borrowed", "detail": fname})
             log_event("libby", "auto_borrow", level="success", title=title,
-                      detail={"author": author, "file": fname})
+                      detail={"author": author, "file": fname, "card_id": card_id})
             log_event("libby", "acsm_download", level="info", title=title, detail={"file": fname})
         else:
             err = (data or {}).get("error", f"HTTP {status}")
@@ -302,7 +302,8 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
                 log.append({"title": title, "event": "parked",
                             "detail": f"{entry['count']} straight failures — retrying every {FAIL_COOLDOWN_HOURS:g}h"})
             else:
-                log_event("libby", "borrow_failed", level="error", title=title, detail={"error": err})
+                log_event("libby", "borrow_failed", level="error", title=title,
+                          detail={"error": err, "card_id": card_id})
     _set(db, SETTING_FAILS, json.dumps(fails))
     return pending
 

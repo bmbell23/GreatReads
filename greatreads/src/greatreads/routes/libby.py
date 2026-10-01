@@ -368,7 +368,7 @@ async def libby_download(
         ok = resp.status_code < 400
         log_event("libby", "borrow" if ok else "borrow_failed",
                   level="success" if ok else "error", title=payload.title or "",
-                  detail={"title_id": payload.title_id, "manual": True})
+                  detail={"title_id": payload.title_id, "card_id": payload.card_id, "manual": True})
     except Exception:
         pass
     return resp
@@ -402,7 +402,8 @@ async def libby_borrow(
         try:
             from ..services.event_log_service import log_event
             log_event("libby", "borrow_failed", level="error", title=payload.title or "",
-                      detail={"title_id": payload.title_id, "manual": True})
+                      detail={"title_id": payload.title_id, "card_id": payload.card_id,
+                              "manual": True})
         except Exception:
             pass
         return resp
@@ -419,7 +420,8 @@ async def libby_borrow(
         ok, detail = await asyncio.to_thread(kick_download, payload.title_id, payload.card_id, title)
         log_event("libby", "acsm_download" if ok else "download_failed",
                   level="info" if ok else "warn", title=title,
-                  detail={"file" if ok else "error": detail, "after_ui_borrow": True})
+                  detail={"file" if ok else "error": detail, "after_ui_borrow": True,
+                          "card_id": payload.card_id})
 
     asyncio.get_running_loop().create_task(_kick())
     return resp
@@ -545,11 +547,11 @@ async def libby_audiobook_download(
         log_event("libby", "audiobook_download_start", level="info",
                   title=payload.title or "",
                   detail={"title_id": payload.title_id, "manual": True,
-                          "borrowed": bool(payload.borrow)})
+                          "borrowed": bool(payload.borrow), "card_id": payload.card_id or ""})
     except Exception:
         pass
     _watch_audiobook_download(payload.title_id, payload.title or "", bool(payload.borrow),
-                              bool(payload.return_after))
+                              bool(payload.return_after), payload.card_id or "")
     return resp
 
 
@@ -560,7 +562,8 @@ _AUDIOBOOK_POLL_SECONDS = 10.0
 _AUDIOBOOK_MAX_WATCH_SECONDS = 90 * 60
 
 
-def _watch_audiobook_download(title_id: str, title: str, borrowed: bool, return_after: bool) -> None:
+def _watch_audiobook_download(title_id: str, title: str, borrowed: bool, return_after: bool,
+                              card_id: str = "") -> None:
     """Follow an audiobook harvest to its TERMINAL state and log what really happened (#238).
 
     The engine exposes a single global job whose status carries `active` plus a
@@ -597,7 +600,7 @@ def _watch_audiobook_download(title_id: str, title: str, borrowed: bool, return_
 
                 if phase == "done":
                     log_event("libby", "audiobook_download", level="success", title=title,
-                              detail={"title_id": title_id, "manual": True,
+                              detail={"title_id": title_id, "manual": True, "card_id": card_id,
                                       "parts": st.get("parts_done"),
                                       "parts_total": st.get("parts_total"),
                                       "bytes": st.get("bytes"),
@@ -702,7 +705,7 @@ async def libby_download_async(
     try:
         from ..services.event_log_service import log_event
         log_event("libby", "borrow_start", level="info", title=payload.title or "",
-                  detail={"request_id": request_id})
+                  detail={"request_id": request_id, "card_id": payload.card_id})
     except Exception:
         pass
     return {"request_id": request_id, "status": "started"}
