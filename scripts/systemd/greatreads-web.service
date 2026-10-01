@@ -5,7 +5,7 @@
 # :8090 into the :8092 container.
 #
 # Install (once; stop any hand-started watchdog first so there's only one):
-#   kill "$(cat /tmp/ereader-static.pid)"; pkill -f "python3 serve.py"
+#   pkill -f keep-alive.sh; pkill -f "python3 serve.py"   # the pid file reads "PID: N", not a bare pid
 #   ln -s ~/projects/GreatReads/scripts/systemd/greatreads-web.service ~/.config/systemd/user/
 #   systemctl --user daemon-reload && systemctl --user enable --now greatreads-web.service
 [Unit]
