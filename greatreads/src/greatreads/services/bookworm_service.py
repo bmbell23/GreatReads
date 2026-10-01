@@ -9,7 +9,8 @@ header and every event, the first included, is a reply under it (#323).
 
 Rules:
 - **Starts a thread:** Libby events and import links (something new happened).
-- **Reply-only:** metadata enrichment and cover upgrades. They only post into a
+- **Reply-only:** metadata enrichment, cover upgrades and MediaForge's chapter /
+  sync-map steps (``media``). They only post into a
   book's thread that is already open, so the nightly backfill over the whole
   library never floods the channel (and never even queues).
 - **Never:** ``device/*`` (phone telemetry), ``system/*`` (deploys are Biscuit's),
@@ -71,9 +72,15 @@ MESSAGES = {
     ("import", "created"): "📚 {t} from {src} added to GreatReads",
     ("metadata", "enriched"): "🏷️ Metadata filled in for {t}: {fields}",
     ("cover", "upgraded"): "🖼️ Better cover for {t} ({from_px}px → {to_px}px)",
+    # MediaForge, via POST /api/media-events (#326)
+    ("media", "chapters_fixed"): "🧩 Chapters fixed for {t}{text}",
+    ("media", "chapters_skipped"): "👌 Chapters fine as-is for {t}{text}",
+    ("media", "chapters_failed"): "⚠️ Chapter fix failed for {t}{text}",
+    ("media", "sync_map_built"): "🔄 Sync map ready for {t}{text}",
+    ("media", "sync_map_failed"): "⚠️ Sync map failed for {t}{text}",
 }
 STARTS = {"libby", "import"}
-REPLY_ONLY = {"metadata", "cover"}
+REPLY_ONLY = {"metadata", "cover", "media"}
 SKIP = {("import", "dismiss")}
 SOURCES = {"calibre": "Calibre", "audiobookshelf": "Audiobookshelf"}
 
@@ -157,6 +164,7 @@ def render(category: str, event: str, level: str, title: Optional[str],
         fields=(", ".join(map(str, fields)) if isinstance(fields, (list, tuple))
                 else str(fields or "details")),
         from_px=d.get("from_px", "?"), to_px=d.get("to_px", "?"),
+        text=f": {_safe(d['text'])[:300]}" if d.get("text") else "",
     )
     err = d.get("error") or d.get("reason")
     if err and level in ("warn", "warning", "error"):
