@@ -165,6 +165,19 @@ def _poll_news():
         db.close()
 
 
+def _mediaforge_answers():
+    """Post MediaForge's finished chapter/sync-map answers (#326)."""
+    db = SessionLocal()
+    try:
+        from .services.mediaforge_service import poll_answers
+        if poll_answers(db):
+            logger.info("MediaForge answers posted")
+    except Exception as exc:
+        logger.error("MediaForge answer poll failed: %s", exc)
+    finally:
+        db.close()
+
+
 def _metadata_backfill():
     """Scheduled sweep (#159): fill empty synopsis/genre/public-rating/date/pages on
     library books from Apple/Google/OpenLibrary, spending a bounded slice of the daily
@@ -312,6 +325,15 @@ async def lifespan(app: FastAPI):
             id="chapter_alignment_refresh",
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=4),
+            coalesce=True,
+            max_instances=1,
+        )
+        # MediaForge answers (#326): its worker runs */10, so 2 min is plenty.
+        scheduler.add_job(
+            _mediaforge_answers,
+            IntervalTrigger(minutes=2),
+            id="mediaforge_answers",
+            replace_existing=True,
             coalesce=True,
             max_instances=1,
         )

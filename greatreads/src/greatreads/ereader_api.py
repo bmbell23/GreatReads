@@ -3361,47 +3361,6 @@ async def client_events(request: Request):
         accepted += 1
     return {'accepted': accepted}
 
-# MediaForge reports its per-book chapter/sync-map steps here (#326) so they land in
-# the book's Bookworm thread and on /logs. Keyed on the ABS item id: titles collide.
-MEDIA_EVENTS = ('chapters_fixed', 'chapters_skipped', 'chapters_failed',
-                'sync_map_built', 'sync_map_failed')
-
-@router.post('/api/media-events')
-async def media_events(request: Request):
-    try:
-        body = await request.json()
-    except Exception:
-        body = None
-    body = body if isinstance(body, dict) else {}
-    event = str(body.get('event') or '')
-    abs_id = str(body.get('abs_id') or '').strip()
-    title = str(body.get('title') or '').strip()[:300] or None
-    if event not in MEDIA_EVENTS:
-        return JSONResponse({'error': f'event must be one of {", ".join(MEDIA_EVENTS)}'}, status_code=400)
-    if not abs_id and not title:
-        return JSONResponse({'error': 'abs_id or title is required'}, status_code=400)
-    book_id = None
-    if abs_id:
-        try:
-            conn = _gr_db()
-            try:
-                row = conn.execute(
-                    "SELECT b.id, b.title FROM external_imports e JOIN books b ON b.id = e.book_id"
-                    " WHERE e.source = 'audiobookshelf' AND e.external_id = ? LIMIT 1",
-                    (abs_id,)).fetchone()
-            finally:
-                conn.close()
-            if row:
-                book_id, title = row['id'], row['title']
-        except Exception as e:
-            print(f'media-events: abs lookup failed for {abs_id}: {e}')
-    level = body.get('level') if body.get('level') in ('info', 'success', 'warning', 'error') else 'info'
-    from .services.event_log_service import log_event
-    log_event('media', event, level=level, book_id=book_id, title=title,
-              detail={'abs_id': abs_id or None,
-                      'text': str(body.get('detail') or '').replace('\n', ' ')[:300]})
-    return {'logged': True, 'book_id': book_id}
-
 @router.post('/api/progress/{book_id}/reset-credit-mark')
 def reset_progress_credit_mark(book_id):
     """Reset the word-credit high-water-mark (#79/#86) down to the current position,
