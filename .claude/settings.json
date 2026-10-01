@@ -40,14 +40,6 @@
       "Bash(python3 -m py_compile *)",
       "Bash(curl -sf *)",
       "Bash(curl -sI *)"
-    ],
-    "ask": [
-      "Bash(gvc *)",
-      "Bash(git commit *)",
-      "Bash(git push *)",
-      "Bash(docker compose *)",
-      "Bash(git reset --hard *)",
-      "Bash(git clean *)"
     ]
   }
 }
