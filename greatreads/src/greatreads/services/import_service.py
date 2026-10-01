@@ -1464,7 +1464,7 @@ def import_abs_book(
         )
         .all()
     }
-    _abs_new = False
+    _abs_new = []
     for pid in part_ids:
         if pid not in already_recorded:
             db.add(ExternalImport(
@@ -1474,7 +1474,7 @@ def import_abs_book(
                 action=action,
                 imported_at=datetime.utcnow(),
             ))
-            _abs_new = True
+            _abs_new.append(pid)
     if _abs_new:
         try:
             from .event_log_service import log_event
@@ -1483,6 +1483,10 @@ def import_abs_book(
         except Exception:
             pass
     db.commit()
+    # New audiobook: ask MediaForge for chapters + a sync map (#326).
+    for pid in _abs_new:
+        from .mediaforge_service import request_sync
+        request_sync(pid, book.title)
     db.refresh(book)
     return book.to_dict()
 
