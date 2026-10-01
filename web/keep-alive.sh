@@ -7,7 +7,8 @@
 # watchdog now does that pull on a throttle (~every 60s) and restarts the
 # static server whenever main actually advanced.
 #
-# Usage: ./keep-alive.sh &
+# Usage: normally run by the systemd user unit scripts/systemd/greatreads-web.service
+# (#313 — survives reboots). By hand: ./keep-alive.sh &
 
 cd "$(dirname "$0")"
 REPO_ROOT="$(cd .. && pwd)"

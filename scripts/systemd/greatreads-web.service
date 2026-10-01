@@ -1,0 +1,27 @@
+# Keeps the :8090 web server (web/serve.py: reader pages + /greatreads/ proxy)
+# up across reboots (#313). Runs the existing watchdog, which restarts serve.py
+# on a port or HTTP-stall failure and fast-forwards main (~every 60s). A user
+# unit; linger is on for brandon, so it starts at boot. Stopgap until #8 folds
+# :8090 into the :8092 container.
+#
+# Install (once; stop any hand-started watchdog first so there's only one):
+#   kill "$(cat /tmp/ereader-static.pid)"; pkill -f "python3 serve.py"
+#   ln -s ~/projects/GreatReads/scripts/systemd/greatreads-web.service ~/.config/systemd/user/
+#   systemctl --user daemon-reload && systemctl --user enable --now greatreads-web.service
+[Unit]
+Description=GreatReads :8090 web server + watchdog (#313)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=%h/projects/GreatReads/web
+ExecStart=%h/projects/GreatReads/web/keep-alive.sh
+Restart=always
+RestartSec=10
+# serve.py is a background child of the watchdog; stop/restart takes both down.
+KillMode=control-group
+Environment=TZ=America/Denver
+
+[Install]
+WantedBy=default.target
