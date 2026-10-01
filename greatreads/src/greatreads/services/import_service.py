@@ -41,6 +41,22 @@ def _split_author(full_name: str) -> tuple[Optional[str], Optional[str]]:
     return " ".join(parts[:-1]), parts[-1]
 
 
+_AUTHOR_LIST_RE = re.compile(r"\s*[,&;]\s*")
+
+
+def _split_authors(names: str) -> list[str]:
+    """'Brandon Sanderson, Janci Patterson' → ['Brandon Sanderson', 'Janci Patterson'] (#324).
+
+    ABS joins co-authors (and narrators) with commas. A 'Last, First' single name
+    splits into a one-word piece, so that stays whole rather than becoming two people.
+    """
+    full = (names or "").strip()
+    parts = [p for p in _AUTHOR_LIST_RE.split(full) if p]
+    if len(parts) < 2 or any(len(p.split()) < 2 for p in parts):
+        return [full] if full else []
+    return parts
+
+
 def _copy_cover(src: Path, book_id: int) -> bool:
     """Copy a cover image into GreatReads covers directory. Returns True on success."""
     if not src.exists():
@@ -286,6 +302,7 @@ def _best_match(
     in_title_tok = _word_tokens(title)
     in_core_tok = _title_core_tokens(title)
     in_author_tok = _word_tokens(author)
+    in_author_parts = _split_authors(author)
     in_series_norm = (series or "").strip().lower()
     in_year = (year or "")[:4]
 
@@ -318,9 +335,17 @@ def _best_match(
             continue  # titles are too different
 
         # --- Author similarity ---
+        # Best of the whole strings and each co-author pair (#324): 'Brandon
+        # Sanderson, Janci Patterson' vs 'Brandon Sanderson' is the same author, but
+        # whole-string Jaccard is only 0.5 and the audiobook spawned a duplicate.
         if in_author_tok and book_author_tok:
             a_union = len(in_author_tok | book_author_tok)
             author_sim = len(in_author_tok & book_author_tok) / a_union if a_union else 0.0
+            for a in in_author_parts:
+                for b in _split_authors(book_author or ""):
+                    a_tok, b_tok = _word_tokens(a), _word_tokens(b)
+                    if a_tok and b_tok:
+                        author_sim = max(author_sim, len(a_tok & b_tok) / len(a_tok | b_tok))
         else:
             author_sim = 0.5  # one side missing → neutral
 
@@ -1089,7 +1114,7 @@ def get_abs_candidates(db: Session) -> list[dict[str, Any]]:
         seen_ids.add(abs_id)
         # Strip noise phrases (Unabridged, Dramatized Adaptation, …) from titles
         raw_title = _NOISE_RE.sub('', row[1] or '').strip()
-        first, last = _split_author(row[2] or "")
+        first, last = _split_author((_split_authors(row[2] or "") or [""])[0])   # primary author (#324)
         # duration is in seconds → convert to hours for display
         duration_h = round(row[7] / 3600, 1) if row[7] else None
         abs_series_num = _parse_seq(row[10])
@@ -1335,7 +1360,7 @@ def import_abs_book(
             conn3.close()
             _ga_detected = any(_is_graphic_audio(r[0], r[1], r[2]) for r in ga_rows)
 
-    first, last = _split_author(row[2] or "")
+    first, last = _split_author((_split_authors(row[2] or "") or [""])[0])   # primary author (#324)
     pub_date = None
     if row[3]:
         try:
