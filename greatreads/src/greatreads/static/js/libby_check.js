@@ -120,6 +120,11 @@ async function grCheckLibby(titleEnc, authorEnc) {
     const match = grPickLibbyMatch(rows, title);
     if (!match) { GreatReads.showToast('No Libby match found for this title.', 'warning'); return; }
     const card = libbyRowToCard(match);
+    // #333: keep the DB book's series (the popup this was opened from) so the Libby
+    // popup can fall back to it when the engine's ebook-only series lookup is empty.
+    const src = (typeof grActiveBook !== 'undefined') ? grActiveBook : null;
+    if (src && src.series && src.title === title)
+        card.dbSeries = { series: src.series, universe: src.universe || '', bookId: src.id };
     try { await annotateLibbyOwnership([card]); } catch (e) { /* best-effort */ }
     openLibbyDetails(card);
 }
@@ -467,15 +472,18 @@ async function libbyLoadSeries(c) {
     const box = document.getElementById('libbySeries'); if (!box) return;
     const sid = (c._row && c._row.seriesId) || '';
     const sname = c.series || '';
-    if (!sid && !sname) { box.innerHTML = ''; return; }
+    if (!sid && !sname && !c.dbSeries) { box.innerHTML = ''; return; }
     box.innerHTML = '<hr class="my-2"><div class="text-muted small"><span class="spinner-border spinner-border-sm me-1"></span>Loading series…</div>';
-    const qs = sid ? ('series_id=' + encodeURIComponent(sid)) : ('series_name=' + encodeURIComponent(sname));
-    let d;
-    try { d = await GreatReads.apiCall('/libby/series-books?' + qs); }
-    catch (e) { box.innerHTML = ''; return; }
-    if (libbyActive !== c) return;
-    let rows = (d && d.results) || [];
-    if (rows.length <= 1) { box.innerHTML = ''; return; }
+    let rows = [];
+    if (sid || sname) {
+        const qs = sid ? ('series_id=' + encodeURIComponent(sid)) : ('series_name=' + encodeURIComponent(sname));
+        try { const d = await GreatReads.apiCall('/libby/series-books?' + qs); rows = (d && d.results) || []; }
+        catch (e) { rows = []; }
+        if (libbyActive !== c) return;
+    }
+    // #333: the engine's series lookup is ebook-only, so an audiobook-only series
+    // (Long Price Quartet) comes back empty. Fall back to our own DB series strip.
+    if (rows.length <= 1) { await libbyLoadDbSeries(c, box); return; }
     rows.sort((a, b) => (parseFloat(a.seriesIndex) || 999) - (parseFloat(b.seriesIndex) || 999));
     libbySeriesRows = rows;
     // Tag each series entry with real GreatReads ownership so owned ones show
@@ -485,6 +493,24 @@ async function libbyLoadSeries(c) {
     if (libbyActive !== c) return;
     const mini = rows.map((r, i) => libbySeriesMini(r, i)).join('');
     box.innerHTML = `<hr class="my-2"><div class="text-muted small mb-2"><i class="fas fa-layer-group me-1"></i>In this series (${rows.length}) — full series on Libby</div><div class="row g-2">${mini}</div>`;
+}
+
+// DB series strip (#333) for when Libby has no series rows: the kept DB series first
+// (its name can differ from Libby's — "The Long Price Quartet"), then Libby's name.
+async function libbyLoadDbSeries(c, box) {
+    const tries = [];
+    if (c.dbSeries) tries.push([c.dbSeries.series, c.dbSeries.universe]);
+    if (c.series) tries.push([c.series, '']);
+    let list = [];
+    for (const [series, universe] of tries) {
+        try { list = await grFetchSeries(series, universe); } catch (e) { list = []; }
+        if (libbyActive !== c) return;
+        if (list.length > 1) break;
+    }
+    if (list.length <= 1) { box.innerHTML = ''; return; }
+    const cur = c.dbSeries ? c.dbSeries.bookId : (c.grBookId != null ? c.grBookId : null);
+    box.innerHTML = `<hr class="my-2"><div class="text-muted small mb-2"><i class="fas fa-layer-group me-1"></i>In this series (${list.length})</div>`
+        + `<div class="row g-2">${list.map(x => grSeriesMini(x, cur, false)).join('')}</div>`;
 }
 
 function libbySeriesMini(r, i) {
