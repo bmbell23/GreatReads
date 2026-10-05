@@ -564,7 +564,8 @@
     }
 
     // ---- Request metadata (#119): look up one book online, accept per field ----
-    // Every row defaults to "Keep current" (reject). Applying writes only the
+    // Rows with a current value default to "Keep current" (reject); blank ones
+    // preselect a suggestion, Apple Books first (#335). Applying writes only the
     // accepted fields via the existing PUT /books + cover-from-url endpoints, and
     // syncs the Edit Book inputs so a later "Save changes" stays consistent.
     const bkeMetaFieldToInput = {
@@ -595,6 +596,19 @@
         let res;
         try { res = await request; }
         catch (e) { body.innerHTML = '<div class="text-danger py-3">Lookup failed.</div>'; return; }
+        // Create mode (#335): the lookup has no current values, so take them from the
+        // form (a release prefills date/pages/series #) — only truly blank fields
+        // auto-accept. The cover stays blank here: a release's prefilled cover is the
+        // feed thumbnail, and the Apple Books cover is the better default.
+        if (!id && res && res.fields) {
+            const formVal = elId => (document.getElementById(elId)?.value || '').trim() || null;
+            const cur = {
+                date_published: formVal('bkeDate'), page_count: formVal('bkePages'),
+                series_number: formVal('bkeSeriesNum'), description: formVal('bkeDescription'),
+                public_rating: bkePendingRating, genres: bkeGenres.slice(),
+            };
+            res.fields.forEach(f => { if (f.field in cur && cur[f.field] != null) f.current = cur[f.field]; });
+        }
         bkeRenderMeta(res);
     }
 
@@ -603,7 +617,7 @@
         const sub = document.getElementById('bkeMetaSub');
         const q = res.query || {};
         sub.textContent = 'Looked up by ' + (q.mode === 'isbn' ? 'ISBN ' + q.isbn : 'title + author')
-            + '. Nothing is accepted unless you choose it.';
+            + '. Empty fields are pre-filled (Apple Books first); filled ones keep their value unless you choose otherwise.';
         const fields = res.fields || [];
         if (!fields.length) {
             body.innerHTML = '<div class="text-muted py-3">No suggestions found for this book.</div>';
@@ -611,6 +625,15 @@
         }
         const base = window.APP_BASE_PATH || '';
         const curCoverImg = id => `${base}/static/covers/${id}.jpg?v=${Date.now()}`;
+        // #335: blank current value → accept a suggestion by default, preferring
+        // Apple Books (a merged source reads "Apple Books + …"), else the first one.
+        const isBlank = v => v === null || v === undefined || v === '' || (Array.isArray(v) && !v.length);
+        const isApple = c => String(c.source || '').includes('Apple Books');
+        const pickIdx = f => {
+            if (!isBlank(f.current) || !(f.candidates || []).length) return -1;
+            const i = f.candidates.findIndex(isApple);
+            return i >= 0 ? i : 0;
+        };
         body.innerHTML = fields.map(f => {
             const name = 'bkemeta-' + f.field;
             const srcBadge = c => {
@@ -629,10 +652,11 @@
                             : `<span class="bke-meta-cur">none</span>`}</div>
                         <div class="bke-cover-opt-cap">${caption}</div>
                     </label>`;
-                const cards = [card(`${name}-keep`, true,
+                const pick = f.current ? -1 : pickIdx({ current: null, candidates: f.candidates });
+                const cards = [card(`${name}-keep`, pick < 0,
                     f.current ? curCoverImg(res.book_id) : '', 'Keep current', '')];
                 f.candidates.forEach((c, i) => {
-                    cards.push(card(`${name}-${i}`, false, esc(c.url),
+                    cards.push(card(`${name}-${i}`, i === pick, esc(c.url),
                         `Use this ${srcBadge(c)}`, ` data-cover-url="${esc(c.url)}"`));
                 });
                 return `<div class="bke-meta-field mb-3" data-field="${f.field}" data-cover="1">
@@ -653,26 +677,31 @@
                 };
                 const boxes = [];
                 // Current genres first (pre-checked), then suggestions not already shown.
+                // No genres yet (#335): pre-check the Apple Books ones (all if Apple has none).
+                const blank = isBlank(f.current);
+                const anyApple = f.candidates.some(isApple);
                 (f.current || []).forEach(n => boxes.push(box(n, true, '')));
                 f.candidates.forEach(c => {
-                    if (!seen.has(String(c.value).toLowerCase())) boxes.push(box(c.value, c.on_book, srcBadge(c)));
+                    const on = c.on_book || (blank && (!anyApple || isApple(c)));
+                    if (!seen.has(String(c.value).toLowerCase())) boxes.push(box(c.value, on, srcBadge(c)));
                 });
                 return `<div class="bke-meta-field mb-3" data-field="genres" data-kind="genres"
                         data-current="${esc((f.current || []).join('|'))}">
                     <div class="fw-bold small mb-1">${esc(f.label)}</div>
                     <div class="bke-genre-opts d-flex flex-wrap gap-2">${boxes.join('')}</div></div>`;
             }
-            // Default (checked) "keep current" row = reject.
-            const cur = (f.current === null || f.current === undefined || f.current === '') ? '—' : esc(String(f.current));
+            // "Keep current" row = reject; checked unless a blank field picked a suggestion.
+            const pick = pickIdx(f);
+            const cur = isBlank(f.current) ? '—' : esc(String(f.current));
             const curLabel = `Keep current <span class="bke-meta-cur">(${cur})</span>`;
             const rows = [`<div class="form-check">
-                <input class="form-check-input" type="radio" name="${name}" id="${name}-keep" checked>
+                <input class="form-check-input" type="radio" name="${name}" id="${name}-keep"${pick < 0 ? ' checked' : ''}>
                 <label class="form-check-label" for="${name}-keep">${curLabel}</label></div>`];
             f.candidates.forEach((c, i) => {
                 const rid = `${name}-${i}`;
                 const label = `${esc(String(c.display))}${srcBadge(c)}`;
                 rows.push(`<div class="form-check">
-                    <input class="form-check-input" type="radio" name="${name}" id="${rid}" data-value="${esc(String(c.value))}">
+                    <input class="form-check-input" type="radio" name="${name}" id="${rid}" data-value="${esc(String(c.value))}"${i === pick ? ' checked' : ''}>
                     <label class="form-check-label" for="${rid}">${label}</label></div>`);
             });
             return `<div class="bke-meta-field mb-3" data-field="${f.field}" data-cover="0">
