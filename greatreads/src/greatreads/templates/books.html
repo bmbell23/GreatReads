@@ -534,6 +534,29 @@ window.bkeHooks = {
         if (_saveLocallyNewsId != null) {
             const nid = _saveLocallyNewsId; _saveLocallyNewsId = null;
             GreatReads.apiCall(`/news/${nid}/dismiss`, { method: 'POST' }).catch(() => {});
+            // #335: the saved book stays on this shelf as its local Wishlist record (#285)
+            // — swap it in where the release was so it "moves" and gains the ribbon.
+            // Undated books aren't on the New/Upcoming shelves, so those really drop.
+            const i = cards.findIndex(c => c.news_id === nid);
+            const date = (book && book.date_published) || data.date_published;
+            if (i >= 0 && date && !(book && book.is_owned)) {
+                const local = {
+                    kind: 'local', status: shelfStatus, news_id: null, book_id: id,
+                    title: (book && book.title) || data.title,
+                    author: [data.author_name_first, data.author_name_second].filter(Boolean).join(' ') || cards[i].author,
+                    series: data.series, series_number: data.series_number, universe: data.universe,
+                    cover_url: null, has_cover: !!(book && book.cover),
+                    cover_version: Math.floor(Date.now() / 1000),
+                    is_comic: false, is_reprint: false, tracked: false,
+                    word_count: data.word_count, page_count: data.page_count, genre: data.genre,
+                    date: String(date).slice(0, 10), date_precision: 'day', read_count: 0,
+                };
+                cards[i] = local;
+                registerCards([local]);
+                if (typeof loadNewsBadge === 'function') loadNewsBadge();
+                renderKeepScroll();
+                return;
+            }
             cards = cards.filter(c => c.news_id !== nid);
             shelfTotal = Math.max(0, shelfTotal - 1);
             if (typeof loadNewsBadge === 'function') loadNewsBadge();
