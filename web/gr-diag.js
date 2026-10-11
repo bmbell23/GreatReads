@@ -57,6 +57,38 @@
         } catch (_) {}
     }
 
+    // Uncaught JS errors and rejected promises (#337). A page that dies quietly
+    // (or right before the app does) otherwise leaves nothing behind. Capped per
+    // page load and de-duplicated, so a loop that throws every frame can't flood
+    // the queue and push out the events that explain it.
+    function captureErrors() {
+        var seen = {}, count = 0, CAP = 10;
+        function page() { try { return String(location.pathname).split('/').pop() || '/'; } catch (_) { return ''; } }
+        function report(kind, msg, where, stack) {
+            try {
+                var key = kind + '|' + msg + '|' + where;
+                if (seen[key] || count >= CAP) return;
+                seen[key] = true; count++;
+                log('js_error', { kind: kind, message: String(msg || '').slice(0, 300), where: where || '',
+                                  stack: String(stack || '').slice(0, 900), page: page() },
+                    'error', 'JS error: ' + String(msg || kind).slice(0, 120));
+            } catch (_) {}
+        }
+        try {
+            global.addEventListener('error', function (e) {
+                if (!e || !e.message) return;   // resource load errors (img/script 404s) carry no message
+                var file = String(e.filename || '').split('/').pop();
+                report('error', e.message, file + ':' + (e.lineno || 0) + ':' + (e.colno || 0),
+                       e.error && e.error.stack);
+            });
+            global.addEventListener('unhandledrejection', function (e) {
+                var r = e && e.reason;
+                report('rejection', (r && r.message) || String(r), '', r && r.stack);
+            });
+        } catch (_) {}
+    }
+
     global.GRDiag = { log: log, flush: flush, queued: function () { return read().length; } };
+    captureErrors();
     autoFlush();
 })(window);

@@ -150,6 +150,7 @@ public class MainActivity extends Activity {
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        NativeDiag.installCrashHandler(this);   // #337: first thing, so a crash below is caught too
 
         // #207: a fold-posture/display switch could spawn a SECOND MainActivity
         // while the first stayed alive — its WebView kept playing audio (the
@@ -238,6 +239,8 @@ public class MainActivity extends Activity {
             // Color.BLACK behind it, that is the black screen. Offline we go straight
             // to the bundled offline Home instead of touching the network at all.
             boolean netUp = isOnline(this);
+            // #337: why the previous process ended, logged ahead of this launch.
+            NativeDiag.noteProcessExits(this);
             NativeDiag.note(getApplicationContext(), "cold_launch", NativeDiag.d("online", netUp));
             if (netUp) {
                 webView.loadUrl("http://100.69.184.113:8090/");
@@ -613,6 +616,12 @@ public class MainActivity extends Activity {
         public boolean onRenderProcessGone(WebView view, android.webkit.RenderProcessGoneDetail detail) {
             android.util.Log.e("Ereader", "WebView renderer gone (didCrash="
                 + (detail != null && detail.didCrash()) + ") — rebuilding on Home (#211)");
+            // #337: the in-place recovery hides this from the user, so say it happened.
+            NativeDiag.note(app, "render_gone", NativeDiag.d(
+                    "did_crash", detail != null && detail.didCrash(),
+                    "priority_at_exit", detail != null ? detail.rendererPriorityAtExit() : -1,
+                    "url", String.valueOf(view.getUrl())),
+                "warning", "WebView renderer died", false);
             MainActivity.recoverFromRenderGone(view);
             return true;   // handled — do NOT let the OS kill the whole app
         }
@@ -629,23 +638,144 @@ public class MainActivity extends Activity {
         private static final String KEY = "queue";
         private static final int MAX = 40;
 
-        static synchronized void note(android.content.Context app, String event, org.json.JSONObject detail) {
+        static void note(android.content.Context app, String event, org.json.JSONObject detail) {
+            note(app, event, detail, null, null, false);
+        }
+
+        // `sync` = commit() instead of apply(): the crash handler must have the
+        // event on disk before the process dies, and apply() writes later.
+        static synchronized void note(android.content.Context app, String event, org.json.JSONObject detail,
+                                      String level, String title, boolean sync) {
             try {
                 android.content.SharedPreferences p =
                     app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE);
                 org.json.JSONArray q = new org.json.JSONArray(p.getString(KEY, "[]"));
                 org.json.JSONObject o = new org.json.JSONObject();
                 o.put("event", event);
-                o.put("at", new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
-                        java.util.Locale.US).format(new java.util.Date()));
+                o.put("at", iso(System.currentTimeMillis()));
+                if (level != null) o.put("level", level);
+                if (title != null) o.put("title", title);
                 org.json.JSONObject d = (detail != null) ? detail : new org.json.JSONObject();
                 d.put("src", "native");
                 o.put("detail", d);
                 q.put(o);
                 while (q.length() > MAX) q.remove(0);   // ring buffer: a long trip must not grow forever
-                p.edit().putString(KEY, q.toString()).apply();
+                android.content.SharedPreferences.Editor e = p.edit().putString(KEY, q.toString());
+                if (sync) e.commit(); else e.apply();
                 android.util.Log.i("EreaderOffline", "diag " + event + " " + d);
             } catch (Exception ignored) {}
+        }
+
+        static String iso(long ms) {
+            java.text.SimpleDateFormat f = new java.text.SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss.SSS'Z'",
+                    java.util.Locale.US);
+            f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            return f.format(new java.util.Date(ms));
+        }
+
+        // ---- Why did the process die? (#337) ----
+        // Java crash: record the exception before the default handler kills us.
+        // Idempotent, and chains to whatever handler was there (the OS dialog/kill).
+        private static boolean sCrashHooked;
+        static synchronized void installCrashHandler(android.content.Context ctx) {
+            if (sCrashHooked) return;
+            sCrashHooked = true;
+            final android.content.Context app = ctx.getApplicationContext();
+            final Thread.UncaughtExceptionHandler prev = Thread.getDefaultUncaughtExceptionHandler();
+            Thread.setDefaultUncaughtExceptionHandler((t, ex) -> {
+                try {
+                    note(app, "crash", d("thread", t.getName(), "exception", clip(String.valueOf(ex), 300),
+                            "stack", stackOf(ex)),
+                         "error", "App crash: " + ex.getClass().getSimpleName(), true);
+                } catch (Throwable ignored) {}
+                if (prev != null) prev.uncaughtException(t, ex);
+                else { android.os.Process.killProcess(android.os.Process.myPid()); System.exit(10); }
+            });
+        }
+
+        // Top frames + the root cause, kept well under the server's 2000-char detail
+        // cap (anything over it is replaced by {"truncated": true}).
+        static String stackOf(Throwable ex) {
+            StringBuilder sb = new StringBuilder();
+            StackTraceElement[] st = ex.getStackTrace();
+            for (int i = 0; i < st.length && i < 12; i++) sb.append("at ").append(st[i]).append('\n');
+            Throwable root = ex;
+            while (root.getCause() != null && root.getCause() != root) root = root.getCause();
+            if (root != ex) {
+                sb.append("root cause: ").append(root).append('\n');
+                StackTraceElement[] rs = root.getStackTrace();
+                for (int i = 0; i < rs.length && i < 6; i++) sb.append("at ").append(rs[i]).append('\n');
+            }
+            return clip(sb.toString(), 1300);
+        }
+
+        static String clip(String s, int n) {
+            return (s == null || s.length() <= n) ? s : s.substring(0, n) + "…";
+        }
+
+        // Anything else (OS kill for memory, ANR, native crash, swipe-away) leaves no
+        // handler call, but Android 11+ remembers it. On a cold launch, ship each exit
+        // we haven't reported yet. This is also what tells a crash from a normal relaunch.
+        private static final String EXIT_SEEN = "exit_seen_ts";
+        static void noteProcessExits(android.content.Context ctx) {
+            if (android.os.Build.VERSION.SDK_INT < android.os.Build.VERSION_CODES.R) return;
+            try {
+                android.content.Context app = ctx.getApplicationContext();
+                android.content.SharedPreferences p =
+                    app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE);
+                long seen = p.getLong(EXIT_SEEN, 0L);
+                android.app.ActivityManager am =
+                    (android.app.ActivityManager) app.getSystemService(android.content.Context.ACTIVITY_SERVICE);
+                java.util.List<android.app.ApplicationExitInfo> exits =
+                    am.getHistoricalProcessExitReasons(app.getPackageName(), 0, 5);
+                long newest = seen;
+                // The list is newest first; report oldest first so /logs reads in order.
+                for (int i = exits.size() - 1; i >= 0; i--) {
+                    android.app.ApplicationExitInfo x = exits.get(i);
+                    if (x.getTimestamp() <= seen) continue;
+                    newest = Math.max(newest, x.getTimestamp());
+                    String reason = exitReason(x.getReason());
+                    boolean bad = x.getReason() == android.app.ApplicationExitInfo.REASON_CRASH
+                            || x.getReason() == android.app.ApplicationExitInfo.REASON_CRASH_NATIVE
+                            || x.getReason() == android.app.ApplicationExitInfo.REASON_ANR
+                            || x.getReason() == android.app.ApplicationExitInfo.REASON_LOW_MEMORY
+                            || x.getReason() == android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE
+                            || x.getReason() == android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE;
+                    String desc = x.getDescription();
+                    note(app, "process_exit", d(
+                            "reason", reason,
+                            "description", desc == null ? "" : clip(desc, 300),
+                            "importance", x.getImportance(),
+                            "status", x.getStatus(),
+                            "pss_kb", x.getPss(),
+                            "rss_kb", x.getRss(),
+                            "process", x.getProcessName(),
+                            "exit_time", iso(x.getTimestamp())),
+                         bad ? "error" : "info", "App exit: " + reason, false);
+                }
+                if (newest > seen) p.edit().putLong(EXIT_SEEN, newest).apply();
+            } catch (Exception e) {
+                android.util.Log.w("Ereader", "exit reasons unavailable", e);
+            }
+        }
+
+        static String exitReason(int r) {
+            switch (r) {
+                case android.app.ApplicationExitInfo.REASON_EXIT_SELF: return "EXIT_SELF";
+                case android.app.ApplicationExitInfo.REASON_SIGNALED: return "SIGNALED";
+                case android.app.ApplicationExitInfo.REASON_LOW_MEMORY: return "LOW_MEMORY";
+                case android.app.ApplicationExitInfo.REASON_CRASH: return "CRASH";
+                case android.app.ApplicationExitInfo.REASON_CRASH_NATIVE: return "CRASH_NATIVE";
+                case android.app.ApplicationExitInfo.REASON_ANR: return "ANR";
+                case android.app.ApplicationExitInfo.REASON_INITIALIZATION_FAILURE: return "INITIALIZATION_FAILURE";
+                case android.app.ApplicationExitInfo.REASON_PERMISSION_CHANGE: return "PERMISSION_CHANGE";
+                case android.app.ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE: return "EXCESSIVE_RESOURCE_USAGE";
+                case android.app.ApplicationExitInfo.REASON_USER_REQUESTED: return "USER_REQUESTED";
+                case android.app.ApplicationExitInfo.REASON_USER_STOPPED: return "USER_STOPPED";
+                case android.app.ApplicationExitInfo.REASON_DEPENDENCY_DIED: return "DEPENDENCY_DIED";
+                case android.app.ApplicationExitInfo.REASON_OTHER: return "OTHER";
+                default: return "UNKNOWN_" + r;
+            }
         }
 
         static org.json.JSONObject d(Object... kv) {
@@ -657,12 +787,16 @@ public class MainActivity extends Activity {
         }
 
         // Ship everything queued, then clear. Background thread only.
+        // Only the events actually shipped are removed, so anything noted while the
+        // POST was in flight (e.g. #337 exit reasons at launch) waits for the next flush.
         static void flush(android.content.Context app) {
             String payload;
+            int shipped;
             synchronized (NativeDiag.class) {
                 String q = app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
                               .getString(KEY, "[]");
                 if (q == null || "[]".equals(q) || q.isEmpty()) return;
+                try { shipped = new org.json.JSONArray(q).length(); } catch (Exception e) { shipped = Integer.MAX_VALUE; }
                 payload = "{\"events\":" + q + "}";
             }
             java.net.HttpURLConnection c = null;
@@ -678,8 +812,16 @@ public class MainActivity extends Activity {
                 int code = c.getResponseCode();
                 if (code >= 200 && code < 300) {
                     synchronized (NativeDiag.class) {
-                        app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE)
-                           .edit().putString(KEY, "[]").apply();
+                        android.content.SharedPreferences p =
+                            app.getSharedPreferences(PREFS, android.content.Context.MODE_PRIVATE);
+                        String rest = "[]";
+                        try {
+                            org.json.JSONArray now = new org.json.JSONArray(p.getString(KEY, "[]"));
+                            org.json.JSONArray keep = new org.json.JSONArray();
+                            for (int i = shipped; i < now.length(); i++) keep.put(now.get(i));
+                            rest = keep.toString();
+                        } catch (Exception ignored) {}
+                        p.edit().putString(KEY, rest).apply();
                     }
                 }
             } catch (Exception ignored) {
