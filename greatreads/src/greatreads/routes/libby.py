@@ -835,10 +835,17 @@ async def libby_cards_status(current_user: User = Depends(get_current_user)):
     except Exception:
         return JSONResponse({"error": "Libby engine returned a non-JSON response."}, status_code=502)
     for card in (data.get("cards") or []):
-        user = str(card.pop("credUsername", "") or "")
-        card.pop("credPassword", None)
-        card["credUsernameMasked"] = (f"{user[:2]}***{user[-2:]}" if len(user) > 4 else ("*" * len(user))) if user else ""
+        _sanitize_card(card)
     return JSONResponse(data, status_code=resp.status_code)
+
+
+def _sanitize_card(card) -> None:
+    """Strip the saved website login from an engine card row, keep a masked username."""
+    if not isinstance(card, dict):
+        return
+    user = str(card.pop("credUsername", "") or "")
+    card.pop("credPassword", None)
+    card["credUsernameMasked"] = (f"{user[:2]}***{user[-2:]}" if len(user) > 4 else ("*" * len(user))) if user else ""
 
 
 class CardCredentialsRequest(BaseModel):
@@ -865,6 +872,59 @@ async def libby_set_card_credentials(
     if payload.card_id:
         body["card_id"] = payload.card_id
     return await _engine_post("/api/cards/credentials", body)
+
+
+class CardRelinkRequest(BaseModel):
+    website_id: str
+    username: str
+    password: str
+    card_id: str | None = None
+
+
+@router.post("/cards/relink")
+async def libby_relink_card(
+    payload: CardRelinkRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+):
+    """Sign a Libby card in again with a (new) card number + PIN (#339). The website
+    credentials above only feed the download automation; the Libby card every
+    borrow goes through keeps its old login until it is re-linked here. Proxies the
+    engine's POST /api/cards/relink; card rows come back sanitized like /cards/status."""
+    if not (payload.website_id and payload.username and payload.password):
+        raise HTTPException(status_code=400, detail="website_id, username, and password are required.")
+    body = {"website_id": payload.website_id, "username": payload.username, "password": payload.password}
+    if payload.card_id:
+        body["card_id"] = payload.card_id
+    try:
+        async with httpx.AsyncClient(timeout=_SEARCH_TIMEOUT) as client:
+            resp = await client.post(f"{LIBBY_ENGINE_URL}/api/cards/relink", json=body)
+    except Exception as exc:
+        logger.warning("libby cards/relink: engine unreachable: %s", exc)
+        return JSONResponse({"error": "Libby engine is unreachable — is the libby-web service running?"}, status_code=502)
+    try:
+        data = resp.json()
+    except Exception:
+        data = {"error": "Libby engine returned a non-JSON response."}
+    if resp.status_code == 404 and not (isinstance(data, dict) and "success" in data):
+        data = {"success": False, "error": "This Libby engine can't re-link cards yet (Libby #11)."}
+    if isinstance(data, dict):
+        _sanitize_card(data.get("card"))
+        for card in (data.get("cards") or []):
+            _sanitize_card(card)
+    try:
+        from ..services.event_log_service import log_event
+        d = data if isinstance(data, dict) else {}
+        ok = resp.status_code < 400 and bool(d.get("success"))
+        log_event("libby", "card_relink" if ok else "card_relink_failed",
+                  level="success" if ok else "warning",
+                  title="Library card re-linked" if ok else "Library card re-link failed",
+                  detail={"website_id": payload.website_id, "card_id": payload.card_id,
+                          "same_card": d.get("same_card"), "new_card_ids": d.get("new_card_ids"),
+                          "status": resp.status_code,
+                          "error": str(d.get("error"))[:200] if d.get("error") else None})
+    except Exception:
+        pass
+    return JSONResponse(data, status_code=resp.status_code)
 
 
 # ── Item 6 — GreatReads ownership annotation for Libby search rows ────────────
