@@ -77,6 +77,7 @@ public class PlaybackService extends Service {
     @Override
     public void onCreate() {
         super.onCreate();
+        MainActivity.NativeDiag.installCrashHandler(this);   // #337: the service can outlive the activity
         sInstance = this;
         createChannel();
         session = new MediaSessionCompat(this, "GreatReads");
