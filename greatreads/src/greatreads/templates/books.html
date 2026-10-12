@@ -1795,11 +1795,17 @@ async function loadLibbyCards() {
         // #189: per-card. Multi-card libraries show the account so you know which card
         // you're crediting; the badge notes whether creds are card- or library-scoped.
         const scopeNote = c.credScope === 'library' ? ' (library-wide login)' : (c.credScope === 'card' ? ' (this card)' : '');
-        const cred = c.hasCredentials
+        // #339: a card Libby refused as expired/invalid outranks "Ready" — the website
+        // login can be fine while the Libby card itself is still on the old number.
+        const authErr = c.auth_error || null;
+        const cred = (c.card_expired || authErr)
+            ? `<span class="badge bg-danger-subtle text-danger-emphasis border border-danger-subtle" title="${esc((authErr && authErr.message) || 'Libby refused this card')} — update it with your new card number"><i class="fas fa-id-card me-1"></i>${authErr && authErr.reason === 'auth_failed' ? 'Sign-in failed' : 'Card expired'}</span>`
+            : c.hasCredentials
             ? `<span class="badge bg-success-subtle text-success-emphasis border border-success-subtle" title="Website credentials saved${c.credUsernameMasked ? ' (' + esc(c.credUsernameMasked) + ')' : ''}${scopeNote}"><i class="fas fa-check me-1"></i>Ready</span>`
             : '<span class="badge bg-warning-subtle text-warning-emphasis border border-warning-subtle" title="Add website credentials to enable downloads for this card"><i class="fas fa-triangle-exclamation me-1"></i>Needs sign-in</span>';
         const key = esc(c.advantageKey || '');
         const cardId = esc(String(c.cardId || ''));
+        const site = esc(String(c.websiteId || ''));
         const label = c.multiCard
             ? `<div class="fw-medium small">${esc(c.name || c.advantageKey || '?')}</div><div class="small text-muted">Card ${c.cardUsernameMasked ? esc(c.cardUsernameMasked) : '…' + cardId.slice(-4)}</div>`
             : `<div class="fw-medium small">${esc(c.name || c.advantageKey || '?')}</div>`;
@@ -1807,7 +1813,7 @@ async function loadLibbyCards() {
             <div class="d-flex justify-content-between align-items-center">
                 <div>${label}${counts}</div>
                 <div class="d-flex align-items-center gap-2">${cred}
-                    <button class="btn btn-sm btn-outline-secondary py-0" onclick="libbyToggleCredForm(${idx}, '${key}', '${cardId}')">${c.hasCredentials ? 'Update' : 'Add sign-in'}</button>
+                    <button class="btn btn-sm btn-outline-secondary py-0" onclick="libbyToggleCredForm(${idx}, '${key}', '${cardId}', '${site}')">${(c.card_expired || authErr) ? 'Update card' : (c.hasCredentials ? 'Update' : 'Add sign-in')}</button>
                 </div>
             </div>
             <div id="lcred-${idx}" class="mt-2" style="display:none;"></div>
@@ -1815,7 +1821,7 @@ async function loadLibbyCards() {
     }).join('') + '</div>';
 }
 // #189 — add/update a card's OverDrive WEBSITE credentials (distinct from the Libby app).
-function libbyToggleCredForm(idx, key, cardId) {
+function libbyToggleCredForm(idx, key, cardId, websiteId) {
     const box = document.getElementById('lcred-' + idx);
     if (!box) return;
     if (box.style.display !== 'none') { box.style.display = 'none'; box.innerHTML = ''; return; }
@@ -1825,12 +1831,17 @@ function libbyToggleCredForm(idx, key, cardId) {
                 <input type="text" class="form-control form-control-sm" id="lcu-${idx}" autocomplete="off"></div>
             <div class="col"><label class="form-label small mb-0">PIN / password</label>
                 <input type="password" class="form-control form-control-sm" id="lcp-${idx}" autocomplete="new-password"></div>
-            <div class="col-auto"><button class="btn btn-sm btn-primary" id="lcs-${idx}" onclick="libbySaveCreds(${idx}, '${key}', '${cardId || ''}')">Save</button></div>
+            <div class="col-auto"><button class="btn btn-sm btn-primary" id="lcs-${idx}" onclick="libbySaveCreds(${idx}, '${key}', '${cardId || ''}', '${websiteId || ''}')">Save</button></div>
         </div>
-        <div class="form-text">This card's OverDrive <b>website</b> sign-in (card number + PIN) — used by the download automation. It can differ from your Libby-app login, which is why a title that borrows in Libby can still fail here. Saved for <b>this specific card</b>, so each card at a multi-card library gets its own login.</div>`;
+        <div class="form-check mt-1">
+            <input class="form-check-input" type="checkbox" id="lcr-${idx}" ${websiteId ? 'checked' : 'disabled'}>
+            <label class="form-check-label small" for="lcr-${idx}">Also sign the <b>Libby card</b> in with this number (do this for a new or renewed card)</label>
+        </div>
+        <div class="form-text">Saves this card's OverDrive <b>website</b> sign-in (card number + PIN), used by the download automation, for <b>this specific card</b>. Borrows go through the Libby card, which keeps its own login: tick the box to re-sign it too, or a new card number won't reach your borrows (#339).</div>
+        <div id="lcm-${idx}" class="small mt-1"></div>`;
     const u = document.getElementById('lcu-' + idx); if (u) u.focus();
 }
-async function libbySaveCreds(idx, key, cardId) {
+async function libbySaveCreds(idx, key, cardId, websiteId) {
     const u = (document.getElementById('lcu-' + idx).value || '').trim();
     const p = (document.getElementById('lcp-' + idx).value || '').trim();
     if (!u || !p) { showToast('Enter both the card # / username and PIN / password.', 'warning'); return; }
@@ -1839,9 +1850,40 @@ async function libbySaveCreds(idx, key, cardId) {
         const data = { advantage_key: key, username: u, password: p };
         if (cardId) data.card_id = cardId;   // #189: per-card save
         await GreatReads.apiCall('/libby/cards/credentials', { method: 'POST', data });
+    } catch (e) { showToast('Could not save credentials — try again.', 'danger'); if (btn) btn.disabled = false; return; }
+    const relink = document.getElementById('lcr-' + idx);
+    if (!(relink && relink.checked && websiteId)) {
         showToast('Credentials saved for this card.', 'success');
         loadLibbyCards();
-    } catch (e) { showToast('Could not save credentials — try again.', 'danger'); if (btn) btn.disabled = false; }
+        return;
+    }
+    // #339: re-sign the Libby card itself, so borrows use the new number too.
+    const msg = document.getElementById('lcm-' + idx);
+    if (msg) { msg.className = 'small mt-1 text-muted'; msg.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Signing the Libby card in…'; }
+    let r;
+    try {
+        const rd = { website_id: websiteId, username: u, password: p };
+        if (cardId) rd.card_id = cardId;
+        r = await GreatReads.apiCall('/libby/cards/relink', { method: 'POST', data: rd, silent: true });
+    } catch (e) {
+        const ed = e && e.response && e.response.data;
+        const why = (ed && (ed.error || ed.detail)) || (e && e.message) || 'unknown error';
+        if (msg) { msg.className = 'small mt-1 text-danger'; msg.textContent = 'Website sign-in saved, but Libby refused the card: ' + why; }
+        if (btn) btn.disabled = false;
+        return;
+    }
+    if (!(r && r.success)) {
+        if (msg) { msg.className = 'small mt-1 text-danger'; msg.textContent = 'Website sign-in saved, but Libby refused the card: ' + ((r && r.error) || 'unknown error'); }
+        if (btn) btn.disabled = false;
+        return;
+    }
+    if (r.same_card === false && (r.new_card_ids || []).length) {
+        showToast('Saved. Libby added this as a new card; the old card is still listed and expired, so use the new one (you can remove the old one in the Libby app).', 'warning');
+    } else {
+        showToast('Saved, and the Libby card is signed in with the new number.', 'success');
+    }
+    loadLibbyCards();
+    if (typeof _libbyHarvestCards !== 'undefined') _libbyHarvestCards = null;   // pickers re-read card status
 }
 
 async function libbyRelink() {

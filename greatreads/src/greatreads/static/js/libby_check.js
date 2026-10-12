@@ -214,16 +214,28 @@ let _libbyFmtSel = {};
 // previously offered as "Borrow & Download" with no hint. Empirical set from the
 // engine (a card earns it by a real attach or a completed harvest).
 let _libbyHarvestCards = null;          // Set of cardId strings, null = not loaded
+// #339: cards Libby last refused (expired / bad login), cardId → auth_error. Read
+// from the same status call. Sorted last and flagged, so the picker never quietly
+// defaults to a card that will only fail once you press Borrow.
+let _libbyDeadCards = new Map();
 async function libbyLoadHarvestCards() {
     if (_libbyHarvestCards) return _libbyHarvestCards;
     try {
         const r = await GreatReads.apiCall('/libby/cards/status', { silent: true });
-        _libbyHarvestCards = new Set((r && r.cards || [])
-            .filter(c => c.can_harvest).map(c => String(c.cardId)));
+        const cards = (r && r.cards) || [];
+        _libbyHarvestCards = new Set(cards.filter(c => c.can_harvest).map(c => String(c.cardId)));
+        _libbyDeadCards = new Map(cards.filter(c => c.card_expired || c.auth_error)
+            .map(c => [String(c.cardId), c.auth_error || { reason: 'expired' }]));
     } catch (e) {
         _libbyHarvestCards = new Set();   // fail CLOSED: unknown => warn, never over-promise
     }
     return _libbyHarvestCards;
+}
+function libbyCardDead(cardId) {
+    return _libbyDeadCards.get(String(cardId)) || null;
+}
+function libbyDeadLabel(err) {
+    return err && err.reason === 'auth_failed' ? 'card sign-in failed' : 'card expired';
 }
 function libbyCanHarvest(cardId) {
     return !!(_libbyHarvestCards && _libbyHarvestCards.has(String(cardId)));
@@ -239,7 +251,9 @@ function libbyHarvestBadge(cardId) {
 function _libbyFmtLibs(fmt) {
     // Prefer a harvestable library among equally-available ones (#298) so the
     // default selection is the one that can complete end to end.
+    // A card Libby refused (#339) goes last, whatever its availability.
     return (fmt.libraries || []).slice().sort((a, b) =>
+        ((libbyCardDead(a.cardId) ? 1 : 0) - (libbyCardDead(b.cardId) ? 1 : 0)) ||
         ((b.isAvailable ? 1 : 0) - (a.isAvailable ? 1 : 0)) ||
         ((libbyCanHarvest(b.cardId) ? 1 : 0) - (libbyCanHarvest(a.cardId) ? 1 : 0)));
 }
@@ -335,7 +349,7 @@ function libbyFormatsHtml(c) {
             fromHtml = '';
         } else if (libs.length > 1) {
             const opts = libs.map(l =>
-                `<option value="${esc(String(l.cardId))}"${String(l.cardId) === card ? ' selected' : ''}>${esc((l.key || '').toUpperCase())} — ${l.isAvailable ? 'available now' : esc(libbyWaitText(l.estimatedWaitDays))}</option>`).join('');
+                `<option value="${esc(String(l.cardId))}"${String(l.cardId) === card ? ' selected' : ''}>${esc((l.key || '').toUpperCase())} — ${libbyCardDead(l.cardId) ? '⚠ ' + libbyDeadLabel(libbyCardDead(l.cardId)) : (l.isAvailable ? 'available now' : esc(libbyWaitText(l.estimatedWaitDays)))}</option>`).join('');
             fromHtml = `<div class="small text-muted mt-1">from <select class="form-select form-select-sm d-inline-block w-auto py-0" style="font-size:.75rem;"
                 onchange="libbyFmtPick('${s.media}', this.value)">${opts}</select></div>`;
         } else if (sel) {
@@ -346,8 +360,14 @@ function libbyFormatsHtml(c) {
               `This library isn't set up for automatic audiobook download — borrowing here keeps the ` +
               `loan checked out for you to fetch externally and return manually.</div>`
             : '';
+        const dead = sel && !(ownThis && fmt.onHold) ? libbyCardDead(sel.cardId) : null;
+        const deadNote = dead
+            ? `<div class="small text-danger mt-1"><i class="fas fa-id-card me-1"></i>` +
+              `Libby refused this ${esc((sel.key || '').toUpperCase())} card (${libbyDeadLabel(dead)}${dead.message ? ': ' + esc(dead.message) : ''}). ` +
+              `Pick another library, or update the card under Libraries &amp; cards.</div>`
+            : '';
         rows.push(`<div class="border rounded px-2 py-1 mb-1">
-            <div class="d-flex align-items-center justify-content-between"><span>${label}${harvestBadge} · ${avail}</span>${action}</div>${fromHtml}${manualNote}</div>`);
+            <div class="d-flex align-items-center justify-content-between"><span>${label}${harvestBadge} · ${avail}</span>${action}</div>${fromHtml}${deadNote}${manualNote}</div>`);
     }
     return rows.length ? rows.join('') : '<div class="small text-muted">Not found on Libby.</div>';
 }
