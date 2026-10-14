@@ -17,7 +17,7 @@ import logging
 import os
 from typing import Optional
 
-from sqlalchemy import case, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session
 
 from ..models.book import Book
@@ -71,9 +71,12 @@ def effective_interval(db: Session) -> int:
 
 def _needs_fields_filter():
     """A book is a backfill candidate when it's missing a synopsis, a public rating,
-    or has no genres — and has a title to look up."""
+    or has no genres — and has a title to look up. An EMPTY title counts as no title:
+    backfill_one bails on it without advancing the cursor, so never-attempted blank
+    rows sorted to the head of the queue and froze the whole sweep (#341)."""
     return (
         Book.title.isnot(None),
+        func.trim(Book.title) != "",
         or_(Book.description.is_(None), Book.public_rating.is_(None), ~Book.tags.any()),
     )
 
@@ -131,6 +134,10 @@ def backfill_one(db: Session, book: Book, vocab: Optional[dict] = None) -> list:
     Commits on its own so a provider failure mid-batch doesn't lose prior work."""
     title = (book.title or "").strip()
     if not title:
+        # Still advance the cursor, so a blank row can never pin the queue (#341).
+        from datetime import datetime as _dt
+        book.metadata_attempted_at = _dt.utcnow()
+        db.commit()
         return []
     author = book.author or ""
     author_last = (book.author_name_second or "").strip()

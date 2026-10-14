@@ -110,11 +110,19 @@ async def backfill_status(
     need fields, plus the current (UI-configurable) cadence/batch config."""
     import os
     from ..services.metadata_backfill_service import candidate_query, effective_batch, effective_interval
+    from ..services.job_status import snapshot
+    job = snapshot(getattr(request.app.state, "scheduler", None))["jobs"].get("metadata_backfill", {})
     return {
         "candidates": candidate_query(db).count(),
         "batch_size": effective_batch(db),
         "interval_min": effective_interval(db),
         "google_key": bool(os.environ.get("GOOGLE_BOOKS_API_KEY")),
+        # Last scheduled run + next one, so a stalled sweep shows in Settings (#341).
+        "last_end": job.get("last_end"),
+        "last_ok": job.get("last_ok"),
+        "last_error": job.get("last_error"),
+        "last_result": job.get("last_result"),
+        "next_run": job.get("next_run"),
     }
 
 

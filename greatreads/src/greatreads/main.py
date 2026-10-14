@@ -19,6 +19,13 @@ from .routes import books, readings, chains, library, settings as settings_route
 from . import ereader_api  # absorbed Ereader backend (:8091), routes carry /api/... (#22)
 from .auth import get_current_user_from_cookie
 
+# The app never configured logging, so every logger.info/error from the scheduler
+# jobs went nowhere and a stalled sweep was invisible in `docker logs` (#341).
+# uvicorn's own loggers don't propagate, so this doesn't double its access log.
+logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
+# APScheduler logs every run at INFO; keep only its misfire / max-instances warnings.
+logging.getLogger("apscheduler").setLevel(logging.WARNING)
+
 logger = logging.getLogger(__name__)
 
 
@@ -59,16 +66,15 @@ class ForwardedPrefixMiddleware(BaseHTTPMiddleware):
         return response
 
 
+# Scheduled jobs raise on failure; services.job_status.tracked() logs the traceback,
+# records the run and writes a scheduler/job_failed event (#341).
+
 def _midnight_recalculate():
     """Scheduled job: recalculate all reading chains at midnight MT."""
     db = SessionLocal()
     try:
         from .services.chain_calculator import ChainCalculator
-        logger.info("Midnight chain recalculation starting…")
         ChainCalculator(db).recalculate_all_chains()
-        logger.info("Midnight chain recalculation complete.")
-    except Exception as exc:
-        logger.error("Midnight chain recalculation failed: %s", exc)
     finally:
         db.close()
 
@@ -158,9 +164,13 @@ def _poll_news():
         result = poll_releases(db)
         reprocess(db)                          # re-clean titles/junk + drop stale junk leftovers
         enrich = enrich_with_openlibrary(db)   # cross-reference OpenLibrary (no Google quota)
-        logger.info("Daily news poll complete: %s | enrich: %s", result, enrich)
-    except Exception as exc:
-        logger.error("Daily news poll failed: %s", exc)
+        try:   # one line in /logs per daily poll, so a dead poll is noticed (#341)
+            from .services.event_log_service import log_event
+            log_event("scheduler", "news_poll", level="warning" if isinstance(result, dict) and result.get("ok") is False else "success",
+                      detail={"result": result, "enrich": enrich})
+        except Exception:
+            pass
+        return {"poll": result, "enrich": enrich}
     finally:
         db.close()
 
@@ -170,10 +180,7 @@ def _mediaforge_answers():
     db = SessionLocal()
     try:
         from .services.mediaforge_service import poll_answers
-        if poll_answers(db):
-            logger.info("MediaForge answers posted")
-    except Exception as exc:
-        logger.error("MediaForge answer poll failed: %s", exc)
+        return poll_answers(db)
     finally:
         db.close()
 
@@ -185,11 +192,7 @@ def _metadata_backfill():
     db = SessionLocal()
     try:
         from .services.metadata_backfill_service import backfill_batch
-        result = backfill_batch(db)
-        if result.get("updated"):
-            logger.info("Metadata backfill: %s", result)
-    except Exception as exc:
-        logger.error("Metadata backfill failed: %s", exc)
+        return backfill_batch(db)
     finally:
         db.close()
 
@@ -200,9 +203,7 @@ def _libby_autofulfill():
     db = SessionLocal()
     try:
         from .services.libby_autofulfill_service import run_autofulfill
-        run_autofulfill(db)
-    except Exception as exc:
-        logger.error("Libby auto-fulfill failed: %s", exc)
+        return run_autofulfill(db)
     finally:
         db.close()
 
@@ -212,13 +213,8 @@ def _align_refresh():
     maps for every dual-format book whose ebook chapter list has been uploaded (i.e.
     opened at least once). Keeps cross-format progress sync tight as ABS chapters or
     the match logic change. Reader-assisted, so never-opened books are skipped."""
-    try:
-        from .ereader_api import refresh_all_alignments
-        result = refresh_all_alignments()
-        if result.get("books"):
-            logger.info("Chapter alignment refresh: %s", result)
-    except Exception as exc:
-        logger.error("Chapter alignment refresh failed: %s", exc)
+    from .ereader_api import refresh_all_alignments
+    return refresh_all_alignments()
 
 
 @asynccontextmanager
@@ -253,9 +249,16 @@ async def lifespan(app: FastAPI):
         from apscheduler.triggers.cron import CronTrigger
         from apscheduler.triggers.interval import IntervalTrigger
 
-        scheduler = BackgroundScheduler(timezone="America/Denver")
+        from .services.job_status import tracked
+        # misfire_grace_time: APScheduler's default is 1 s, so a cron run (the 05:30
+        # news poll) is silently skipped if the scheduler wakes even a second late.
+        # coalesce: a backlog of missed runs fires once, not N times (#341).
+        scheduler = BackgroundScheduler(
+            timezone="America/Denver",
+            job_defaults={"misfire_grace_time": 3600, "coalesce": True},
+        )
         scheduler.add_job(
-            _midnight_recalculate,
+            tracked("midnight_chain_recalc", _midnight_recalculate),
             CronTrigger(hour=0, minute=0, timezone="America/Denver"),
             id="midnight_chain_recalc",
             replace_existing=True,
@@ -263,7 +266,7 @@ async def lifespan(app: FastAPI):
         # Poll Calibre/ABS for new items and import them automatically.
         # Runs once shortly after startup, then on a fixed interval.
         scheduler.add_job(
-            _auto_sync,
+            tracked("auto_sync_libraries", _auto_sync, quiet=True),
             IntervalTrigger(minutes=AUTO_SYNC_INTERVAL_MINUTES),
             id="auto_sync_libraries",
             replace_existing=True,
@@ -273,7 +276,7 @@ async def lifespan(app: FastAPI):
         )
         # Daily News poll (#68) — Google Books is keyed; off-hours to spread quota.
         scheduler.add_job(
-            _poll_news,
+            tracked("daily_news_poll", _poll_news),
             CronTrigger(hour=5, minute=30, timezone="America/Denver"),
             id="daily_news_poll",
             replace_existing=True,
@@ -290,7 +293,7 @@ async def lifespan(app: FastAPI):
         finally:
             _bf_db.close()
         scheduler.add_job(
-            _metadata_backfill,
+            tracked("metadata_backfill", _metadata_backfill),
             IntervalTrigger(minutes=_bf_interval),
             id="metadata_backfill",
             replace_existing=True,
@@ -309,7 +312,7 @@ async def lifespan(app: FastAPI):
         finally:
             _af_db.close()
         scheduler.add_job(
-            _libby_autofulfill,
+            tracked("libby_autofulfill", _libby_autofulfill, quiet=True),
             IntervalTrigger(minutes=_af_interval),
             id="libby_autofulfill",
             replace_existing=True,
@@ -320,7 +323,7 @@ async def lifespan(app: FastAPI):
         # Chapter-alignment refresh sweep (#266) — re-match the dense ebook↔audiobook
         # per-chapter maps for opened dual-format books, ~every 30 min.
         scheduler.add_job(
-            _align_refresh,
+            tracked("chapter_alignment_refresh", _align_refresh, quiet=True),
             IntervalTrigger(minutes=int(os.environ.get("ALIGN_REFRESH_INTERVAL_MIN", "30"))),
             id="chapter_alignment_refresh",
             replace_existing=True,
@@ -330,7 +333,7 @@ async def lifespan(app: FastAPI):
         )
         # MediaForge answers (#326): its worker runs */10, so 2 min is plenty.
         scheduler.add_job(
-            _mediaforge_answers,
+            tracked("mediaforge_answers", _mediaforge_answers, quiet=True),
             IntervalTrigger(minutes=2),
             id="mediaforge_answers",
             replace_existing=True,
@@ -340,11 +343,11 @@ async def lifespan(app: FastAPI):
         scheduler.start()
         app.state.scheduler = scheduler   # so /books/backfill-config can reschedule live (#166)
         logger.info(
-            "Schedulers started: midnight chain-recalc + auto-sync safety net every %d min + daily news poll.",
-            AUTO_SYNC_INTERVAL_MINUTES,
+            "Scheduler started with %d jobs: %s",
+            len(scheduler.get_jobs()), ", ".join(j.id for j in scheduler.get_jobs()),
         )
     except Exception as exc:
-        logger.error("Failed to start scheduler: %s", exc)
+        logger.exception("Failed to start scheduler: %s", exc)
         scheduler = None
 
     # Instant Calibre/ABS change watcher (#16) — near-real-time imports.
@@ -428,6 +431,14 @@ app.include_router(enrichment.router, prefix="/api/enrichment", tags=["enrichmen
 app.include_router(libby.router, prefix="/api/libby", tags=["libby"])  # Libby/OverDrive proxy (#142)
 app.include_router(events.router, prefix="/api", tags=["events"])  # activity/event log (#184)
 app.include_router(ereader_api.router, tags=["ereader"])  # no prefix — routes already carry /api/... (#22)
+
+
+@app.get("/api/scheduler/status")
+async def scheduler_status(request: Request):
+    """Every background job: next run, last start/end/duration/result/error (#341).
+    Read-only, like /api/health, so a stall can be checked with a plain curl."""
+    from .services.job_status import snapshot
+    return snapshot(getattr(request.app.state, "scheduler", None))
 
 
 @app.get("/", response_class=HTMLResponse)
