@@ -1302,7 +1302,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
         </div></div>`;
     // Row 2: format reading buttons in a row, under the cover + fields.
     const formatRow = noFormats
-        ? '<div class="col-12 text-muted small"><i class="fas fa-book me-1"></i>Not in your library.</div>'
+        ? '<div class="col-12 text-muted small" id="grNotOwnedNote"><i class="fas fa-book me-1"></i>Not in your library.</div>'
         : `<div class="col-12"><div class="row g-2">${tiles.join('')}</div></div>`;
 
     // The progress display is the tap-to-log entry for any in-progress reading
@@ -1457,6 +1457,24 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     grInjectSeriesStrip(book);
     grInjectAuthorReads(book.author);
     grUpdateNavButtons();
+
+    // #344: "Not in your library" must agree with Libby's ownership banner. If this record
+    // has no formats but the same book is owned under ANOTHER record, say so + offer the
+    // merge (async, non-blocking; any failure leaves the old text).
+    if (noFormats && book.id != null && book.title) {
+        apiCall('/libby/ownership', {
+            method: 'POST', silent: true,
+            data: { items: [{ title: book.title, author: book.author || '' }] },
+        }).then(d => {
+            const r = d && d.results && d.results[0];
+            const note = document.getElementById('grNotOwnedNote');
+            if (!r || !r.owned || r.book_id == null || r.book_id === book.id || !note) return;
+            const base = window.APP_BASE_PATH || '';
+            const href = `${base}/books?merge=${encodeURIComponent(r.book_id)},${encodeURIComponent(book.id)}`;
+            note.innerHTML = `<i class="fas fa-clone me-1"></i>You own this as another record. `
+                + `<a href="${href}">Compare &amp; merge</a>`;
+        }).catch(() => {});
+    }
 
     // Fill the highlights count (reveal the link only if there are any).
     if (showHl) {
