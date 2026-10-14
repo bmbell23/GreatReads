@@ -613,6 +613,9 @@
                 <div class="d-flex justify-content-between border-bottom py-1">
                     <span class="text-muted">Books still missing fields</span>
                     <span class="font-monospace" id="mbf-candidates">…</span></div>
+                <div class="d-flex justify-content-between border-bottom py-1">
+                    <span class="text-muted">Last scheduled run</span>
+                    <span class="font-monospace text-end" id="mbf-last">…</span></div>
                 <div class="d-flex justify-content-between py-1">
                     <span class="text-muted">Google Books key</span>
                     <span class="font-monospace" id="mbf-key">…</span></div>
@@ -1072,6 +1075,16 @@ async function loadBackfillStatus() {
         const setVal = (id, v) => { const el = document.getElementById(id); if (el) el.value = v; };
         setTxt('mbf-candidates', s.candidates);
         setTxt('mbf-key', s.google_key ? 'configured' : 'missing (Google source disabled)');
+        // Last scheduled run (#341): a stall shows up here instead of in a DB query.
+        let last = 'not yet since the last restart';
+        if (s.last_end) {
+            const when = new Date(s.last_end).toLocaleString();
+            const r = s.last_result || {};
+            last = s.last_ok === false ? `${when}: failed (${s.last_error || 'error'})`
+                 : `${when}: ${r.processed ?? 0} tried, ${r.updated ?? 0} filled`;
+        }
+        const lastEl = document.getElementById('mbf-last');
+        if (lastEl) { lastEl.textContent = last; lastEl.classList.toggle('text-danger', s.last_ok === false); }
         setVal('mbf-batch', s.batch_size);
         setVal('mbf-interval', s.interval_min);
     } catch (e) { /* leave placeholders */ }
