@@ -134,7 +134,40 @@ async def wishlist_duplicates(
 ):
     """Wishlist books that duplicate an owned book + blank-title junk rows (#216)."""
     from ..services.dedup_service import find_duplicates, find_blank
-    return {"pairs": find_duplicates(db), "blank": find_blank(db)}
+    from ..services.dedup_service import set_count_cache
+    pairs = find_duplicates(db)
+    set_count_cache(len(pairs))   # #346: a fresh compute refreshes the nav-badge cache
+    return {"pairs": pairs, "blank": find_blank(db)}
+
+
+# #346: cheap count for the nav badge + Settings banner (cached in-process, ~10 min).
+@router.get("/duplicates/count")
+async def duplicates_count(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    from ..services.dedup_service import duplicate_count
+    return {"count": duplicate_count(db)}
+
+
+class DismissRequest(BaseModel):
+    a: int
+    b: int
+
+
+@router.post("/duplicates/dismiss")
+async def dismiss_duplicate(
+    request: Request,
+    body: DismissRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """'Not a duplicate' (#346): remember the pair so find_duplicates stops listing it."""
+    from ..services.dedup_service import dismiss_pair
+    if body.a == body.b:
+        raise HTTPException(status_code=400, detail="Need two different books")
+    return {"dismissed": dismiss_pair(db, body.a, body.b)}
 
 
 @router.post("/purge-blank")
@@ -791,6 +824,8 @@ async def merge_books(
     db.expire(loser)
     db.delete(loser)
     db.commit()
+    from ..services.dedup_service import invalidate_count_cache
+    invalidate_count_cache()   # #346: the nav-badge duplicate count is now stale
 
     for p in (settings.covers_dir / f"{loser.id}.jpg",
               Path("/app/data/covers_thumb") / f"{loser.id}.jpg"):

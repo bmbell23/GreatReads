@@ -12,6 +12,12 @@
 </div>
 <style>.page-header-bookish { padding-top: 0; padding-bottom: 0; }</style>
 
+<!-- Possible-duplicates banner (#346); hidden at 0 -->
+<div class="alert alert-warning d-none align-items-center justify-content-between flex-wrap gap-2" id="dd-banner" role="alert">
+    <span><i class="fas fa-clone me-2"></i><strong id="dd-banner-n">0</strong> possible duplicates to review</span>
+    <button class="btn btn-sm btn-warning" type="button" onclick="openDupQueue(0)">Review now</button>
+</div>
+
 <div class="row">
     <div class="col-lg-8">
         <!-- App Update Card (#277) — Android app only; hidden in a browser. -->
@@ -648,7 +654,9 @@
             <div class="card-body">
                 <p class="text-muted small mb-2">Wishlist entries that match a book you already own
                     (e.g. <em>Mindset</em> vs <em>Mindset: The New Psychology of Success</em>). “Compare &amp; merge”
-                    opens the merge screen with your owned copy as the one that is kept.</p>
+                    opens the review queue at that pair, with your owned copy as the one that is kept.</p>
+                <button class="btn btn-sm btn-primary mb-2" type="button" id="dd-review-all" onclick="openDupQueue(0)" disabled>
+                    <i class="fas fa-list-check me-1"></i>Review all (0)</button>
                 <div class="d-flex justify-content-between border-bottom py-1">
                     <span class="text-muted">Wishlist books you already own</span>
                     <span class="font-monospace" id="dd-pair-count">…</span></div>
@@ -866,6 +874,28 @@ chapter remain = (chapterEnd − pageIndex) × avg</pre>
                 </div>
                 <div class="small text-muted mb-2"><i class="fas fa-folder-open me-1"></i><span id="mmBrowsePath">/</span></div>
                 <div id="mmBrowseList" class="list-group" style="max-height:55vh; overflow:auto;"></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Duplicate review queue (#346): walk the pairs one after another without leaving Settings -->
+<div class="modal fade" id="dupQueueModal" tabindex="-1">
+    <div class="modal-dialog modal-xl modal-dialog-scrollable">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title"><span id="dq-title">Pair</span> <span class="badge bg-secondary ms-2" id="dq-kind"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="dq-body"></div>
+            <div class="modal-footer justify-content-between flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-secondary btn-sm" id="dq-swap" onclick="dqSwap()">
+                    <i class="fas fa-right-left me-1"></i>Swap</button>
+                <div class="d-flex flex-wrap gap-2">
+                    <button type="button" class="btn btn-outline-secondary" id="dq-skip" onclick="dqSkip()" title="Shortcut: S">Skip <kbd>S</kbd></button>
+                    <button type="button" class="btn btn-outline-danger" id="dq-dismiss" onclick="dqDismiss()" title="Shortcut: N">Not a duplicate <kbd>N</kbd></button>
+                    <button type="button" class="btn btn-success" id="dq-merge" onclick="dqMerge()" title="Shortcut: Enter">Merge &amp; next <kbd>Enter</kbd></button>
+                </div>
             </div>
         </div>
     </div>
@@ -1148,11 +1178,14 @@ async function runBackfill() {
 }
 
 // Duplicates & cleanup (#216): Wishlist-vs-owned pairs + blank-title rows.
+let _ddPairs = [];   // #346: last /books/duplicates pairs, in review-queue order
 async function loadDuplicates() {
     try {
         const d = await GreatReads.apiCall('/books/duplicates');
         const base = window.APP_BASE_PATH || '';
         const all = d.pairs || [], blank = d.blank || [];
+        all.forEach((p, i) => { p._i = i; });   // #346: queue index for the row links
+        _ddPairs = all;
         // #344: "wishlist" (default for older payloads) vs "owned" (two owned records)
         const pairs = all.filter(p => p.kind !== 'owned'), ownedPairs = all.filter(p => p.kind === 'owned');
         const del = blank.filter(b => b.deletable).length;
@@ -1162,7 +1195,7 @@ async function loadDuplicates() {
             <div class="d-flex justify-content-between align-items-center border-bottom py-1 gap-2">
                 <span>${_afEsc(p.wishlist.title)} <span class="text-muted">→</span> ${_afEsc(p.owned.title)}
                     <span class="text-muted">(${Math.round(p.score * 100)}%)</span></span>
-                <a class="text-nowrap" href="${base}/books?merge=${p.owned.id},${p.wishlist.id}">Compare &amp; merge</a>
+                <a class="text-nowrap" href="#" onclick="openDupQueue(${p._i}); return false;">Compare &amp; merge</a>
             </div>`).join('');
         // Owned ↔ owned (#344): survivor = the older (lower id) record
         document.getElementById('dd-owned-count').textContent = ownedPairs.length;
@@ -1170,8 +1203,17 @@ async function loadDuplicates() {
             <div class="d-flex justify-content-between align-items-center border-bottom py-1 gap-2">
                 <span>${_afEsc(p.survivor.title)} <span class="text-muted">(#${p.survivor.id}) +</span>
                     ${_afEsc(p.loser.title)} <span class="text-muted">(#${p.loser.id}, ${Math.round(p.score * 100)}%)</span></span>
-                <a class="text-nowrap" href="${base}/books?merge=${p.survivor.id},${p.loser.id}">Compare &amp; merge</a>
+                <a class="text-nowrap" href="#" onclick="openDupQueue(${p._i}); return false;">Compare &amp; merge</a>
             </div>`).join('');
+        // #346: "Review all" button + top-of-page banner + nav badge, all from the same list
+        const rb = document.getElementById('dd-review-all');
+        rb.disabled = all.length === 0;
+        rb.innerHTML = `<i class="fas fa-list-check me-1"></i>Review all (${all.length})`;
+        const bn = document.getElementById('dd-banner');
+        document.getElementById('dd-banner-n').textContent = all.length;
+        bn.classList.toggle('d-none', all.length === 0);
+        bn.classList.toggle('d-flex', all.length > 0);
+        if (typeof loadDupBadge === 'function') loadDupBadge();   // /duplicates just primed the cache
         document.getElementById('dd-blank-count').textContent = `${blank.length} (${del} deletable)`;
         const btn = document.getElementById('dd-purge');
         btn.disabled = del === 0;
@@ -1191,6 +1233,173 @@ async function purgeBlankRows() {
         if (st) st.textContent = '';
     } catch (e) { if (st) st.textContent = 'Delete failed.'; }
     loadDuplicates();
+}
+
+// ── Duplicate review queue (#346) ────────────────────────────────────────────
+// Mirrors the #131 field-by-field merge (books.html): `fields` carries only the values the
+// user took from the record being removed; author maps to author_name_first/second and the
+// cover pick is fields.cover = 'loser'. Everything else the backend merges by itself.
+const _DQ_FIELDS = [
+    ['title', 'Title'], ['author', 'Author'], ['series', 'Series'], ['series_number', 'Series #'],
+    ['date_published', 'Published'], ['word_count', 'Words'], ['page_count', 'Pages'],
+    ['description', 'Synopsis']
+];
+let _dq = null;
+const _dqBlank = v => v == null || v === '';
+const _dqErr = e => _afEsc((e && e.response && e.response.data && e.response.data.detail) || 'request failed');
+
+function openDupQueue(start) {
+    if (!_ddPairs.length) { GreatReads.showToast('No duplicates to review', 'info'); return; }
+    const el = document.getElementById('dupQueueModal');
+    _dq = { pairs: _ddPairs.slice(), i: Math.min(Math.max(start || 0, 0), _ddPairs.length - 1),
+            merged: 0, dismissed: 0, skipped: 0, gone: new Set(), cache: {},
+            keep: null, lose: null, busy: false, tok: 0, open: true };
+    if (!el.dataset.wired) {
+        el.dataset.wired = '1';
+        el.addEventListener('hidden.bs.modal', _dqClosed);
+        document.addEventListener('keydown', _dqKey);
+    }
+    bootstrap.Modal.getOrCreateInstance(el).show();
+    _dqLoad();
+}
+function _dqClosed() {
+    const q = _dq;
+    if (!q) return;
+    q.open = false;
+    const n = q.merged + q.dismissed + q.skipped;
+    if (n) GreatReads.showToast(`Reviewed ${n}: ${q.merged} merged, ${q.dismissed} dismissed, ${q.skipped} skipped`, 'success');
+    _dq = null;
+    loadDuplicates();   // also refreshes the banner + nav badge
+}
+function _dqKey(e) {
+    if (!_dq || !_dq.open || e.repeat || e.ctrlKey || e.metaKey || e.altKey) return;
+    const t = e.target, tag = t && t.tagName;
+    if (tag === 'TEXTAREA' || tag === 'SELECT' || (t && t.isContentEditable)) return;
+    if (tag === 'INPUT' && !['radio', 'checkbox', 'button'].includes(t.type)) return;
+    const k = e.key.toLowerCase();
+    if (k === 'enter') { if (tag === 'BUTTON') return; e.preventDefault(); dqMerge(); }
+    else if (k === 's') { e.preventDefault(); dqSkip(); }
+    else if (k === 'n') { e.preventDefault(); dqDismiss(); }
+}
+function _dqBusy(b) {
+    if (_dq) _dq.busy = b;
+    ['dq-swap', 'dq-skip', 'dq-dismiss', 'dq-merge'].forEach(id => { document.getElementById(id).disabled = b || !(_dq && _dq.keep); });
+}
+async function _dqDetail(id) {
+    if (!_dq.cache[id]) _dq.cache[id] = await GreatReads.apiCall('/books/' + id + '/details', { silent: true });
+    return _dq.cache[id];
+}
+async function _dqLoad() {
+    const q = _dq, p = q.pairs[q.i], tok = ++q.tok;
+    q.keep = q.lose = null;
+    document.getElementById('dq-title').textContent = `Pair ${q.i + 1} of ${q.pairs.length}`;
+    document.getElementById('dq-kind').textContent = p.kind === 'owned' ? 'Two owned records' : 'Wishlist vs owned';
+    document.getElementById('dq-body').innerHTML = '<div class="text-muted py-4 text-center">Loading…</div>';
+    _dqBusy(true);
+    try {
+        const [k, l] = await Promise.all([_dqDetail(p.survivor.id), _dqDetail(p.loser.id)]);
+        if (_dq !== q || q.tok !== tok) return;
+        q.keep = k; q.lose = l;
+        _dqRender();
+        _dqBusy(false);
+        const nx = q.pairs[q.i + 1];   // warm the cache for the next pair
+        if (nx) { _dqDetail(nx.survivor.id).catch(() => {}); _dqDetail(nx.loser.id).catch(() => {}); }
+    } catch (e) {
+        if (_dq !== q || q.tok !== tok) return;
+        delete q.cache[p.survivor.id]; delete q.cache[p.loser.id];
+        GreatReads.showToast('Could not load this pair: ' + _dqErr(e), 'danger');
+        document.getElementById('dq-body').innerHTML = '<div class="alert alert-danger mb-0">Could not load this pair. Skip it, or close and reopen.</div>';
+        _dqBusy(false);
+        ['dq-swap', 'dq-dismiss', 'dq-merge'].forEach(id => { document.getElementById(id).disabled = true; });
+    }
+}
+function _dqShow(f, v) {
+    if (_dqBlank(v)) return '<span class="text-muted">—</span>';
+    let t = String(v);
+    if (f === 'description' && t.length > 220) t = t.slice(0, 220) + '…';
+    return _afEsc(t);
+}
+function _dqRender() {
+    const K = _dq.keep, L = _dq.lose, base = window.APP_BASE_PATH || '';
+    const rows = _DQ_FIELDS.map(([f, label]) => {
+        const kv = K[f], lv = L[f];
+        if (String(kv == null ? '' : kv) === String(lv == null ? '' : lv))
+            return `<tr><td class="text-muted">${label}</td><td colspan="2">${_dqShow(f, kv)}</td></tr>`;
+        // Default to Keep's value unless it is empty (backend fills such gaps from the loser anyway).
+        const takeL = _dqBlank(kv) && !_dqBlank(lv);
+        return `<tr><td class="text-muted">${label}</td>
+            <td><label class="d-block"><input type="radio" name="dq_${f}" value="K" ${takeL ? '' : 'checked'}> ${_dqShow(f, kv)}</label></td>
+            <td><label class="d-block"><input type="radio" name="dq_${f}" value="L" ${takeL ? 'checked' : ''}> ${_dqShow(f, lv)}</label></td></tr>`;
+    }).join('');
+    const img = d => `<img src="${base}/static/covers/${d.id}.jpg?v=${d.cover_version || 0}" style="height:90px;border-radius:3px;" onerror="this.style.display='none'">`;
+    const cover = `<tr><td class="text-muted">Cover</td>
+        <td><label><input type="radio" name="dq_cover" value="K" ${(K.cover || !L.cover) ? 'checked' : ''} ${K.cover ? '' : 'disabled'}> ${img(K)}</label></td>
+        <td><label><input type="radio" name="dq_cover" value="L" ${(!K.cover && L.cover) ? 'checked' : ''} ${L.cover ? '' : 'disabled'}> ${img(L)}</label></td></tr>`;
+    const info = (label, fn) => `<tr><td class="text-muted">${label}</td><td>${fn(K)}</td><td>${fn(L)}</td></tr>`;
+    const none = '<span class="text-muted">none</span>';
+    const imports = d => {
+        const a = [d.calibre_id ? 'calibre:' + d.calibre_id : '', d.abs_id ? 'abs:' + d.abs_id : ''].filter(Boolean);
+        return a.length ? _afEsc(a.join(', ')) : none;
+    };
+    const union = [...new Set([...(K.media_owned || []), ...(L.media_owned || [])])].join(', ') || 'none';
+    document.getElementById('dq-body').innerHTML = `
+        <table class="table table-sm align-middle mb-2"><thead><tr><th></th>
+            <th class="text-success">Keep #${K.id}</th><th class="text-danger">Merge away #${L.id}</th></tr></thead>
+        <tbody>${cover}${rows}
+            ${info('Owned formats', d => _afEsc((d.media_owned || []).join(', ')) || none)}
+            ${info('Imports', imports)}
+            ${info('Readings', d => (d.readings || []).length)}</tbody></table>
+        <div class="small text-muted">Pick the value to keep for each differing field. Owned formats are combined:
+            <strong>${_afEsc(union)}</strong>. Readings, imports, tags &amp; contributors move to the kept record.</div>`;
+}
+function dqSwap() {
+    if (!_dq || _dq.busy || !_dq.keep) return;
+    [_dq.keep, _dq.lose] = [_dq.lose, _dq.keep];
+    _dqRender();
+}
+function _dqAdvance() {
+    const q = _dq;
+    q.i++;
+    // skip pairs whose book was just merged away (stale), uncounted
+    while (q.i < q.pairs.length && (q.gone.has(q.pairs[q.i].survivor.id) || q.gone.has(q.pairs[q.i].loser.id))) q.i++;
+    if (q.i >= q.pairs.length) { bootstrap.Modal.getInstance(document.getElementById('dupQueueModal')).hide(); return; }
+    _dqLoad();
+}
+function dqSkip() {
+    if (!_dq || _dq.busy) return;
+    _dq.skipped++;
+    _dqAdvance();
+}
+async function dqDismiss() {
+    if (!_dq || _dq.busy || !_dq.keep) return;
+    const q = _dq;
+    _dqBusy(true);
+    try {
+        await GreatReads.apiCall('/books/duplicates/dismiss', { method: 'POST', data: { a: q.keep.id, b: q.lose.id }, silent: true });
+        q.dismissed++;
+        _dqAdvance();
+    } catch (e) { GreatReads.showToast('Could not dismiss: ' + _dqErr(e), 'danger'); _dqBusy(false); }
+}
+async function dqMerge() {
+    if (!_dq || _dq.busy || !_dq.keep) return;
+    const q = _dq, K = q.keep, L = q.lose, fields = {};
+    _DQ_FIELDS.forEach(([f]) => {
+        const picked = document.querySelector(`input[name="dq_${f}"]:checked`);
+        if (picked && picked.value === 'L') {
+            if (f === 'author') { fields.author_name_first = L.author_name_first; fields.author_name_second = L.author_name_second; }
+            else fields[f] = L[f];
+        }
+    });
+    const cov = document.querySelector('input[name="dq_cover"]:checked');
+    if (cov && cov.value === 'L') fields.cover = 'loser';
+    _dqBusy(true);
+    try {
+        await GreatReads.apiCall('/books/merge', { method: 'POST', data: { survivor_id: K.id, loser_id: L.id, fields }, silent: true });
+        q.merged++;
+        q.gone.add(L.id);
+        delete q.cache[K.id]; delete q.cache[L.id];   // survivor changed, loser is gone
+        _dqAdvance();
+    } catch (e) { GreatReads.showToast('Merge failed: ' + _dqErr(e), 'danger'); _dqBusy(false); }
 }
 
 // Libby auto-fulfill ready holds (#179).

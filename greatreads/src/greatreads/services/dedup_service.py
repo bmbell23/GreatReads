@@ -5,7 +5,9 @@ definition, same as news_service / metadata_backfill_service). Some Wishlist row
 duplicates of books you already own ('Mindset' vs 'Mindset: The New Psychology of
 Success'); this finds them with the importer's own matcher so Settings can offer the
 #131 merge compare. Also finds/purges the blank-title junk rows."""
+import json
 import sqlite3
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Optional
@@ -24,6 +26,69 @@ from .import_service import _best_match, _build_existing, _word_tokens, get_cali
 # 'Likely duplicate' bar from _best_match's docstring. Subtitle cases ('Mindset' vs
 # 'Mindset: The New Psychology of Success') clear it via the #204 core-token path. (#216)
 DUP_THRESHOLD = 0.85
+
+# "Not a duplicate" dismissals (#346): user_settings[dup_dismissed] = JSON list of
+# "min_id:max_id" strings. find_duplicates() drops any pair listed here.
+DISMISS_KEY = "dup_dismissed"
+
+# In-process cache of the duplicate count for the nav badge (#346). find_duplicates is heavy
+# (matcher + a read-only Calibre read), so the badge endpoint reads this instead; it is
+# invalidated on merge / dismiss / purge and otherwise expires after COUNT_TTL seconds.
+COUNT_TTL = 600
+_count_cache: dict = {"n": None, "t": 0.0}
+
+
+def pair_key(a: int, b: int) -> str:
+    """Order-independent id for a pair: 'min:max' (#346)."""
+    a, b = int(a), int(b)
+    return f"{min(a, b)}:{max(a, b)}"
+
+
+def get_dismissed(db: Session) -> set[str]:
+    """The set of dismissed 'min:max' pair keys (empty if unset/corrupt) (#346)."""
+    from ..models.user_settings import UserSettings
+    s = db.query(UserSettings).filter(UserSettings.setting_key == DISMISS_KEY).first()
+    if s and s.setting_value:
+        try:
+            return {str(x) for x in json.loads(s.setting_value)}
+        except (ValueError, TypeError):
+            pass
+    return set()
+
+
+def dismiss_pair(db: Session, a: int, b: int) -> str:
+    """Persist 'not a duplicate' for the pair and drop the cached count (#346)."""
+    from ..models.user_settings import UserSettings
+    key = pair_key(a, b)
+    keys = get_dismissed(db) | {key}
+    value = json.dumps(sorted(keys))
+    s = db.query(UserSettings).filter(UserSettings.setting_key == DISMISS_KEY).first()
+    if s:
+        s.setting_value = value
+    else:
+        db.add(UserSettings(setting_key=DISMISS_KEY, setting_value=value))
+    db.commit()
+    invalidate_count_cache()
+    return key
+
+
+def invalidate_count_cache() -> None:
+    _count_cache["n"], _count_cache["t"] = None, 0.0
+
+
+def set_count_cache(n: int) -> None:
+    """Prime the cache from a fresh find_duplicates() result (#346)."""
+    _count_cache["n"], _count_cache["t"] = int(n), time.monotonic()
+
+
+def duplicate_count(db: Session) -> int:
+    """Cached count of reviewable pairs; computed (and cached) when cold/expired (#346)."""
+    n = _count_cache["n"]
+    if n is not None and time.monotonic() - _count_cache["t"] < COUNT_TTL:
+        return n
+    n = len(find_duplicates(db))
+    set_count_cache(n)
+    return n
 
 
 def _owned_ids(db: Session) -> set[int]:
@@ -115,6 +180,9 @@ def find_duplicates(db: Session, threshold: float = DUP_THRESHOLD) -> list[dict]
             "survivor": owned_side, "loser": wish_side,
             "score": m["score"],
         })
+    dismissed = get_dismissed(db)   # #346: "Not a duplicate" pairs never come back
+    if dismissed:
+        pairs = [p for p in pairs if pair_key(p["survivor"]["id"], p["loser"]["id"]) not in dismissed]
     pairs.sort(key=lambda p: (-p["score"], p["survivor"]["id"], p["loser"]["id"]))
     return pairs
 
@@ -169,6 +237,7 @@ def purge_blank(db: Session, db_path: str, backup_dir: Optional[Path] = None) ->
         book.tags = []   # clears the book_tags m2m rows
         db.delete(book)  # cascades readings + inventory
     db.commit()
+    invalidate_count_cache()   # #346
     for bid in ids:   # tidy cover files like DELETE /{book_id} (#95)
         for p in (settings.covers_dir / f"{bid}.jpg",
                   Path("/app/data/covers_thumb") / f"{bid}.jpg"):
