@@ -30,6 +30,7 @@ The engine's /api/download normally borrows→downloads→returns in one shot; w
 import json
 import logging
 import os
+import threading
 from datetime import datetime, timedelta
 
 import httpx
@@ -64,6 +65,10 @@ FAIL_COOLDOWN_HOURS = float(os.environ.get("LIBBY_AUTOFULFILL_FAIL_COOLDOWN_H", 
 
 _ENGINE_TIMEOUT = 25.0
 _DOWNLOAD_TIMEOUT = 180.0
+
+# (#297) Guards every read-modify-write of the SETTING_PENDING JSON (enqueue_borrowed and
+# run_autofulfill's final write). Never held across a network call.
+PENDING_LOCK = threading.Lock()
 
 
 # ── user_settings helpers ─────────────────────────────────────────────────────
@@ -315,6 +320,9 @@ def run_autofulfill(db: Session, *, force: bool = False) -> dict:
         return {"skipped": "disabled"}
 
     log: list = []
+    with PENDING_LOCK:                       # (#297) consistent snapshot to merge against
+        db.expire_all()
+        snapshot = list(_get_json(db, SETTING_PENDING, []))
     pending = _process_pending(db, log)
     # Don't let the in-flight queue grow unbounded: cap new borrows so total
     # pending never exceeds ~2× the per-run cap.
@@ -322,7 +330,18 @@ def run_autofulfill(db: Session, *, force: bool = False) -> dict:
     room = max(0, (2 * cap) - len(pending))
     pending = _acquire(db, pending, min(cap, room), log)
 
-    _set(db, SETTING_PENDING, json.dumps(pending))
+    # (#297) Merge, don't overwrite: another thread (the wishlist job / UI borrow) may
+    # have enqueued a loan while we were off on network calls. Re-read under the lock and
+    # keep anything that appeared since our snapshot; what WE removed (returned / gave up)
+    # stays removed.
+    with PENDING_LOCK:
+        db.expire_all()
+        current = _get_json(db, SETTING_PENDING, [])
+        ours = {str(p.get("title_id")) for p in pending}
+        seen = {str(p.get("title_id")) for p in snapshot}
+        pending = pending + [p for p in current
+                             if str(p.get("title_id")) not in seen and str(p.get("title_id")) not in ours]
+        _set(db, SETTING_PENDING, json.dumps(pending))
     summary = {
         "at": datetime.utcnow().isoformat(),
         "borrowed": sum(1 for e in log if e.get("event") == "borrowed"),
@@ -344,17 +363,19 @@ def enqueue_borrowed(db: Session, *, title_id: str, card_id: str, title: str, au
     Used by the UI Borrow button (#203): the user (or the borrow route) claimed
     the hold; from here the normal machinery downloads the .acsm, waits for the
     watcher import, and only then returns the loan. Returns False if the title
-    is already queued."""
-    pending = _get_json(db, SETTING_PENDING, [])
-    if any(str(p.get("title_id")) == str(title_id) for p in pending):
-        return False
-    pending.append({
-        "title_id": str(title_id), "card_id": str(card_id),
-        "title": title, "author": author,
-        "borrowed_at": datetime.utcnow().isoformat(),
-    })
-    _set(db, SETTING_PENDING, json.dumps(pending))
-    return True
+    is already queued (idempotent per title_id, #297)."""
+    with PENDING_LOCK:                       # (#297) atomic read-modify-write
+        db.expire_all()
+        pending = _get_json(db, SETTING_PENDING, [])
+        if any(str(p.get("title_id")) == str(title_id) for p in pending):
+            return False
+        pending.append({
+            "title_id": str(title_id), "card_id": str(card_id),
+            "title": title, "author": author,
+            "borrowed_at": datetime.utcnow().isoformat(),
+        })
+        _set(db, SETTING_PENDING, json.dumps(pending))
+        return True
 
 
 def kick_download(title_id: str, card_id: str, title: str = "") -> tuple[bool, str]:
