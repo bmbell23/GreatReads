@@ -126,6 +126,38 @@ async def backfill_status(
     }
 
 
+@router.get("/duplicates")
+async def wishlist_duplicates(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Wishlist books that duplicate an owned book + blank-title junk rows (#216)."""
+    from ..services.dedup_service import find_duplicates, find_blank
+    return {"pairs": find_duplicates(db), "blank": find_blank(db)}
+
+
+@router.post("/purge-blank")
+async def purge_blank_books(
+    request: Request,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Delete the deletable blank-title rows (#216). The list is recomputed server-side;
+    the SQLite file is backed up first and nothing is deleted if that fails."""
+    from ..database import engine
+    from ..services.dedup_service import purge_blank
+    from ..services.event_log_service import log_event
+    try:
+        res = purge_blank(db, engine.url.database)
+    except Exception as exc:
+        db.rollback()
+        raise HTTPException(status_code=500, detail=f"Purge aborted: {exc}")
+    log_event("library", "purge_blank", level="success",
+              detail={"deleted": res["deleted"], "backup": res["backup"]})
+    return res
+
+
 class BackfillConfig(BaseModel):
     batch_size: int
     interval_min: int
