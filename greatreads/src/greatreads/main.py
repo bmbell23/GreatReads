@@ -208,6 +208,17 @@ def _libby_autofulfill():
         db.close()
 
 
+def _wishlist_acquire():
+    """Scheduled wishlist auto-acquire (#297): one Wishlist book per run -> borrow /
+    hold / record why. Opt-in (no-op unless its Settings toggle is on)."""
+    db = SessionLocal()
+    try:
+        from .services.wishlist_acquire_service import run_once
+        return run_once(db)
+    finally:
+        db.close()
+
+
 def _align_refresh():
     """Scheduled sweep (#266): rebuild the dense ebook↔audiobook chapter-alignment
     maps for every dual-format book whose ebook chapter list has been uploaded (i.e.
@@ -317,6 +328,25 @@ async def lifespan(app: FastAPI):
             id="libby_autofulfill",
             replace_existing=True,
             next_run_time=datetime.now() + timedelta(minutes=5),
+            coalesce=True,
+            max_instances=1,
+        )
+        # Wishlist auto-acquire (#297) — one wishlist book per run: borrow / hold / record
+        # why. No-op unless its own Settings toggle is on; interval UI-configurable.
+        _wa_db = SessionLocal()
+        try:
+            from .services.wishlist_acquire_service import effective_interval as _wa_effective_interval
+            _wa_interval = _wa_effective_interval(_wa_db)
+        except Exception:
+            _wa_interval = int(os.environ.get("WISHLIST_ACQUIRE_INTERVAL_MIN", "10"))
+        finally:
+            _wa_db.close()
+        scheduler.add_job(
+            tracked("wishlist_acquire", _wishlist_acquire, quiet=True),
+            IntervalTrigger(minutes=_wa_interval),
+            id="wishlist_acquire",
+            replace_existing=True,
+            next_run_time=datetime.now() + timedelta(minutes=7),
             coalesce=True,
             max_instances=1,
         )

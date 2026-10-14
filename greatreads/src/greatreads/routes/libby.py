@@ -1225,3 +1225,60 @@ async def libby_autofulfill_run(
     """Manual 'Run now' — runs one pass even when the toggle is off."""
     from ..services.libby_autofulfill_service import run_autofulfill
     return run_autofulfill(db, force=True)
+
+
+# ── Wishlist auto-acquire (#297) ─────────────────────────────────────────────
+
+class WishlistAcquireConfigRequest(BaseModel):
+    enabled: bool | None = None
+    interval_min: int | None = None
+
+
+@router.get("/wishlist-acquire-config")
+async def libby_wishlist_acquire_config(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services.wishlist_acquire_service import get_config
+    return get_config(db)
+
+
+@router.post("/wishlist-acquire-config")
+async def libby_wishlist_acquire_set_config(
+    request: Request,
+    payload: WishlistAcquireConfigRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services.wishlist_acquire_service import get_config, SETTING_ENABLED, SETTING_INTERVAL
+    from ..services.libby_autofulfill_service import _set
+    if payload.enabled is not None:
+        _set(db, SETTING_ENABLED, "1" if payload.enabled else "0")
+    # (#297) interval_min omitted/null -> keep the current (or default) interval; the
+    # toggle alone is a valid save.
+    if payload.interval_min is not None:
+        iv = max(1, int(payload.interval_min))
+        _set(db, SETTING_INTERVAL, iv)
+        scheduler = getattr(request.app.state, "scheduler", None)
+        if scheduler:
+            try:
+                from apscheduler.triggers.interval import IntervalTrigger
+                scheduler.reschedule_job("wishlist_acquire", trigger=IntervalTrigger(minutes=iv))
+            except Exception as exc:
+                logger.warning("Could not reschedule wishlist_acquire: %s", exc)
+    return get_config(db)
+
+
+@router.post("/wishlist-acquire-run")
+async def libby_wishlist_acquire_run(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Manual 'Run one now' — one real attempt (borrow/hold on the live account), so it
+    is refused while the feature is off. Runs in a worker thread (sync engine calls)."""
+    from ..services.wishlist_acquire_service import is_enabled, run_once
+    if not is_enabled(db):
+        raise HTTPException(status_code=409, detail="Wishlist auto-acquire is off.")
+    # run_once holds a process-wide lock shared with the scheduled job (#297): if a pass
+    # is already running this returns {"skipped": "already running"}.
+    return await asyncio.to_thread(run_once, db)

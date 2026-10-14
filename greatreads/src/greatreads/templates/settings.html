@@ -715,6 +715,44 @@
             </div>
         </div>
 
+        <!-- Wishlist auto-acquire (#297) -->
+        <div class="card mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0"><i class="fas fa-wand-magic-sparkles me-2"></i>Libby — wishlist auto-acquire</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-2">Walks your Wishlist one book at a time. Per format it either
+                    <strong>borrows</strong> the book if a library has it available, <strong>places a hold</strong>
+                    (never past half of a card's hold limit), or <strong>records why not</strong> and backs off.
+                    Ebooks first; audiobooks only on cards that can be downloaded automatically. Title
+                    <em>and</em> author must match. Acts on your real Libby account, and needs auto-fulfill (above)
+                    on to confirm imports and return loans.</p>
+                <div class="form-check form-switch mb-2">
+                    <input class="form-check-input" type="checkbox" id="wa-enabled" onchange="saveWishlistAcquire()">
+                    <label class="form-check-label" for="wa-enabled">Enable wishlist auto-acquire
+                        <span class="badge bg-secondary ms-1">off by default</span></label>
+                </div>
+                <div class="row g-2 align-items-end mt-1">
+                    <div class="col-auto"><label class="form-label small mb-0">Try one book every (minutes)</label>
+                        <input type="number" class="form-control form-control-sm" id="wa-interval" min="1" max="1440" style="width:130px;"></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" id="wa-save" onclick="saveWishlistAcquire()">Save</button></div>
+                </div>
+                <div class="small mt-2" id="wa-warn"></div>
+                <div class="d-flex flex-wrap gap-1 border-top mt-2 pt-2" id="wa-counts"></div>
+                <div class="mt-2 d-flex flex-wrap align-items-center gap-2">
+                    <button class="btn btn-sm btn-outline-primary" id="wa-run" onclick="runWishlistAcquire()" disabled>
+                        <i class="fas fa-play me-1"></i>Run one now</button>
+                    <span class="small text-muted" id="wa-status"></span>
+                </div>
+                <div class="table-responsive mt-2">
+                    <table class="table table-sm small mb-0">
+                        <thead><tr><th>Book</th><th>Format</th><th>Status</th><th>Reason</th><th>When</th></tr></thead>
+                        <tbody id="wa-recent"><tr><td colspan="5" class="text-muted">…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- Activity Log (#184) -->
         <div class="card mb-4">
             <div class="card-header d-flex align-items-center justify-content-between">
@@ -1035,6 +1073,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadBackfillStatus();
     loadDuplicates();
     loadAutofulfill();
+    loadWishlistAcquire();
     loadGenres();
 
     // Show/hide auto WPD section when radio changes
@@ -1463,6 +1502,65 @@ async function runAutofulfill() {
         loadAutofulfill();
     } catch (e) { if (st) st.textContent = 'Run failed.'; }
     if (btn) btn.disabled = false;
+}
+
+// Wishlist auto-acquire (#297).
+function _waRender(cfg) {
+    document.getElementById('wa-enabled').checked = !!cfg.enabled;
+    const iv = document.getElementById('wa-interval');
+    if (iv && cfg.interval_min != null) iv.value = cfg.interval_min;
+    const run = document.getElementById('wa-run');
+    if (run) run.disabled = !cfg.enabled;
+    const warn = document.getElementById('wa-warn');
+    if (warn) warn.innerHTML = (cfg.enabled && !cfg.autofulfill_enabled)
+        ? '<span class="text-warning"><i class="fas fa-triangle-exclamation me-1"></i>Auto-fulfill is off, so nothing will run until it is on.</span>' : '';
+    const counts = document.getElementById('wa-counts');
+    if (counts) counts.innerHTML = Object.entries(cfg.counts || {}).map(([k, n]) =>
+        `<span class="badge ${n ? 'bg-primary' : 'bg-light text-muted border'}">${_afEsc(k.replace(/_/g, ' '))}: ${n}</span>`).join('');
+    const body = document.getElementById('wa-recent');
+    if (body) {
+        const rows = cfg.recent || [];
+        body.innerHTML = rows.length ? rows.map(r => {
+            const when = r.last_attempt_at ? new Date(r.last_attempt_at + 'Z').toLocaleString() : '';
+            return `<tr><td>${_afEsc(r.title || ('#' + r.book_id))}</td><td>${_afEsc(r.format)}</td>` +
+                `<td>${_afEsc(r.status.replace(/_/g, ' '))}</td><td class="text-muted">${_afEsc(r.last_reason || '')}</td>` +
+                `<td class="text-nowrap">${_afEsc(when)}</td></tr>`;
+        }).join('') : '<tr><td colspan="5" class="text-muted">No attempts yet.</td></tr>';
+    }
+}
+async function loadWishlistAcquire() {
+    try { _waRender(await GreatReads.apiCall('/libby/wishlist-acquire-config')); } catch (e) { /* leave placeholders */ }
+}
+async function saveWishlistAcquire() {
+    const btn = document.getElementById('wa-save'), st = document.getElementById('wa-status');
+    const enabled = document.getElementById('wa-enabled').checked;
+    // (#297) An empty interval box must not block the toggle: omit it and the server keeps
+    // the current/default interval. Only a non-empty INVALID value is rejected.
+    const rawIv = document.getElementById('wa-interval').value.trim();
+    const interval_min = parseInt(rawIv, 10);
+    if (rawIv !== '' && !(interval_min >= 1)) { GreatReads.showToast('Enter a valid interval (≥1 min).', 'warning'); return; }
+    const data = { enabled };
+    if (rawIv !== '') data.interval_min = interval_min;
+    if (btn) btn.disabled = true;
+    try {
+        const cfg = await GreatReads.apiCall('/libby/wishlist-acquire-config', { method: 'POST', data });
+        _waRender(cfg);
+        GreatReads.showToast(enabled ? `Wishlist auto-acquire on — one book every ${cfg.interval_min} min.` : 'Wishlist auto-acquire off.', 'success');
+    } catch (e) { if (st) st.textContent = 'Save failed.'; }
+    if (btn) btn.disabled = false;
+}
+async function runWishlistAcquire() {
+    const btn = document.getElementById('wa-run'), st = document.getElementById('wa-status');
+    if (btn) btn.disabled = true;
+    if (st) st.textContent = 'Running…';
+    try {
+        const r = await GreatReads.apiCall('/libby/wishlist-acquire-run', { method: 'POST' });
+        if (st) st.textContent = r.skipped ? `Skipped: ${r.skipped}`
+            : r.error ? `Error: ${r.error}`
+            : r.picked === null ? 'Nothing eligible.'
+            : `${r.title} (${r.format}): ${(r.status || '').replace(/_/g, ' ')}`;
+    } catch (e) { if (st) st.textContent = 'Run failed.'; }
+    await loadWishlistAcquire();
 }
 
 // ── Daily goal tracking per format (#289) ────────────────────────────────────

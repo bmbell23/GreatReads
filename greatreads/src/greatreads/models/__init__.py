@@ -9,5 +9,6 @@ from .user_settings import UserSettings
 from .user import User
 from .external_import import ExternalImport
 from .news_item import NewsItem
+from .wishlist_acquire import WishlistAcquireState  # #297 — registered so create_tables() makes it
 
-__all__ = ["Book", "Reading", "Inventory", "Shelf", "UserSettings", "User", "Tag", "book_tags", "ExternalImport", "NewsItem"]
+__all__ = ["Book", "Reading", "Inventory", "Shelf", "UserSettings", "User", "Tag", "book_tags", "ExternalImport", "NewsItem", "WishlistAcquireState"]
