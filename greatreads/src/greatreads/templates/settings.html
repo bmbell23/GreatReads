@@ -653,6 +653,11 @@
                     <span class="text-muted">Wishlist books you already own</span>
                     <span class="font-monospace" id="dd-pair-count">…</span></div>
                 <div id="dd-pairs" class="small" style="max-height:300px;overflow-y:auto;"></div>
+                <!-- #344: two owned records of the same book; the older (lower id) is kept -->
+                <div class="d-flex justify-content-between border-bottom py-1 mt-2">
+                    <span class="text-muted">Owned books with a second record</span>
+                    <span class="font-monospace" id="dd-owned-count">…</span></div>
+                <div id="dd-owned-pairs" class="small" style="max-height:300px;overflow-y:auto;"></div>
                 <div class="d-flex justify-content-between border-bottom py-1 mt-2">
                     <span class="text-muted">Blank-title rows</span>
                     <span class="font-monospace" id="dd-blank-count">…</span></div>
@@ -1147,7 +1152,9 @@ async function loadDuplicates() {
     try {
         const d = await GreatReads.apiCall('/books/duplicates');
         const base = window.APP_BASE_PATH || '';
-        const pairs = d.pairs || [], blank = d.blank || [];
+        const all = d.pairs || [], blank = d.blank || [];
+        // #344: "wishlist" (default for older payloads) vs "owned" (two owned records)
+        const pairs = all.filter(p => p.kind !== 'owned'), ownedPairs = all.filter(p => p.kind === 'owned');
         const del = blank.filter(b => b.deletable).length;
         document.getElementById('dd-pair-count').textContent = pairs.length;
         // merge=<survivor>,<loser>: owned first so the owned record is kept
@@ -1156,6 +1163,14 @@ async function loadDuplicates() {
                 <span>${_afEsc(p.wishlist.title)} <span class="text-muted">→</span> ${_afEsc(p.owned.title)}
                     <span class="text-muted">(${Math.round(p.score * 100)}%)</span></span>
                 <a class="text-nowrap" href="${base}/books?merge=${p.owned.id},${p.wishlist.id}">Compare &amp; merge</a>
+            </div>`).join('');
+        // Owned ↔ owned (#344): survivor = the older (lower id) record
+        document.getElementById('dd-owned-count').textContent = ownedPairs.length;
+        document.getElementById('dd-owned-pairs').innerHTML = ownedPairs.map(p => `
+            <div class="d-flex justify-content-between align-items-center border-bottom py-1 gap-2">
+                <span>${_afEsc(p.survivor.title)} <span class="text-muted">(#${p.survivor.id}) +</span>
+                    ${_afEsc(p.loser.title)} <span class="text-muted">(#${p.loser.id}, ${Math.round(p.score * 100)}%)</span></span>
+                <a class="text-nowrap" href="${base}/books?merge=${p.survivor.id},${p.loser.id}">Compare &amp; merge</a>
             </div>`).join('');
         document.getElementById('dd-blank-count').textContent = `${blank.length} (${del} deletable)`;
         const btn = document.getElementById('dd-purge');

@@ -287,6 +287,7 @@ def _best_match(
     series_number: Optional[float],
     year: Optional[str],
     existing: list[tuple],
+    prefer_ids: Optional[set] = None,
 ) -> Optional[dict]:
     """Multi-factor similarity match against existing GreatReads books.
 
@@ -298,6 +299,9 @@ def _best_match(
       0.85+ = likely duplicate (high title similarity with minor differences)
       0.65+ = similar (shown in UI, not flagged for dupe review)
       < 0.65 = not returned
+
+    prefer_ids (#344): on an exact score tie, a book whose id is in this set (owned /
+    imported) beats one that isn't (a Wishlist record). Default None = first wins.
     """
     in_title_tok = _word_tokens(title)
     in_core_tok = _title_core_tokens(title)
@@ -401,7 +405,12 @@ def _best_match(
             if title_sim >= 0.92 and author_sim >= 0.9:
                 composite = max(composite, 0.95)
 
-        if composite > best_score:
+        tie_to_preferred = (
+            prefer_ids and best_book is not None
+            and abs(composite - best_score) < 1e-9
+            and book_id in prefer_ids and best_book[0] not in prefer_ids
+        )
+        if composite > best_score or tie_to_preferred:
             best_score = composite
             best_book = (book_id, book_title, book_author, book_series, book_series_num, book_year, book_universe)
 
@@ -458,6 +467,12 @@ def get_abs_cover_path(abs_id: str) -> Optional[Path]:
 # Calibre
 # ---------------------------------------------------------------------------
 
+_CALIBRE_ALL_AUTHORS_SQL = """(SELECT GROUP_CONCAT(n, ', ') FROM (
+        SELECT REPLACE(a2.name, '|', ' ') AS n
+          FROM books_authors_link l2
+          JOIN authors a2 ON a2.id = l2.author
+         WHERE l2.book = b.id ORDER BY l2.id))"""
+
 CALIBRE_QUERY = """
 SELECT
     b.id,
@@ -467,13 +482,19 @@ SELECT
     b.path,
     b.series_index,
     s.name  AS series,
-    a.name  AS author,
+    -- Primary author = FIRST by Calibre link order (deterministic). The old
+    -- books_authors_link join + GROUP BY b.id picked one ARBITRARY co-author. (#344)
+    (SELECT a3.name FROM books_authors_link l3
+       JOIN authors a3 ON a3.id = l3.author
+      WHERE l3.book = b.id ORDER BY l3.id LIMIT 1) AS author,
     r.rating,
     c.text  AS description,
-    GROUP_CONCAT(CASE WHEN i.type='isbn' THEN i.val END) AS isbn
+    GROUP_CONCAT(CASE WHEN i.type='isbn' THEN i.val END) AS isbn,
+    -- row[11]: EVERY author, link order, ', '-joined, '|' (Calibre's comma escape,
+    -- 'Siegel| MD') turned into a space — for matching only. Correlated subquery so
+    -- it doesn't multiply the other joins. (#344)
+    """ + _CALIBRE_ALL_AUTHORS_SQL + """ AS authors_all
 FROM books b
-LEFT JOIN books_authors_link  bal ON b.id = bal.book
-LEFT JOIN authors              a   ON bal.author = a.id
 LEFT JOIN books_series_link   bsl ON b.id = bsl.book
 LEFT JOIN series              s   ON bsl.series = s.id
 LEFT JOIN books_ratings_link  brl ON b.id = brl.book
@@ -512,6 +533,42 @@ def _build_existing(db: Session) -> list[tuple]:
     return result
 
 
+def _owned_or_imported_ids(db: Session) -> set[int]:
+    """Book ids with an ExternalImport or an owned Inventory copy — the tie-break
+    preference for imports, so a 2nd Calibre copy joins the owned book. (#344)"""
+    inv = db.query(Inventory.book_id).filter(
+        (Inventory.owned_ebook == True) | (Inventory.owned_audio == True) |  # noqa: E712
+        (Inventory.owned_physical == True))
+    ext = db.query(ExternalImport.book_id)
+    return {r[0] for r in inv.all()} | {r[0] for r in ext.all()}
+
+
+def get_calibre_authors_map(db: Session) -> dict[int, str]:
+    """{GreatReads book_id: every Calibre author, ', '-joined} for calibre-linked books.
+
+    GreatReads stores ONE author per book (the primary), so two records of the same
+    book imported with different arbitrary co-authors look unrelated. The Settings
+    duplicate sweep matches owned↔owned on these full author lists instead. Read-only;
+    {} if Calibre is unreachable. (#344)"""
+    conn = _ro_connect(settings.calibre_db_path)
+    if conn is None:
+        return {}
+    try:
+        cal = {str(r[0]): r[1] for r in conn.execute(
+            "SELECT b.id, " + _CALIBRE_ALL_AUTHORS_SQL + " FROM books b").fetchall()}
+    except Exception as exc:
+        logger.warning("Could not read Calibre author lists: %s", exc)
+        return {}
+    finally:
+        conn.close()
+    out: dict[int, list[str]] = {}
+    for link in db.query(ExternalImport).filter_by(source="calibre").all():
+        names = cal.get(str(link.external_id))
+        if names:
+            out.setdefault(link.book_id, []).append(names)
+    return {bid: ", ".join(v) for bid, v in out.items()}
+
+
 def get_calibre_candidates(db: Session) -> list[dict[str, Any]]:
     """Return Calibre books that have NOT yet been imported."""
     conn = _ro_connect(settings.calibre_db_path)
@@ -524,6 +581,7 @@ def get_calibre_candidates(db: Session) -> list[dict[str, Any]]:
     }
 
     existing = _build_existing(db)
+    prefer = _owned_or_imported_ids(db)   # tie-break toward owned books (#344)
     universe_map = _get_calibre_universe_map(conn)
 
     rows = conn.execute(CALIBRE_QUERY).fetchall()
@@ -554,7 +612,8 @@ def get_calibre_candidates(db: Session) -> list[dict[str, Any]]:
             "description": row[9],
             "isbn": row[10],
             "similar_to": _best_match(
-                row[1] or "", row[7] or "", row[6], cal_series_num, cal_year, existing
+                row[1] or "", row[11] or row[7] or "", row[6], cal_series_num, cal_year,
+                existing, prefer_ids=prefer,   # all co-authors, not one arbitrary (#344)
             ),
         }
         results.append(candidate)

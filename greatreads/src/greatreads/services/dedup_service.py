@@ -19,7 +19,7 @@ from ..models.book_contributor import BookContributor
 from ..models.external_import import ExternalImport
 from ..models.inventory import Inventory
 from ..models.reading import Reading
-from .import_service import _best_match, _build_existing
+from .import_service import _best_match, _build_existing, _word_tokens, get_calibre_authors_map
 
 # 'Likely duplicate' bar from _best_match's docstring. Subtitle cases ('Mindset' vs
 # 'Mindset: The New Psychology of Success') clear it via the #204 core-token path. (#216)
@@ -39,26 +39,83 @@ def _author(b) -> str:
     return " ".join(filter(None, [b.author_name_first, b.author_name_second]))
 
 
+def _match_either(title, author, series, num, year, stored, full):
+    """Best of matching on stored authors vs Calibre full author lists (never worse
+    than the pre-#344 behaviour); stored wins ties."""
+    a = _best_match(title, author[0], series, num, year, stored)
+    b = _best_match(title, author[1], series, num, year, full)
+    return b if (b and (not a or b["score"] > a["score"])) else a
+
+
+def _other_entry(b, m) -> bool:
+    """Different numbered entries of one series are different books, however alike
+    the titles: 'Thrawn' (#1) vs 'Thrawn: Alliances' (#2) (#344). Only when BOTH
+    have a series: Calibre stamps series_index 1.0 on every unseriesed book."""
+    if not ((b.series or "").strip() and (m.get("series") or "").strip()):
+        return False
+    a, c = b.series_number, m.get("series_number")
+    return a is not None and c is not None and float(a) != float(c)
+
+
 def find_duplicates(db: Session, threshold: float = DUP_THRESHOLD) -> list[dict]:
-    """Wishlist books that match an OWNED book at >= threshold, best score first."""
+    """Likely duplicates at >= threshold, best score first. Two kinds (#344):
+      "wishlist" — a Wishlist book matching an OWNED book (`wishlist` = loser, `owned` = survivor)
+      "owned"    — two owned books that are the same work (each unordered pair once;
+                   `survivor` = the lower/older id, `loser` = the other)
+    Every pair also carries `survivor`/`loser` {id,title,author} for the merge link."""
     owned = _owned_ids(db)
-    existing = [e for e in _build_existing(db) if e[0] in owned]   # candidates: owned only
-    by_id = {e[0]: e for e in existing}
+    everything = _build_existing(db)
+    existing = [e for e in everything if e[0] in owned]   # candidates: owned only
+    by_id = {e[0]: e for e in existing}                   # display titles/authors (stored)
+    # #344: GR keeps ONE author per book, so two records of one book imported with
+    # different arbitrary co-authors never agree. Match the OWNED side on Calibre's
+    # full author list where we have it (stored author is still what's displayed).
+    full_auth = get_calibre_authors_map(db)
+    stored = existing
+    existing = [
+        (e[0], e[1], full_auth[e[0]], e[3], e[4], e[5], e[6], _word_tokens(full_auth[e[0]]), e[8])
+        if e[0] in full_auth else e
+        for e in existing
+    ]
     pairs = []
+    seen_owned: set[tuple[int, int]] = set()
     for b in db.query(Book).order_by(Book.id).all():
-        if b.id in owned or not (b.title or "").strip():
+        if not (b.title or "").strip():
             continue
-        author = _author(b)
-        m = _best_match(b.title, author, b.series, b.series_number,
-                        str(b.date_published.year) if b.date_published else None, existing)
-        if not m or m["id"] == b.id or m["id"] not in by_id or m["score"] < threshold:
+        author = (_author(b), full_auth.get(b.id) or _author(b))   # (stored, full)
+        year = str(b.date_published.year) if b.date_published else None
+        if b.id in owned:
+            # Owned ↔ owned: match against the OTHER owned books (never itself).
+            m = _match_either(b.title, author, b.series, b.series_number, year,
+                              [e for e in stored if e[0] != b.id],
+                              [e for e in existing if e[0] != b.id])
+            if not m or m["id"] not in by_id or m["score"] < threshold or _other_entry(b, m):
+                continue
+            key = (min(b.id, m["id"]), max(b.id, m["id"]))
+            if key in seen_owned:
+                continue
+            seen_owned.add(key)
+            lo, hi = key
+            side = lambda i: {"id": i, "title": by_id[i][1], "author": by_id[i][2]}  # noqa: E731
+            pairs.append({
+                "kind": "owned",
+                "survivor": side(lo), "loser": side(hi),
+                "score": m["score"],
+            })
             continue
+        m = _match_either(b.title, author, b.series, b.series_number, year, stored, existing)
+        if not m or m["id"] == b.id or m["id"] not in by_id or m["score"] < threshold or _other_entry(b, m):
+            continue
+        owned_side = {"id": m["id"], "title": m["title"], "author": by_id[m["id"]][2]}
+        wish_side = {"id": b.id, "title": b.title, "author": author[0]}
         pairs.append({
-            "wishlist": {"id": b.id, "title": b.title, "author": author},
-            "owned": {"id": m["id"], "title": m["title"], "author": by_id[m["id"]][2]},
+            "kind": "wishlist",
+            "wishlist": wish_side,
+            "owned": owned_side,
+            "survivor": owned_side, "loser": wish_side,
             "score": m["score"],
         })
-    pairs.sort(key=lambda p: (-p["score"], p["wishlist"]["id"]))
+    pairs.sort(key=lambda p: (-p["score"], p["survivor"]["id"], p["loser"]["id"]))
     return pairs
 
 
