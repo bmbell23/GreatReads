@@ -733,8 +733,10 @@
                         <span class="badge bg-secondary ms-1">off by default</span></label>
                 </div>
                 <div class="row g-2 align-items-end mt-1">
-                    <div class="col-auto"><label class="form-label small mb-0">Try one book every (minutes)</label>
+                    <div class="col-auto"><label class="form-label small mb-0">Run every (minutes)</label>
                         <input type="number" class="form-control form-control-sm" id="wa-interval" min="1" max="1440" style="width:130px;"></div>
+                    <div class="col-auto"><label class="form-label small mb-0">Books tried per run</label>
+                        <input type="number" class="form-control form-control-sm" id="wa-tries" min="1" max="20" style="width:110px;"></div>
                     <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" id="wa-save" onclick="saveWishlistAcquire()">Save</button></div>
                 </div>
                 <div class="small mt-2" id="wa-warn"></div>
@@ -1509,6 +1511,8 @@ function _waRender(cfg) {
     document.getElementById('wa-enabled').checked = !!cfg.enabled;
     const iv = document.getElementById('wa-interval');
     if (iv && cfg.interval_min != null) iv.value = cfg.interval_min;
+    const tr = document.getElementById('wa-tries');
+    if (tr && cfg.max_tries != null) tr.value = cfg.max_tries;
     const run = document.getElementById('wa-run');
     if (run) run.disabled = !cfg.enabled;
     const warn = document.getElementById('wa-warn');
@@ -1541,11 +1545,14 @@ async function saveWishlistAcquire() {
     if (rawIv !== '' && !(interval_min >= 1)) { GreatReads.showToast('Enter a valid interval (≥1 min).', 'warning'); return; }
     const data = { enabled };
     if (rawIv !== '') data.interval_min = interval_min;
+    const rawTr = document.getElementById('wa-tries').value.trim();
+    if (rawTr !== '' && !(parseInt(rawTr, 10) >= 1)) { GreatReads.showToast('Enter a valid tries per run (≥1).', 'warning'); return; }
+    if (rawTr !== '') data.max_tries = parseInt(rawTr, 10);
     if (btn) btn.disabled = true;
     try {
         const cfg = await GreatReads.apiCall('/libby/wishlist-acquire-config', { method: 'POST', data });
         _waRender(cfg);
-        GreatReads.showToast(enabled ? `Wishlist auto-acquire on — one book every ${cfg.interval_min} min.` : 'Wishlist auto-acquire off.', 'success');
+        GreatReads.showToast(enabled ? `Wishlist auto-acquire on — up to ${cfg.max_tries} books every ${cfg.interval_min} min.` : 'Wishlist auto-acquire off.', 'success');
     } catch (e) { if (st) st.textContent = 'Save failed.'; }
     if (btn) btn.disabled = false;
 }
@@ -1558,7 +1565,8 @@ async function runWishlistAcquire() {
         if (st) st.textContent = r.skipped ? `Skipped: ${r.skipped}`
             : r.error ? `Error: ${r.error}`
             : r.picked === null ? 'Nothing eligible.'
-            : `${r.title} (${r.format}): ${(r.status || '').replace(/_/g, ' ')}`;
+            : `${(r.tries || []).length} tried; last: ${r.title} (${r.format}): ${(r.status || '').replace(/_/g, ' ')}` +
+              (r.stopped ? ` — stopped: ${r.stopped}` : '');
     } catch (e) { if (st) st.textContent = 'Run failed.'; }
     await loadWishlistAcquire();
 }

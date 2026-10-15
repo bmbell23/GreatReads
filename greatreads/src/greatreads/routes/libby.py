@@ -1232,6 +1232,7 @@ async def libby_autofulfill_run(
 class WishlistAcquireConfigRequest(BaseModel):
     enabled: bool | None = None
     interval_min: int | None = None
+    max_tries: int | None = None      # (#349) books tried per run
 
 
 @router.get("/wishlist-acquire-config")
@@ -1250,12 +1251,15 @@ async def libby_wishlist_acquire_set_config(
     current_user: User = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from ..services.wishlist_acquire_service import get_config, SETTING_ENABLED, SETTING_INTERVAL
+    from ..services.wishlist_acquire_service import (
+        get_config, SETTING_ENABLED, SETTING_INTERVAL, SETTING_TRIES)
     from ..services.libby_autofulfill_service import _set
     if payload.enabled is not None:
         _set(db, SETTING_ENABLED, "1" if payload.enabled else "0")
     # (#297) interval_min omitted/null -> keep the current (or default) interval; the
     # toggle alone is a valid save.
+    if payload.max_tries is not None:
+        _set(db, SETTING_TRIES, max(1, min(20, int(payload.max_tries))))
     if payload.interval_min is not None:
         iv = max(1, int(payload.interval_min))
         _set(db, SETTING_INTERVAL, iv)

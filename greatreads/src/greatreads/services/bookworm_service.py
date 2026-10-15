@@ -83,6 +83,26 @@ MESSAGES = {
     ("media", "sync_map_failed"): "⚠️ Sync map failed for {t}{text}",
     ("media", "unknown"): "❓ MediaForge couldn't find the audiobook of {t} in ABS{text}",
 }
+# Wishlist auto-acquire (#297/#349): one line per outcome, keyed on the event's detail
+# ``status``. Every attempt posts. Extra fields: ``{n}`` " (checked N results)" and
+# ``{why}`` a short reason; statuses using ``{why}`` skip the generic "> reason" quote.
+WISHLIST_ACQUIRE = {
+    "acquired": "🤖 Borrowed {t} from your Wishlist{lib}",
+    "acquired_audiobook": "🎧 Borrowing {t} on audiobook from your Wishlist{lib}; the harvest is running",
+    "acquired_existing": "✅ {t} was already on loan{lib}; it's queued for import and return",
+    "on_hold": "🎟️ Placed a hold on {t}{lib}",
+    "on_hold_existing": "🎟️ {t} is already on hold",
+    "no_match": "🔎 {t} isn't on Libby{n}",
+    "unavailable": "🚫 {t} isn't in any of our libraries",
+    "at_hold_limit": "⏳ {t}: cards are full",
+    "at_loan_limit": "⏳ {t}: cards are full",
+    "format_blocked": "🚧 {t}: no card can download that format automatically",
+    "failed": "⚠️ Couldn't get {t}: {why}",
+    "engine_unreachable": "📡 Couldn't reach Libby while trying {t}; I'll try again soon",
+    "never_tried": "⏸️ Holding off on {t}: {why}",
+    "enqueue_failed": "⚠️ Borrowed {t} but couldn't queue it for import and return: {why}",
+}
+INLINE_REASON = {"failed", "never_tried", "enqueue_failed"}
 STARTS = {"libby", "import"}
 REPLY_ONLY = {"metadata", "cover", "media"}
 SKIP = {("import", "dismiss")}
@@ -157,6 +177,19 @@ def render(category: str, event: str, level: str, title: Optional[str],
         event = "audiobook_borrow_download_start"
     lib = library or d.get("library")
     tmpl = MESSAGES.get((category, event))
+    reason_inline = False
+    if (category, event) == ("libby", "wishlist_acquire"):
+        st = str(d.get("status") or "")
+        reason = str(d.get("reason") or "")
+        if st == "acquired":
+            if d.get("format") == "audiobook" and d.get("acted"):
+                st = "acquired_audiobook"
+            elif not d.get("acted"):
+                st = "acquired_existing"
+        elif st == "on_hold" and not d.get("acted"):
+            st = "on_hold_existing"
+        tmpl = WISHLIST_ACQUIRE.get(st)
+        reason_inline = st in INLINE_REASON or st == "engine_unreachable"
     if tmpl is None:
         if category not in STARTS:
             return None
@@ -169,9 +202,11 @@ def render(category: str, event: str, level: str, title: Optional[str],
                 else str(fields or "details")),
         from_px=d.get("from_px", "?"), to_px=d.get("to_px", "?"),
         text=f": {_safe(d['text'])[:300]}" if d.get("text") else "",
+        n=f" (checked {d['results']} results)" if d.get("results") else "",
+        why=_safe(str(d.get("reason") or "unknown reason"))[:140],
     )
     err = d.get("error") or d.get("reason")
-    if err and level in ("warn", "warning", "error"):
+    if err and not reason_inline and level in ("warn", "warning", "error"):
         text += f"\n> {_safe(err)[:300]}"
     if level == "error" and not text.startswith(("⚠️", "🛑")):
         text = "❌ " + text

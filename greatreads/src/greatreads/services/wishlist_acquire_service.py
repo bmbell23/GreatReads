@@ -1,6 +1,8 @@
 """Wishlist auto-acquire (#297).
 
-Every N minutes, take ONE Wishlist book and, per format, reach exactly one outcome:
+Every N minutes, walk the Wishlist and, per (book, format), reach exactly one outcome.
+A run keeps going past misses (up to MAX_TRIES_PER_RUN tries, #349) and stops at the first
+real borrow / new hold or at an engine outage; every try is recorded and logged:
 
   (a) available on a usable card  -> borrow + download, hand the loan to #179's
       confirm-import -> return tail (``enqueue_borrowed``);
@@ -15,6 +17,7 @@ Decisions (#297, resolved 2026-10-14):
   * automatic holds are capped at half of each card's hold limit;
   * order: books in a series with an in-progress or finished reading first, then the
     highest book id (most recently wishlisted);
+  * unpublished books (no date / future date) are never borrowed, only held (#349);
   * loans are returned after a CONFIRMED import (ebook and audiobook) by #179's tail.
 
 Opt-in, default OFF (it acts on a real Libby account). Every external call sits behind a
@@ -24,6 +27,7 @@ small ``_libby_*`` / ``_start_*`` function so tests can replace them. Logging is
 
 import logging
 import os
+import re
 import threading
 from datetime import date, datetime, timedelta
 
@@ -44,8 +48,11 @@ logger = logging.getLogger(__name__)
 
 SETTING_ENABLED = "wishlist_acquire_enabled"
 SETTING_INTERVAL = "wishlist_acquire_interval_min"
+SETTING_TRIES = "wishlist_acquire_tries_per_run"      # (#349)
 
 DEFAULT_INTERVAL_MIN = int(os.environ.get("WISHLIST_ACQUIRE_INTERVAL_MIN", "10"))
+# (#349) A run keeps going past misses: up to this many (book, format) tries per run.
+MAX_TRIES_PER_RUN = int(os.environ.get("WISHLIST_ACQUIRE_MAX_TRIES", "5"))
 
 # Statuses (#297).
 NEVER_TRIED = "never_tried"
@@ -57,8 +64,9 @@ AT_LOAN_LIMIT = "at_loan_limit"          # available, but every card is at its l
 FORMAT_BLOCKED = "format_blocked"
 FAILED = "failed"
 NO_MATCH = "no_match"
+ENGINE_UNREACHABLE = "engine_unreachable"   # (#349) the Libby engine didn't answer; short backoff
 STATUSES = [NEVER_TRIED, ACQUIRED, ON_HOLD, UNAVAILABLE, AT_HOLD_LIMIT, AT_LOAN_LIMIT,
-            FORMAT_BLOCKED, FAILED, NO_MATCH]
+            FORMAT_BLOCKED, FAILED, NO_MATCH, ENGINE_UNREACHABLE]
 
 FORMATS = ["ebook", "audiobook"]          # ebook first (#297)
 
@@ -69,6 +77,7 @@ AT_LIMIT_BACKOFF = timedelta(days=1)
 FORMAT_BLOCKED_BACKOFF = timedelta(days=3)
 FAILED_BACKOFF_BASE = timedelta(hours=1)
 FAILED_BACKOFF_CAP = timedelta(days=7)
+ENGINE_UNREACHABLE_BACKOFF = timedelta(minutes=30)   # does NOT feed the failure backoff (#349)
 BUSY_RETRY = timedelta(minutes=20)
 # "acquired" is permanently terminal (#297): a book we ever borrowed is never borrowed again.
 # "on_hold" re-opens after this long if it is still a Wishlist book and no longer on
@@ -98,6 +107,10 @@ def is_enabled(db: Session) -> bool:
 
 def effective_interval(db: Session) -> int:
     return max(1, af._get_int(db, SETTING_INTERVAL, DEFAULT_INTERVAL_MIN))
+
+
+def effective_max_tries(db: Session) -> int:
+    return max(1, af._get_int(db, SETTING_TRIES, MAX_TRIES_PER_RUN))
 
 
 # ── external Libby calls (the injectable boundary) ────────────────────────────
@@ -171,28 +184,93 @@ def _place_hold(title_id: str, card_id: str) -> tuple:
 
 # ── matcher ───────────────────────────────────────────────────────────────────
 
+_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "phd", "md"}
+_HONORIFICS = {"dr", "mr", "mrs", "ms", "prof"}
+_AUTHOR_SEP = re.compile(r"\s*(?:&|;|/|\band\b)\s*", re.I)
+# (#349) Summary / study-guide style knock-offs ride on the real title ("A Dream of Spring"
+# by "A.I. Martin"). A Libby row whose title or subtitle says so is never a match, unless
+# the book we want is itself called that.
+_KNOCKOFF_RE = re.compile(r"\b(summary|summaries|study\s+guide|analysis|workbook)\b", re.I)
+
+
+def _name_tokens(person: str) -> list:
+    toks = re.sub(r"[^\w\s]", " ", (person or "").lower()).split()
+    return [t for t in toks if t not in _HONORIFICS]
+
+
+def _split_authors(s: str) -> list:
+    """An author string -> list of persons, each a lower-case token list in 'first ... last'
+    order. Handles '&' / 'and' / ';' / '/' / comma lists and a single 'Last, First'."""
+    s = (s or "").strip()
+    if not s:
+        return []
+    parts = [p for p in _AUTHOR_SEP.split(s) if p and p.strip()]
+    persons = []
+    for p in parts:
+        pieces = [c.strip() for c in p.split(",") if c.strip()]
+        pieces = [c for c in pieces if re.sub(r"[^\w]", "", c.lower()) not in _SUFFIXES]
+        if len(parts) == 1 and len(pieces) == 2:
+            pieces = [f"{pieces[1]} {pieces[0]}"]          # 'Last, First' (one person only)
+        persons.extend(pieces)
+    return [t for t in (_name_tokens(x) for x in persons) if t]
+
+
+def _person_agrees(x: list, y: list) -> bool:
+    """Same surname (a shared token >= 3 chars that is the last name of one side), enough
+    overlap, AND the first letters of the first names/initials agree when both sides have
+    one ('George RR Martin' vs 'A.I. Martin' -> no; 'J.K.' vs 'Joanne' Rowling -> yes)."""
+    cx = {t for t in x if len(t) >= MIN_AUTHOR_TOKEN}
+    cy = {t for t in y if len(t) >= MIN_AUTHOR_TOKEN}
+    shared = cx & cy
+    if not shared or not ({x[-1], y[-1]} & shared):
+        return False
+    if len(shared) / len(cx | cy) < AUTHOR_SIM_MIN:
+        return False
+    if len(x) >= 2 and len(y) >= 2 and x[0][0] != y[0][0]:
+        return False
+    return True
+
+
+def _authors_agree(a: str, b: str) -> bool:
+    """Any author of ``a`` agrees with any author of ``b`` (surname + first initial)."""
+    pa, pb = _split_authors(a), _split_authors(b)
+    return any(_person_agrees(x, y) for x in pa for y in pb)
+
+
+def _is_knockoff(title: str, row: dict) -> bool:
+    text = f"{row.get('title') or ''} {row.get('subtitle') or ''}"
+    wanted = {re.sub(r"\s+", " ", m.lower()) for m in _KNOCKOFF_RE.findall(title or "")}
+    found = {re.sub(r"\s+", " ", m.lower()) for m in _KNOCKOFF_RE.findall(text)}
+    return bool(found - wanted)
+
+
+def _is_unpublished(book: Book, today: date | None = None) -> bool:
+    """No publish date, or one in the future (#349): such a book may only be HELD."""
+    d = book.date_published
+    return d is None or d > (today or date.today())
+
+
+def _exact_title(title: str, row: dict) -> bool:
+    return bool(_tokens(title)) and _tokens(title) == _tokens(row.get("title") or "")
+
+
 def _match_row(title: str, author: str, row: dict) -> bool:
     """Title AND author must agree. This is the #135/#172 ownership matcher's logic
-    (``routes.libby._title_sim`` Jaccard, subtitle-tolerant #204, author-token overlap
-    >= 0.34) with its escape hatches removed: no title-only pass at sim >= 0.9 and no
-    pass when either author is blank. Title bar raised to 0.8 because a false positive
-    here spends a real loan/hold."""
-    # (#297) Initials ("J. K.") are noise: only tokens >= 3 chars count, and at least one
-    # shared token (a surname) is required on top of the overlap bar.
-    in_a = {t for t in _tokens(author) if len(t) >= MIN_AUTHOR_TOKEN}
-    row_a = {t for t in _tokens(row.get("author") or row.get("firstCreatorName") or "")
-             if len(t) >= MIN_AUTHOR_TOKEN}
-    if not in_a or not row_a or not (in_a & row_a):
+    (``routes.libby._title_sim`` Jaccard, subtitle-tolerant #204) with its escape hatches
+    removed: no title-only pass at sim >= 0.9 and no pass when either author is blank.
+    Title bar raised to 0.8 because a false positive here spends a real loan/hold.
+    Author (#349): surname AND first initial must agree (see ``_authors_agree``), and
+    summary / study-guide knock-off rows never match."""
+    if _is_knockoff(title, row):
+        return False
+    if not _authors_agree(author, row.get("author") or row.get("firstCreatorName") or ""):
         return False
     in_t = _tokens(title)
     if not in_t:
         return False
     sim = _title_sim(in_t, _core_tokens(title), _tokens(row.get("title") or ""),
                      _core_tokens(row.get("title") or ""))
-    if sim < TITLE_SIM_MIN:
-        return False
-    union = len(in_a | row_a)
-    return (len(in_a & row_a) / union if union else 0.0) >= AUTHOR_SIM_MIN
+    return sim >= TITLE_SIM_MIN
 
 
 # ── candidate selection ───────────────────────────────────────────────────────
@@ -212,11 +290,19 @@ def _reading_series(db: Session) -> set:
     return {r[0].strip() for r in rows if r[0]}
 
 
+def _fractional(n) -> bool:
+    try:
+        return n is not None and float(n) != int(float(n))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
 def _eligible_books(db: Session, fmt: str) -> list:
     """Wishlist books (#297: the project's Wishlist definition, as dedup_service /
     metadata_backfill_service): owned in NO format and no ExternalImport; non-blank
     title. ``fmt`` doesn't narrow it — once anything is owned/imported the book is
-    done for every format. Order: books in a series being/been read first, then highest id."""
+    done for every format. Order: books in a series being/been read first, then highest id;
+    fractional-series and unpublished books last (#349)."""
     owned_q = db.query(Inventory.book_id).filter(
         or_(Inventory.owned_physical == True, Inventory.owned_ebook == True,   # noqa: E712
             Inventory.owned_audio == True))
@@ -229,9 +315,14 @@ def _eligible_books(db: Session, fmt: str) -> list:
     )
     series = _reading_series(db)
 
+    today = date.today()
+
     def key(b):
         in_series = bool(b.series and b.series.strip().lower() in series)
-        return (0 if in_series else 1, -b.id)
+        # (#349) Novellas/shorts (fractional series number) and unpublished placeholders
+        # go after everything else; the old order applies within each group.
+        late = _fractional(b.series_number) or _is_unpublished(b, today)
+        return (1 if late else 0, 0 if in_series else 1, -b.id)
 
     return sorted(books, key=key)
 
@@ -248,16 +339,25 @@ def _due(state, now: datetime) -> bool:
     return state.next_attempt_at is None or state.next_attempt_at <= now
 
 
-def pick_candidate(db: Session, now: datetime | None = None):
-    """First (book, format) that is eligible and outside its backoff, or None.
-    All ebook candidates come before any audiobook candidate."""
+def pick_candidates(db: Session, now: datetime | None = None, limit: int | None = None) -> list:
+    """Eligible (book, format) pairs outside their backoff, in try order (all ebook
+    candidates before any audiobook candidate), at most ``limit``."""
     now = now or datetime.utcnow()
     states = {(s.book_id, s.format): s for s in db.query(WishlistAcquireState).all()}
+    out = []
     for fmt in FORMATS:
         for b in _eligible_books(db, fmt):
             if _due(states.get((b.id, fmt)), now):
-                return b, fmt
-    return None
+                out.append((b, fmt))
+                if limit is not None and len(out) >= limit:
+                    return out
+    return out
+
+
+def pick_candidate(db: Session, now: datetime | None = None):
+    """First (book, format) that is eligible and outside its backoff, or None."""
+    c = pick_candidates(db, now, 1)
+    return c[0] if c else None
 
 
 # ── state recording ───────────────────────────────────────────────────────────
@@ -292,6 +392,8 @@ def _record(db: Session, book: Book, fmt: str, status: str, reason: str, *,
         st.next_attempt_at = now + AT_LIMIT_BACKOFF
     elif status == FORMAT_BLOCKED:
         st.next_attempt_at = now + FORMAT_BLOCKED_BACKOFF
+    elif status == ENGINE_UNREACHABLE:
+        st.next_attempt_at = now + ENGINE_UNREACHABLE_BACKOFF
     elif status == FAILED:
         n = max(1, st.attempts or 1)
         st.next_attempt_at = now + min(FAILED_BACKOFF_BASE * (2 ** (n - 1)), FAILED_BACKOFF_CAP)
@@ -307,19 +409,34 @@ def _record(db: Session, book: Book, fmt: str, status: str, reason: str, *,
     return st
 
 
-_LEVEL = {ACQUIRED: "success", ON_HOLD: "success", FAILED: "error"}
+_LEVEL = {ACQUIRED: "success", ON_HOLD: "success", FAILED: "error", ENGINE_UNREACHABLE: "warn"}
 
 
 def _outcome(db: Session, book: Book, fmt: str, status: str, reason: str, *, level: str | None = None,
-             **kw) -> dict:
-    """Record the state, THEN log it (#238: never log before it happened)."""
+             acted: bool = False, stop: bool = False, results: int | None = None, **kw) -> dict:
+    """Record the state, THEN log it (#238: never log before it happened).
+    ``acted``: a NEW borrow / hold really happened (ends the run, #349). ``stop``: end the
+    run for another reason (engine down, deferred). ``results``: Libby rows searched."""
     _record(db, book, fmt, status, reason, **kw)
+    detail = {"format": fmt, "status": status, "reason": reason, "acted": acted,
+              "card_id": kw.get("card_id", ""), "library": kw.get("library", ""),
+              "title_id": kw.get("title_id", "")}
+    if results is not None:
+        detail["results"] = results
     log_event("libby", "wishlist_acquire", level=level or _LEVEL.get(status, "info"),
-              book_id=book.id, title=book.title,
-              detail={"format": fmt, "status": status, "reason": reason,
-                      "card_id": kw.get("card_id", ""), "library": kw.get("library", ""),
-                      "title_id": kw.get("title_id", "")})
-    return {"book_id": book.id, "title": book.title, "format": fmt, "status": status, "reason": reason}
+              book_id=book.id, title=book.title, detail=detail)
+    return {"book_id": book.id, "title": book.title, "format": fmt, "status": status,
+            "reason": reason, "acted": acted, "stop": stop}
+
+
+def _engine_down(exc: Exception) -> bool:
+    """A transport-level failure (refused / timeout / DNS): the engine isn't there."""
+    return isinstance(exc, httpx.TransportError)
+
+
+def _unreachable(db: Session, book: Book, fmt: str, exc: Exception) -> dict:
+    return _outcome(db, book, fmt, ENGINE_UNREACHABLE, f"Libby engine: {exc}"[:300],
+                    count_attempt=False, stop=True)
 
 
 # ── the attempt ───────────────────────────────────────────────────────────────
@@ -365,14 +482,15 @@ def _attempt(db: Session, book: Book, fmt: str) -> dict:
         holds = _libby_holds()
         loans = _libby_loans()
     except Exception as exc:
-        log_event("libby", "wishlist_acquire", level="warn", book_id=book.id, title=title,
-                  detail={"format": fmt, "status": "engine_unreachable", "reason": str(exc)[:300]})
-        return {"book_id": book.id, "title": title, "format": fmt, "error": f"engine: {exc}"}
+        # (#349) An engine error is an attempt too: record it (short backoff) and stop the run.
+        return _unreachable(db, book, fmt, exc)
     usage = _card_usage(cards, holds, loans)
 
     try:
         rows = _libby_search(title, fmt)
     except Exception as exc:
+        if _engine_down(exc):
+            return _unreachable(db, book, fmt, exc)
         return _outcome(db, book, fmt, FAILED, f"search failed: {exc}"[:300])
 
     if not rows:
@@ -380,13 +498,24 @@ def _attempt(db: Session, book: Book, fmt: str) -> dict:
     matched_all = [r for r in rows if _match_row(title, author, r)]
     if not matched_all:
         return _outcome(db, book, fmt, NO_MATCH,
-                        f"{len(rows)} result(s) but none agree on title AND author")
+                        f"not found on Libby (searched {len(rows)} result(s); none match title and author)",
+                        results=len(rows))
     # (#297) Rows the engine flags inLibrary are already ours (local-library check, same
     # flag routes/libby.py and #179 use): never act on them.
     matched = [r for r in matched_all if not r.get("inLibrary")]
     if not matched:
         return _outcome(db, book, fmt, NO_MATCH,
-                        "matching result(s) are flagged inLibrary (already owned) — skipped")
+                        "matching result(s) are flagged inLibrary (already owned) — skipped",
+                        results=len(rows))
+    # (#349) An unpublished book (no date / future date) is only ever HELD, and only on an
+    # exact title match: a fuzzy hit on a placeholder is how a knock-off got borrowed.
+    unpublished = _is_unpublished(book)
+    if unpublished:
+        matched = [r for r in matched if _exact_title(title, r)]
+        if not matched:
+            return _outcome(db, book, fmt, NO_MATCH,
+                            "unpublished (no date or a future date) and no exact title+author match — not acting",
+                            results=len(rows))
     held = [r for r in matched if r.get("onHold")]
     if held:
         return _outcome(db, book, fmt, ON_HOLD, "already on hold (search flag onHold)",
@@ -429,8 +558,8 @@ def _attempt(db: Session, book: Book, fmt: str) -> dict:
                             "audiobook only on cards not on the prbn:v chip (cannot be harvested)")
         libs = chip
 
-    # (a) available + loan headroom -> borrow.
-    avail = [l for l in libs if l.get("isAvailable")]
+    # (a) available + loan headroom -> borrow. Never for an unpublished book (#349).
+    avail = [] if unpublished else [l for l in libs if l.get("isAvailable")]
     with_room = [l for l in avail
                  if l["u"]["loan_limit"] is not None and l["u"]["loans"] < l["u"]["loan_limit"]]
     if with_room:
@@ -456,12 +585,17 @@ def _attempt(db: Session, book: Book, fmt: str) -> dict:
         return _outcome(db, book, fmt, AT_HOLD_LIMIT,
                         "every card carrying it is at half its hold limit (reserved for manual holds)")
     _, pick = max(roomy, key=lambda t: (t[0], -(_int(t[1].get("holdsCount")) or 0)))
-    ok, detail = _place_hold(pick["titleId"], pick["cardId"])
+    try:
+        ok, detail = _place_hold(pick["titleId"], pick["cardId"])
+    except Exception as exc:
+        if _engine_down(exc):
+            return _unreachable(db, book, fmt, exc)
+        raise
     if not ok:
         return _outcome(db, book, fmt, FAILED, f"hold failed: {detail}",
                         card_id=pick["cardId"], library=pick["u"]["name"], title_id=pick["titleId"])
     return _outcome(db, book, fmt, ON_HOLD, "hold placed (auto-claimed by #179 when ready)",
-                    card_id=pick["cardId"], library=pick["u"]["name"], title_id=pick["titleId"])
+                    acted=True, card_id=pick["cardId"], library=pick["u"]["name"], title_id=pick["titleId"])
 
 
 def _borrow(db: Session, book: Book, fmt: str, pick: dict) -> dict:
@@ -471,23 +605,34 @@ def _borrow(db: Session, book: Book, fmt: str, pick: dict) -> dict:
         return _outcome(db, book, fmt, NEVER_TRIED,
                         f"deferred: {MAX_PENDING} loans already awaiting import confirmation",
                         next_at=datetime.utcnow() + BUSY_RETRY, count_attempt=False,
-                        level="info", **kw)
+                        level="info", stop=True, **kw)
     title = book.title
     author = book.author or ""
     if fmt == "ebook":
-        ok, detail = _borrow_ebook(pick["titleId"], pick["cardId"], title)
+        try:
+            ok, detail = _borrow_ebook(pick["titleId"], pick["cardId"], title)
+        except Exception as exc:
+            if _engine_down(exc):
+                return _unreachable(db, book, fmt, exc)
+            raise
         if not ok:
             return _outcome(db, book, fmt, FAILED,
                             f"borrow/download failed: {detail} (a loan may be left checked out)", **kw)
         note = _enqueue_safe(db, book, pick["titleId"], pick["cardId"], title, author)
         return _outcome(db, book, fmt, ACQUIRED,
                         f"borrowed + .acsm downloaded ({detail or 'ok'}); awaiting import confirm, then returned{note}",
-                        **kw)
+                        acted=True, **kw)
     # audiobook
     if _audiobook_busy():
         return _outcome(db, book, fmt, NEVER_TRIED, "deferred: audiobook engine is busy with another job",
-                        next_at=datetime.utcnow() + BUSY_RETRY, count_attempt=False, level="info", **kw)
-    ok, detail = _start_audiobook(pick["titleId"], pick["cardId"])
+                        next_at=datetime.utcnow() + BUSY_RETRY, count_attempt=False, level="info",
+                        stop=True, **kw)
+    try:
+        ok, detail = _start_audiobook(pick["titleId"], pick["cardId"])
+    except Exception as exc:
+        if _engine_down(exc):
+            return _unreachable(db, book, fmt, exc)
+        raise
     if not ok:
         return _outcome(db, book, fmt, FAILED, f"audiobook start failed: {detail}", **kw)
     note = _enqueue_safe(db, book, pick["titleId"], pick["cardId"], title, author)
@@ -495,7 +640,7 @@ def _borrow(db: Session, book: Book, fmt: str, pick: dict) -> dict:
     # not success; "returned" happens only once the ABS import is confirmed.
     return _outcome(db, book, fmt, ACQUIRED,
                     f"audiobook borrow+harvest started ({detail}); loan returned only after ABS import is confirmed{note}",
-                    level="info", **kw)
+                    level="info", acted=True, **kw)
 
 
 def _enqueue_safe(db: Session, book: Book, title_id: str, card_id: str, title: str,
@@ -519,9 +664,11 @@ def _enqueue_safe(db: Session, book: Book, title_id: str, card_id: str, title: s
 
 
 def run_once(db: Session) -> dict:
-    """One pass: pick ONE book/format and attempt it. No-op while the toggle is off.
-    Serialised (#297): the scheduled job and the manual 'Run one now' share one lock, so
-    two passes can never pick the same book and double-borrow."""
+    """One run: try up to ``effective_max_tries`` eligible (book, format) candidates in
+    order, stopping at the first real borrow / newly placed hold or at an engine outage
+    (#349). No-op while the toggle is off. Serialised (#297): the scheduled job and the
+    manual 'Run one now' share one lock, so two runs can never pick the same book and
+    double-borrow."""
     if not _RUN_LOCK.acquire(blocking=False):
         return {"skipped": "already running"}
     try:
@@ -537,18 +684,35 @@ def _run_once_locked(db: Session) -> dict:
         # The confirm->return tail and hold claiming live in #179's run; without it a
         # borrowed loan would never be returned and a hold never claimed.
         return {"skipped": "libby auto-fulfill (#179) is off — its confirm/return tail would not run"}
-    cand = pick_candidate(db)
-    if cand is None:
-        return {"picked": None, "reason": "nothing eligible"}
-    book, fmt = cand
-    try:
-        res = _attempt(db, book, fmt)
-    except Exception as exc:                                 # never re-pick a poison book
-        logger.exception("wishlist_acquire: %s/%s crashed", book.id, fmt)
-        db.rollback()
-        res = _outcome(db, book, fmt, FAILED, f"unexpected error: {type(exc).__name__}: {exc}"[:300])
-    res["at"] = datetime.utcnow().isoformat()
-    return res
+    max_tries = effective_max_tries(db)
+    cands = pick_candidates(db, limit=max_tries)
+    if not cands:
+        return {"picked": None, "reason": "nothing eligible", "tries": []}
+    tries, stopped = [], "tries exhausted"
+    for book, fmt in cands:
+        try:
+            res = _attempt(db, book, fmt)
+        except Exception as exc:        # (#349) a crash is an attempt: record it, never re-pick a poison book
+            logger.exception("wishlist_acquire: %s/%s crashed", book.id, fmt)
+            try:
+                db.rollback()
+            except Exception:
+                pass
+            if _engine_down(exc):
+                res = _unreachable(db, book, fmt, exc)
+            else:
+                res = _outcome(db, book, fmt, FAILED, f"unexpected error: {type(exc).__name__}: {exc}"[:300])
+        res["at"] = datetime.utcnow().isoformat()
+        tries.append(res)
+        if res.get("acted"):
+            stopped = "borrowed or placed a hold"
+            break
+        if res.get("stop"):
+            stopped = ("engine unreachable" if res.get("status") == ENGINE_UNREACHABLE
+                       else "deferred (busy)")
+            break
+    last = tries[-1]
+    return {**last, "picked": last["book_id"], "tries": tries, "stopped": stopped}
 
 
 # ── Settings card data ────────────────────────────────────────────────────────
@@ -567,6 +731,7 @@ def get_config(db: Session) -> dict:
     return {
         "enabled": is_enabled(db),
         "interval_min": effective_interval(db),
+        "max_tries": effective_max_tries(db),
         "autofulfill_enabled": af.is_enabled(db),
         "counts": counts,
         "recent": [{**s.to_dict(), "title": t} for s, t in recent],
