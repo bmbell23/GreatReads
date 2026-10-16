@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 # Known categories (for the UI filter + light validation). Unknown categories are
 # still accepted — this is a hint list, not a hard allowlist.
-CATEGORIES = ["libby", "import", "metadata", "cover", "system"]
+CATEGORIES = ["libby", "import", "metadata", "cover", "system", "calibre"]
 LEVELS = ["info", "success", "warn", "error"]
 
 # Keep the log bounded. Retention is primarily TIME-based (keep the last ~90 days so
