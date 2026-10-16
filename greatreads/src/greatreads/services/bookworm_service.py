@@ -170,7 +170,10 @@ def display_title(category: str, title: Optional[str]) -> Optional[str]:
     t = str(title).strip()
     if not ("_" in t or _FILE_EXT.search(t) or _FOR_KINDLE.search(t)):
         return title
-    t = _FILE_EXT.sub("", t).replace("_", " ")
+    t = _FILE_EXT.sub("", t)
+    # Libby's .acsm names end in "_<title id>" ("The Unbound_2349865.acsm"); drop the
+    # id or the thread key won't match the clean title (#353).
+    t = re.sub(r"_\d{5,}$", "", t).replace("_", " ")
     t = _FOR_KINDLE.sub("", t)
     i = t.lower().rfind(" by ")
     if i > 0:
