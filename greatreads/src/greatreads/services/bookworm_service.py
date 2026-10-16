@@ -8,7 +8,10 @@ Calibre/ABS link → metadata → cover. The thread's root is a fixed "Book Repo
 header and every event, the first included, is a reply under it (#323).
 
 Rules:
-- **Starts a thread:** Libby events and import links (something new happened).
+- **Starts a thread:** Libby events, import links and Calibre watcher steps (something
+  new happened). A thread whose root is older than ``STALE_THREAD_HOURS`` is not reused:
+  the next starting event opens a fresh Book Report, so it shows in the channel instead
+  of hiding as a reply under a day-old root (#351).
 - **Reply-only:** metadata enrichment, cover upgrades and MediaForge's chapter /
   sync-map steps (``media``). They only post into a
   book's thread that is already open, so the nightly backfill over the whole
@@ -45,6 +48,11 @@ try:
     THREAD_TTL_S = float(os.environ.get("BOOKWORM_THREAD_TTL_H", "72")) * 3600
 except ValueError:
     THREAD_TTL_S = 72 * 3600
+try:
+    # A root older than this (from its creation, not its last reply) is stale (#351).
+    STALE_THREAD_S = float(os.environ.get("STALE_THREAD_HOURS", "12")) * 3600
+except ValueError:
+    STALE_THREAD_S = 12 * 3600
 
 HEADER = "📚 Starting a new Book Report for {t}. See thread for more details."
 
@@ -68,6 +76,12 @@ MESSAGES = {
     ("libby", "audiobook_download"): "🎧 Downloaded {t} on audiobook{lib}!",
     ("libby", "audiobook_download_failed"): "⚠️ Audiobook download failed for {t}",
     ("libby", "audiobook_borrow_manual"): "✋ Borrowed {t} on audiobook{lib}; it needs a manual harvest",
+    # Calibre watcher steps, ingested via POST /api/events/ingest (#351)
+    ("calibre", "picked_up"): "📥 Picked up {t} from the downloads folder",
+    ("calibre", "added"): "📚 {t} added to Calibre (#{calibre_id})",
+    ("calibre", "finalized"): "🧮 {t}: {words} words{series}",
+    ("calibre", "failed"): "⚠️ Calibre couldn't import {t}: {reason}",
+    ("calibre", "skipped_duplicate"): "♻️ {t} is already in Calibre",
     ("import", "linked"): "🔗 {t} from {src} linked into GreatReads",
     ("import", "created"): "📚 {t} from {src} added to GreatReads",
     ("metadata", "enriched"): "🏷️ Metadata filled in for {t}: {fields}",
@@ -103,7 +117,7 @@ WISHLIST_ACQUIRE = {
     "enqueue_failed": "⚠️ Borrowed {t} but couldn't queue it for import and return: {why}",
 }
 INLINE_REASON = {"failed", "never_tried", "enqueue_failed"}
-STARTS = {"libby", "import"}
+STARTS = {"libby", "import", "calibre"}
 REPLY_ONLY = {"metadata", "cover", "media"}
 SKIP = {("import", "dismiss")}
 SOURCES = {"calibre": "Calibre", "audiobookshelf": "Audiobookshelf"}
@@ -116,7 +130,7 @@ _cards_ts = 0.0
 _queue: "queue.Queue" = queue.Queue(maxsize=200)
 _start_lock = threading.Lock()
 _worker: Optional[threading.Thread] = None
-_threads: Optional[dict] = None     # key → {"root_id", "ts"}; loaded lazily from THREADS_FILE
+_threads: Optional[dict] = None     # key → {"root_id", "created", "ts"}; loaded lazily from THREADS_FILE
 _channel_id: Optional[str] = None
 
 
@@ -142,6 +156,29 @@ def thread_key(title: Optional[str]) -> Optional[str]:
     return t or None
 
 
+_FILE_EXT = re.compile(r"\.(epub|acsm|pdf|mobi|azw3?|kepub)$", re.I)
+_FOR_KINDLE = re.compile(r"[\s_-]*for[\s_]+kindle\s*$", re.I)
+
+
+def display_title(category: str, title: Optional[str]) -> Optional[str]:
+    """Calibre watcher titles are often filenames ('The_Fires_of_December_by_Brandon_
+    Sanderson_for_Kindle'). For calibre events whose title looks like one, give the plain
+    title ('The Fires of December') so the thread key and the chat line match the
+    GreatReads link event. Anything else is returned untouched."""
+    if category != "calibre" or not title:
+        return title
+    t = str(title).strip()
+    if not ("_" in t or _FILE_EXT.search(t) or _FOR_KINDLE.search(t)):
+        return title
+    t = _FILE_EXT.sub("", t).replace("_", " ")
+    t = _FOR_KINDLE.sub("", t)
+    i = t.lower().rfind(" by ")
+    if i > 0:
+        t = t[:i]
+    t = re.sub(r"\s+", " ", t).strip()
+    return t or title
+
+
 def _card_library(card_id) -> Optional[str]:
     """Library name for a Libby card, cached for an hour. Worker thread only: it
     may hit the engine. None when unknown or the engine is down."""
@@ -163,6 +200,13 @@ def _card_library(card_id) -> Optional[str]:
 
 def _format(event: str, d: dict) -> str:
     return "audiobook" if event.startswith("audiobook") or d.get("media") == "audiobook" else "ebook"
+
+
+def _words(n) -> str:
+    try:
+        return f"{int(n):,}"
+    except (TypeError, ValueError):
+        return "an unknown number of"
 
 
 def render(category: str, event: str, level: str, title: Optional[str],
@@ -190,6 +234,8 @@ def render(category: str, event: str, level: str, title: Optional[str],
             st = "on_hold_existing"
         tmpl = WISHLIST_ACQUIRE.get(st)
         reason_inline = st in INLINE_REASON or st == "engine_unreachable"
+    elif (category, event) == ("calibre", "failed"):
+        reason_inline = True   # the template already carries the reason
     if tmpl is None:
         if category not in STARTS:
             return None
@@ -204,6 +250,10 @@ def render(category: str, event: str, level: str, title: Optional[str],
         text=f": {_safe(d['text'])[:300]}" if d.get("text") else "",
         n=f" (checked {d['results']} results)" if d.get("results") else "",
         why=_safe(str(d.get("reason") or "unknown reason"))[:140],
+        reason=_safe(str(d.get("reason") or "unknown reason"))[:140],
+        calibre_id=_safe(d.get("calibre_id") or "?"),
+        words=_words(d.get("words")),
+        series=f" ({_safe(d['series'])[:80]})" if d.get("series") else "",
     )
     err = d.get("error") or d.get("reason")
     if err and not reason_inline and level in ("warn", "warning", "error"):
@@ -228,9 +278,20 @@ def _open_thread(key: Optional[str]) -> Optional[dict]:
     return None
 
 
+def _stale(th: dict) -> bool:
+    """True when the thread's root post is older than STALE_THREAD_S. Judged by when
+    the root was created, never by the last reply (#351). Entries saved before
+    ``created`` existed fall back to ``ts`` (their last post: the best we know)."""
+    return time.time() - th.get("created", th.get("ts", 0)) >= STALE_THREAD_S
+
+
 def _remember(key: str, root_id: str) -> None:
     now = time.time()
-    _threads[key] = {"root_id": root_id, "ts": now}
+    old = _threads.get(key) or {}
+    # ``created`` is the root's creation time (kept across replies, reset on a new
+    # root); ``ts`` is the last post, which only drives the TTL pruning below.
+    created = old["created"] if old.get("root_id") == root_id and "created" in old else now
+    _threads[key] = {"root_id": root_id, "created": created, "ts": now}
     for k in [k for k, v in _threads.items() if now - v.get("ts", 0) >= THREAD_TTL_S]:
         del _threads[k]
     try:
@@ -245,6 +306,12 @@ def _remember(key: str, root_id: str) -> None:
 def _post(client, category: str, text: str, key: Optional[str], title: Optional[str]) -> None:
     global _channel_id
     th = _open_thread(key)
+    if th and _stale(th):
+        # Stale root (#351): replies would hide under a day-old post. Reply-only events
+        # are dropped; a starting event opens a new Book Report (replaces the entry).
+        if category in REPLY_ONLY:
+            return
+        th = None
     if category in REPLY_ONLY and not th:
         return
     if not _channel_id:
@@ -306,8 +373,11 @@ def notify(category: str, event: str, *, level: str = "info", book_id: Optional[
     try:
         if not _token():
             return
-        if category in REPLY_ONLY and _threads is not None and not _open_thread(thread_key(title)):
-            return   # cheap early drop for backfills; the worker re-checks anyway
+        title = display_title(category, title)
+        if category in REPLY_ONLY and _threads is not None:
+            th = _open_thread(thread_key(title))
+            if not th or _stale(th):
+                return   # cheap early drop for backfills; the worker re-checks anyway
         if not render(category, event, level, title, detail):
             return   # cheap check here; the worker re-renders with the library name
         _ensure_worker()
