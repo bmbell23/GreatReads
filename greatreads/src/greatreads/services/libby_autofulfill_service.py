@@ -18,7 +18,10 @@ and each run does two phases:
      has since imported (a fresh ExternalImport row matched to the hold by
      title+author via the #135 matcher). Imported → return the loan + drop it.
      Still missing past CONFIRM_TIMEOUT → drop it and LEAVE the loan (never return
-     something we couldn't confirm).
+     something we couldn't confirm). (#357) Even once confirmed, the loan is only
+     returned when it is at least ``min_loan_days`` old (default 3): instant
+     borrow+return churn is what got our cards rate-limited. ``confirmed_at`` tracks the
+     confirmation separately so the timeout never drops a confirmed entry.
   2. Acquire: pick isAvailable ebook holds that we don't already own / haven't
      already queued, borrow+download them with the engine's no_return flag (#179),
      and enqueue the successes — up to a per-run cap.
@@ -39,6 +42,7 @@ from sqlalchemy.orm import Session
 from ..models.book import Book
 from ..models.external_import import ExternalImport
 from ..routes.libby import LIBBY_ENGINE_URL, _core_tokens, _match_owned, _tokens
+from . import card_budget as cb          # (#357) shared library-card borrow budget
 from .event_log_service import log_event
 
 logger = logging.getLogger(__name__)
@@ -190,14 +194,26 @@ def _process_pending(db: Session, log: list) -> list:
     if not pending:
         return []
     now = datetime.utcnow()
+    min_age = timedelta(days=cb.min_loan_days(db))
     keep = []
     for item in pending:
         title = item.get("title", "")
         author = item.get("author", "")
+        if not item.get("borrowed_at"):
+            # (#357) Old entry without a borrow time: start its clock now (persisted via keep).
+            item["borrowed_at"] = now.isoformat()
         borrowed_at = _parse_dt(item.get("borrowed_at", ""))
         # Confirm against imports since (just before) the borrow.
         since = borrowed_at - timedelta(minutes=2)
-        if _imported_since(db, title, author, since):
+        if item.get("confirmed_at") or _imported_since(db, title, author, since):
+            if not item.get("confirmed_at"):
+                item["confirmed_at"] = now.isoformat()      # (#357) tracked separately from the timeout
+                log.append({"title": title, "event": "import_confirmed", "detail": "waiting out min loan age"
+                            if now - borrowed_at < min_age else "import confirmed"})
+            if now - borrowed_at < min_age:
+                # (#357) Confirmed, but too fresh to return: keep the loan (and its slot).
+                keep.append(item)
+                continue
             status, data = _engine_post(
                 "/api/loans/return",
                 {"title_id": item.get("title_id", ""), "card_id": item.get("card_id", "")},
@@ -237,6 +253,7 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
         return pending
 
     queued_ids = {str(p.get("title_id")) for p in pending}
+    budget_skipped: set = set()
     fails = _get_json(db, SETTING_FAILS, {})
     hold_ids = {str(h.get("id", "")) for h in holds}
     # Drop failure history for holds that no longer exist (cancelled/claimed).
@@ -265,6 +282,14 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
                 continue
         title = h.get("title", "")
         author = h.get("author", "")
+        # (#357) Card budget (per-card day/week caps, global cap, cooldown). Out of budget:
+        # skip this hold for now -- it stays a hold and is retried on a later run.
+        ok_b, why_b, _free = cb.check(db, card_id)
+        if not ok_b:
+            if card_id not in budget_skipped:
+                budget_skipped.add(card_id)
+                log.append({"title": title, "event": "budget_skip", "detail": f"card {card_id}: {why_b}"})
+            continue
         try:
             status, data = _engine_post(
                 "/api/download",
@@ -275,6 +300,11 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
             status, data = 599, {"error": str(exc)}
         if status < 400 and (data or {}).get("success"):
             fails.pop(title_id, None)
+            try:
+                cb.record_borrow(db, card_id, title, "autofulfill")
+            except Exception as exc:          # the borrow happened: never let bookkeeping undo it
+                db.rollback()
+                logger.warning("autofulfill: card_budget.record_borrow failed for %s: %s", title, exc)
             item = {
                 "title_id": title_id, "card_id": card_id,
                 "title": title, "author": author,
@@ -290,6 +320,14 @@ def _acquire(db: Session, pending: list, max_new: int, log: list) -> list:
             log_event("libby", "acsm_download", level="info", title=title, detail={"file": fname})
         else:
             err = (data or {}).get("error", f"HTTP {status}")
+            if cb.is_rate_limit(err):
+                # (#357) OverDrive refused the CARD: cool it down 7 days; the hold stays and
+                # this is not the title's failure (no #201 failure count).
+                cb.handle_rate_limit(db, card_id, (data or {}).get("library") or h.get("libraryName") or "",
+                                     err, title=title)
+                log.append({"title": title, "event": "card_cooldown",
+                            "detail": f"card {card_id} rate-limited; cooling down {cb.DEFAULT_COOLDOWN_DAYS} days"})
+                continue
             entry = fails.get(title_id) or {"count": 0}
             entry.update({
                 "count": int(entry.get("count", 0)) + 1,
@@ -327,7 +365,8 @@ def run_autofulfill(db: Session, *, force: bool = False) -> dict:
     # Don't let the in-flight queue grow unbounded: cap new borrows so total
     # pending never exceeds ~2× the per-run cap.
     cap = effective_max(db)
-    room = max(0, (2 * cap) - len(pending))
+    # (#357) Confirmed entries only waiting out the min loan age don't count toward the backlog.
+    room = max(0, (2 * cap) - sum(1 for p in pending if not p.get("confirmed_at")))
     pending = _acquire(db, pending, min(cap, room), log)
 
     # (#297) Merge, don't overwrite: another thread (the wishlist job / UI borrow) may

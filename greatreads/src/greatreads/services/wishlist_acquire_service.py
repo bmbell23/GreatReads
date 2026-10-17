@@ -41,6 +41,7 @@ from ..models.inventory import Inventory
 from ..models.reading import Reading
 from ..models.wishlist_acquire import WishlistAcquireState
 from ..routes.libby import LIBBY_ENGINE_URL, _core_tokens, _title_sim, _tokens
+from . import card_budget as cb          # (#357) shared library-card borrow budget
 from . import libby_autofulfill_service as af
 from .event_log_service import log_event
 
@@ -65,8 +66,9 @@ FORMAT_BLOCKED = "format_blocked"
 FAILED = "failed"
 NO_MATCH = "no_match"
 ENGINE_UNREACHABLE = "engine_unreachable"   # (#349) the Libby engine didn't answer; short backoff
+BUDGET_WAIT = "budget_wait"                 # (#357) available, but no card has borrow budget left; not the book's fault
 STATUSES = [NEVER_TRIED, ACQUIRED, ON_HOLD, UNAVAILABLE, AT_HOLD_LIMIT, AT_LOAN_LIMIT,
-            FORMAT_BLOCKED, FAILED, NO_MATCH, ENGINE_UNREACHABLE]
+            FORMAT_BLOCKED, FAILED, NO_MATCH, ENGINE_UNREACHABLE, BUDGET_WAIT]
 
 FORMATS = ["ebook", "audiobook"]          # ebook first (#297)
 
@@ -79,6 +81,8 @@ FAILED_BACKOFF_BASE = timedelta(hours=1)
 FAILED_BACKOFF_CAP = timedelta(days=7)
 ENGINE_UNREACHABLE_BACKOFF = timedelta(minutes=30)   # does NOT feed the failure backoff (#349)
 BUSY_RETRY = timedelta(minutes=20)
+BUDGET_WAIT_MAX = timedelta(days=1)       # (#357) budget_wait backoff ceiling
+BUDGET_WAIT_MIN = timedelta(minutes=10)   # ... and floor, so a run is never re-picked instantly
 # "acquired" is permanently terminal (#297): a book we ever borrowed is never borrowed again.
 # "on_hold" re-opens after this long if it is still a Wishlist book and no longer on
 # hold/loan on any card (checked at pick time).
@@ -409,11 +413,13 @@ def _record(db: Session, book: Book, fmt: str, status: str, reason: str, *,
     return st
 
 
-_LEVEL = {ACQUIRED: "success", ON_HOLD: "success", FAILED: "error", ENGINE_UNREACHABLE: "warn"}
+_LEVEL = {ACQUIRED: "success", ON_HOLD: "success", FAILED: "error", ENGINE_UNREACHABLE: "warn",
+          BUDGET_WAIT: "info"}
 
 
 def _outcome(db: Session, book: Book, fmt: str, status: str, reason: str, *, level: str | None = None,
-             acted: bool = False, stop: bool = False, results: int | None = None, **kw) -> dict:
+             acted: bool = False, stop: bool = False, results: int | None = None,
+             stop_reason: str = "", **kw) -> dict:
     """Record the state, THEN log it (#238: never log before it happened).
     ``acted``: a NEW borrow / hold really happened (ends the run, #349). ``stop``: end the
     run for another reason (engine down, deferred). ``results``: Libby rows searched."""
@@ -426,7 +432,7 @@ def _outcome(db: Session, book: Book, fmt: str, status: str, reason: str, *, lev
     log_event("libby", "wishlist_acquire", level=level or _LEVEL.get(status, "info"),
               book_id=book.id, title=book.title, detail=detail)
     return {"book_id": book.id, "title": book.title, "format": fmt, "status": status,
-            "reason": reason, "acted": acted, "stop": stop}
+            "reason": reason, "acted": acted, "stop": stop, "stop_reason": stop_reason}
 
 
 def _engine_down(exc: Exception) -> bool:
@@ -563,7 +569,18 @@ def _attempt(db: Session, book: Book, fmt: str) -> dict:
     with_room = [l for l in avail
                  if l["u"]["loan_limit"] is not None and l["u"]["loans"] < l["u"]["loan_limit"]]
     if with_room:
-        pick = max(with_room, key=lambda l: l["u"]["loan_limit"] - l["u"]["loans"])
+        # (#357) Spread borrows: only cards with budget, LEAST recently borrowed first --
+        # never "most headroom" (that hammered one card until OverDrive rate-limited it).
+        pick = cb.pick_card(db, with_room, card_of=lambda l: l["cardId"])
+        if pick is None:
+            now = datetime.utcnow()
+            free = cb.earliest_free(db, [l["cardId"] for l in with_room], now)
+            wait = min(max(free - now, BUDGET_WAIT_MIN), BUDGET_WAIT_MAX)
+            why = "; ".join(sorted({cb.check(db, l["cardId"], now)[1] for l in with_room}))
+            return _outcome(db, book, fmt, BUDGET_WAIT,
+                            f"available, but no card has borrow budget ({why}); next at ~{(now + wait).isoformat(timespec='minutes')}Z",
+                            next_at=now + wait, count_attempt=False, stop=True,
+                            stop_reason="no card budget", level="info")
         return _borrow(db, book, fmt, pick)
     if avail:
         return _outcome(db, book, fmt, AT_LOAN_LIMIT,
@@ -601,7 +618,10 @@ def _attempt(db: Session, book: Book, fmt: str) -> dict:
 def _borrow(db: Session, book: Book, fmt: str, pick: dict) -> dict:
     """Borrow + download on ``pick`` and hand the loan to #179's confirm->return tail."""
     kw = dict(card_id=pick["cardId"], library=pick["u"]["name"], title_id=pick["titleId"])
-    if len(af._get_json(db, af.SETTING_PENDING, [])) >= MAX_PENDING:
+    # (#357) Loans that are confirmed-imported and only waiting out the minimum loan age
+    # don't count against the confirm backlog (they already hold a loan slot, which the
+    # loan-limit check covers).
+    if sum(1 for p in af._get_json(db, af.SETTING_PENDING, []) if not p.get("confirmed_at")) >= MAX_PENDING:
         return _outcome(db, book, fmt, NEVER_TRIED,
                         f"deferred: {MAX_PENDING} loans already awaiting import confirmation",
                         next_at=datetime.utcnow() + BUSY_RETRY, count_attempt=False,
@@ -616,8 +636,11 @@ def _borrow(db: Session, book: Book, fmt: str, pick: dict) -> dict:
                 return _unreachable(db, book, fmt, exc)
             raise
         if not ok:
+            if cb.is_rate_limit(detail):
+                return _rate_limited(db, book, fmt, pick, detail, kw)
             return _outcome(db, book, fmt, FAILED,
                             f"borrow/download failed: {detail} (a loan may be left checked out)", **kw)
+        _record_budget(db, pick["cardId"], title, "wishlist")
         note = _enqueue_safe(db, book, pick["titleId"], pick["cardId"], title, author)
         return _outcome(db, book, fmt, ACQUIRED,
                         f"borrowed + .acsm downloaded ({detail or 'ok'}); awaiting import confirm, then returned{note}",
@@ -634,13 +657,41 @@ def _borrow(db: Session, book: Book, fmt: str, pick: dict) -> dict:
             return _unreachable(db, book, fmt, exc)
         raise
     if not ok:
+        if cb.is_rate_limit(detail):
+            return _rate_limited(db, book, fmt, pick, detail, kw)
         return _outcome(db, book, fmt, FAILED, f"audiobook start failed: {detail}", **kw)
+    _record_budget(db, pick["cardId"], title, "wishlist")
     note = _enqueue_safe(db, book, pick["titleId"], pick["cardId"], title, author)
     # Only the JOB START is known here — the harvest takes tens of minutes. Level info,
     # not success; "returned" happens only once the ABS import is confirmed.
     return _outcome(db, book, fmt, ACQUIRED,
                     f"audiobook borrow+harvest started ({detail}); loan returned only after ABS import is confirmed{note}",
                     level="info", acted=True, **kw)
+
+
+def _record_budget(db: Session, card_id: str, title: str, source: str) -> None:
+    """(#357) Count a borrow that really happened. A bookkeeping failure must never turn a
+    successful borrow into a retry (it would double-borrow): warn and carry on."""
+    try:
+        cb.record_borrow(db, card_id, title, source)
+    except Exception as exc:
+        try:
+            db.rollback()
+        except Exception:
+            pass
+        logger.warning("wishlist_acquire: card_budget.record_borrow failed for %s: %s", title, exc)
+
+
+def _rate_limited(db: Session, book: Book, fmt: str, pick: dict, detail: str, kw: dict) -> dict:
+    """(#357) OverDrive refused: 'too many titles borrowed and returned'. That is the CARD's
+    problem, not the book's: cool the card down 7 days, log it, put the book back to
+    never_tried with no attempt counted, and stop the run (other books hit the same wall)."""
+    cb.handle_rate_limit(db, pick["cardId"], pick["u"]["name"], detail, title=book.title)
+    return _outcome(db, book, fmt, NEVER_TRIED,
+                    f"card {pick['cardId']} ({pick['u']['name']}) rate-limited by OverDrive; "
+                    f"cooling down {cb.DEFAULT_COOLDOWN_DAYS} days: {str(detail)[:150]}",
+                    count_attempt=False, stop=True, stop_reason="card rate-limited",
+                    level="warn", **kw)
 
 
 def _enqueue_safe(db: Session, book: Book, title_id: str, card_id: str, title: str,
@@ -708,8 +759,9 @@ def _run_once_locked(db: Session) -> dict:
             stopped = "borrowed or placed a hold"
             break
         if res.get("stop"):
-            stopped = ("engine unreachable" if res.get("status") == ENGINE_UNREACHABLE
-                       else "deferred (busy)")
+            stopped = (res.get("stop_reason")
+                       or ("engine unreachable" if res.get("status") == ENGINE_UNREACHABLE
+                           else "deferred (busy)"))
             break
     last = tries[-1]
     return {**last, "picked": last["book_id"], "tries": tries, "stopped": stopped}
@@ -734,5 +786,6 @@ def get_config(db: Session) -> dict:
         "max_tries": effective_max_tries(db),
         "autofulfill_enabled": af.is_enabled(db),
         "counts": counts,
+        "card_budget": cb.status(db),
         "recent": [{**s.to_dict(), "title": t} for s, t in recent],
     }

@@ -755,6 +755,38 @@
             </div>
         </div>
 
+        <!-- Library card budget (#357) -->
+        <div class="card mb-4">
+            <div class="card-header d-flex align-items-center justify-content-between">
+                <h5 class="mb-0"><i class="fas fa-id-card me-2"></i>Libby — library card budget</h5>
+            </div>
+            <div class="card-body">
+                <p class="text-muted small mb-2">OverDrive rate-limits a card that borrows and returns too
+                    much too fast. Wishlist auto-acquire and hold auto-fulfill share these limits: each card
+                    gets a rolling per-day and per-week allowance, all cards share a per-day cap, borrows go to the
+                    <strong>least recently used</strong> card, and a card OverDrive refuses is parked for 7 days.
+                    Auto-fulfill also keeps a loan at least the minimum days before returning it.</p>
+                <div class="row g-2 align-items-end">
+                    <div class="col-auto"><label class="form-label small mb-0">Per card / day</label>
+                        <input type="number" class="form-control form-control-sm" id="cb-per-day" min="0" max="50" style="width:100px;"></div>
+                    <div class="col-auto"><label class="form-label small mb-0">Per card / 7 days</label>
+                        <input type="number" class="form-control form-control-sm" id="cb-per-week" min="0" max="200" style="width:110px;"></div>
+                    <div class="col-auto"><label class="form-label small mb-0">All cards / day</label>
+                        <input type="number" class="form-control form-control-sm" id="cb-global" min="0" max="500" style="width:110px;"></div>
+                    <div class="col-auto"><label class="form-label small mb-0">Minimum loan days</label>
+                        <input type="number" class="form-control form-control-sm" id="cb-min-loan" min="0" max="21" step="0.5" style="width:120px;"></div>
+                    <div class="col-auto"><button class="btn btn-sm btn-outline-secondary" id="cb-save" onclick="saveCardBudget()">Save</button></div>
+                    <div class="col-auto small text-muted" id="cb-status"></div>
+                </div>
+                <div class="table-responsive mt-2">
+                    <table class="table table-sm small mb-0">
+                        <thead><tr><th>Card</th><th>Library</th><th>Today</th><th>This week</th><th>Cooldown until</th><th></th></tr></thead>
+                        <tbody id="cb-cards"><tr><td colspan="6" class="text-muted">…</td></tr></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
         <!-- Activity Log (#184) -->
         <div class="card mb-4">
             <div class="card-header d-flex align-items-center justify-content-between">
@@ -924,7 +956,9 @@ chapter remain = (chapterEnd − pageIndex) × avg</pre>
     <div class="modal-dialog modal-xl modal-dialog-scrollable">
         <div class="modal-content">
             <div class="modal-header">
-                <h5 class="modal-title"><span id="dq-title">Pair</span> <span class="badge bg-secondary ms-2" id="dq-kind"></span></h5>
+                <h5 class="modal-title"><span id="dq-title">Pair</span> <span class="badge bg-secondary ms-2" id="dq-kind"></span>
+                    <span class="badge bg-warning text-dark ms-1 d-none" id="dq-unverified" title="One record has no author (or 'Unknown'), so this match rests on the title alone. Check it is really the same book.">
+                        <i class="fas fa-triangle-exclamation me-1"></i>author unverified</span></h5>
                 <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
             </div>
             <div class="modal-body" id="dq-body"></div>
@@ -1076,6 +1110,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadDuplicates();
     loadAutofulfill();
     loadWishlistAcquire();
+    loadCardBudget();   // #357
     loadGenres();
 
     // Show/hide auto WPD section when radio changes
@@ -1220,6 +1255,10 @@ async function runBackfill() {
 
 // Duplicates & cleanup (#216): Wishlist-vs-owned pairs + blank-title rows.
 let _ddPairs = [];   // #346: last /books/duplicates pairs, in review-queue order
+// #357: one side has no author / 'Unknown' -> the match rests on the title alone.
+const _ddWarn = p => p.author_unverified
+    ? ' <span class="badge bg-warning text-dark" title="One record has no author (or \'Unknown\'): matched on title alone, please verify."><i class="fas fa-triangle-exclamation me-1"></i>author unverified</span>'
+    : '';
 async function loadDuplicates() {
     try {
         const d = await GreatReads.apiCall('/books/duplicates');
@@ -1235,7 +1274,7 @@ async function loadDuplicates() {
         document.getElementById('dd-pairs').innerHTML = pairs.map(p => `
             <div class="d-flex justify-content-between align-items-center border-bottom py-1 gap-2">
                 <span>${_afEsc(p.wishlist.title)} <span class="text-muted">→</span> ${_afEsc(p.owned.title)}
-                    <span class="text-muted">(${Math.round(p.score * 100)}%)</span></span>
+                    <span class="text-muted">(${Math.round(p.score * 100)}%)</span>${_ddWarn(p)}</span>
                 <a class="text-nowrap" href="#" onclick="openDupQueue(${p._i}); return false;">Compare &amp; merge</a>
             </div>`).join('');
         // Owned ↔ owned (#344): survivor = the older (lower id) record
@@ -1243,7 +1282,7 @@ async function loadDuplicates() {
         document.getElementById('dd-owned-pairs').innerHTML = ownedPairs.map(p => `
             <div class="d-flex justify-content-between align-items-center border-bottom py-1 gap-2">
                 <span>${_afEsc(p.survivor.title)} <span class="text-muted">(#${p.survivor.id}) +</span>
-                    ${_afEsc(p.loser.title)} <span class="text-muted">(#${p.loser.id}, ${Math.round(p.score * 100)}%)</span></span>
+                    ${_afEsc(p.loser.title)} <span class="text-muted">(#${p.loser.id}, ${Math.round(p.score * 100)}%)</span>${_ddWarn(p)}</span>
                 <a class="text-nowrap" href="#" onclick="openDupQueue(${p._i}); return false;">Compare &amp; merge</a>
             </div>`).join('');
         // #346: "Review all" button + top-of-page banner + nav badge, all from the same list
@@ -1335,6 +1374,7 @@ async function _dqLoad() {
     q.keep = q.lose = null;
     document.getElementById('dq-title').textContent = `Pair ${q.i + 1} of ${q.pairs.length}`;
     document.getElementById('dq-kind').textContent = p.kind === 'owned' ? 'Two owned records' : 'Wishlist vs owned';
+    document.getElementById('dq-unverified').classList.toggle('d-none', !p.author_unverified);   // #357
     document.getElementById('dq-body').innerHTML = '<div class="text-muted py-4 text-center">Loading…</div>';
     _dqBusy(true);
     try {
@@ -1569,6 +1609,54 @@ async function runWishlistAcquire() {
               (r.stopped ? ` — stopped: ${r.stopped}` : '');
     } catch (e) { if (st) st.textContent = 'Run failed.'; }
     await loadWishlistAcquire();
+    loadCardBudget();   // #357
+}
+
+// Library card budget (#357).
+function _cbRender(cfg) {
+    const l = cfg.limits || {};
+    const set = (id, v) => { const e = document.getElementById(id); if (e && v != null) e.value = v; };
+    set('cb-per-day', l.per_day); set('cb-per-week', l.per_week);
+    set('cb-global', l.global_per_day); set('cb-min-loan', l.min_loan_days);
+    const st = document.getElementById('cb-status');
+    if (st) st.textContent = `All cards today: ${cfg.global_today || 0} / ${l.global_per_day}`;
+    const body = document.getElementById('cb-cards');
+    if (!body) return;
+    const rows = cfg.cards || [];
+    body.innerHTML = rows.length ? rows.map(c => {
+        const until = c.cooldown_until ? new Date(c.cooldown_until + 'Z').toLocaleString() : '';
+        const lift = c.cooldown_until
+            ? `<a href="#" onclick="clearCardCooldown('${_afEsc(c.card_id)}'); return false;">lift</a>` : '';
+        const cls = c.can_borrow ? '' : ' class="text-warning"';
+        return `<tr><td>${_afEsc(c.card)}</td><td>${_afEsc(c.library || '')}</td>` +
+            `<td${cls} title="${_afEsc(c.why || '')}">${c.today}</td><td${cls}>${c.week}</td>` +
+            `<td class="text-nowrap">${_afEsc(until)}</td><td>${lift}</td></tr>`;
+    }).join('') : '<tr><td colspan="6" class="text-muted">No cards or borrows yet.</td></tr>';
+}
+async function loadCardBudget() {
+    try { _cbRender(await GreatReads.apiCall('/libby/card-budget')); } catch (e) { /* leave placeholders */ }
+}
+async function saveCardBudget() {
+    const num = (id, f) => { const v = document.getElementById(id).value.trim(); return v === '' ? undefined : f(v); };
+    const data = {
+        per_day: num('cb-per-day', v => parseInt(v, 10)), per_week: num('cb-per-week', v => parseInt(v, 10)),
+        global_per_day: num('cb-global', v => parseInt(v, 10)), min_loan_days: num('cb-min-loan', parseFloat)
+    };
+    for (const k in data) {
+        if (data[k] === undefined) delete data[k];
+        else if (!(data[k] >= 0)) { GreatReads.showToast('Enter valid numbers (0 or more).', 'warning'); return; }
+    }
+    const btn = document.getElementById('cb-save');
+    if (btn) btn.disabled = true;
+    try {
+        _cbRender(await GreatReads.apiCall('/libby/card-budget', { method: 'POST', data }));
+        GreatReads.showToast('Card budget saved.', 'success');
+    } catch (e) { GreatReads.showToast('Save failed.', 'danger'); }
+    if (btn) btn.disabled = false;
+}
+async function clearCardCooldown(cardId) {
+    try { _cbRender(await GreatReads.apiCall('/libby/card-budget', { method: 'POST', data: { clear_cooldown: cardId } })); }
+    catch (e) { GreatReads.showToast('Could not lift the cooldown.', 'danger'); }
 }
 
 // ── Daily goal tracking per format (#289) ────────────────────────────────────
