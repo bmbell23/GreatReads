@@ -108,7 +108,13 @@ def ingest_event(db: Session, body: IngestEvent, client_host: Optional[str]) -> 
     book = db.query(Book).filter(Book.id == book_id).first() if book_id is not None else None
     if book is None:
         book_id = None   # never log a book id we can't back
-    title = (body.title or "").strip()[:300] or (book.title[:300] if book else None)
+    # The watcher only knows the filename; once the Calibre id resolves to a book, its
+    # real title wins so /logs and the Book Report match the import event (#353).
+    if book is not None and book.title:
+        title = book.title[:300]
+    else:
+        from ..services.bookworm_service import display_title
+        title = display_title("calibre", (body.title or "").strip()[:300]) or None
 
     detail = _clamp_detail(body.detail)
     if body.calibre_id is not None:
