@@ -4927,6 +4927,11 @@
         let fontFamilyPref = DEFAULT_FFAMILY;
         let hyphenationPref = false;
         let flip180Pref = false;
+        // Left-handed mode (#355): GreatReads' left_handed_mode setting reverses the tap
+        // zones. Cached locally so the first tap (and offline reading) already knows it.
+        const LEFTHAND_KEY = 'gr_left_handed';
+        let leftHandedPref = false;
+        try { leftHandedPref = localStorage.getItem(LEFTHAND_KEY) === '1'; } catch (e) {}
 
         function loadAlignPref() {
             try {
@@ -8446,17 +8451,20 @@
                     const screenWidth = window.innerWidth;
                     const leftZone = screenWidth * 0.25;  // Left 25%
                     const rightZone = screenWidth * 0.75; // Right 25%
+                    // Left-handed mode swaps the tap zones (#355); with flip-180 too, the
+                    // two cancel out. Swipes are unaffected.
+                    const tapFlipped = isFlipped !== leftHandedPref;
 
                     if (tapX < leftZone) {
                         // Physical left tap: prev in normal mode, next when flipped
                         // (because physical left appears as visual right when flipped)
-                        console.log(isFlipped ? 'Next page (tap left, flipped)' : 'Prev page (tap left)');
-                        isFlipped ? nextPage() : prevPage();
+                        console.log(tapFlipped ? 'Next page (tap left, reversed)' : 'Prev page (tap left)');
+                        tapFlipped ? nextPage() : prevPage();
                     } else if (tapX > rightZone) {
                         // Physical right tap: next in normal mode, prev when flipped
                         // (because physical right appears as visual left when flipped)
-                        console.log(isFlipped ? 'Prev page (tap right, flipped)' : 'Next page (tap right)');
-                        isFlipped ? prevPage() : nextPage();
+                        console.log(tapFlipped ? 'Prev page (tap right, reversed)' : 'Next page (tap right)');
+                        tapFlipped ? prevPage() : nextPage();
                     } else {
                         // Tap center - no action (use hamburger button for menu)
                     }
@@ -8567,6 +8575,15 @@
             fontFamilyPref  = loadFontFamilyPref();
             hyphenationPref = loadHyphenationPref();
             flip180Pref     = loadFlip180Pref();
+            // Refresh left-handed mode from GreatReads; keep the cached value offline (#355).
+            fetch(API_URL + '/settings/left_handed_mode')
+                .then(r => r.ok ? r.json() : null)
+                .then(j => {
+                    if (!j) return;
+                    leftHandedPref = j.setting_value === 'true';
+                    try { localStorage.setItem(LEFTHAND_KEY, leftHandedPref ? '1' : '0'); } catch (e) {}
+                })
+                .catch(() => {});
             // Re-inject stylesheet links for any previously-loaded Google
             // Fonts so the names resolve once the dropdown selects one.
             for (const name of loadGoogleFonts()) ensureGoogleFontLink(name);
