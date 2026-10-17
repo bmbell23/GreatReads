@@ -21,11 +21,16 @@ from ..models.book_contributor import BookContributor
 from ..models.external_import import ExternalImport
 from ..models.inventory import Inventory
 from ..models.reading import Reading
-from .import_service import _best_match, _build_existing, _word_tokens, get_calibre_authors_map
+from .import_service import (_best_match, _build_existing, _title_core_tokens, _word_tokens,
+                             get_calibre_authors_map, is_blank_author, title_similarity)
 
 # 'Likely duplicate' bar from _best_match's docstring. Subtitle cases ('Mindset' vs
 # 'Mindset: The New Psychology of Success') clear it via the #204 core-token path. (#216)
 DUP_THRESHOLD = 0.85
+# (#357) When one side's author is blank/'Unknown' the author can't corroborate, so a pair is
+# listed on the title alone -- but only at this (subtitle-tolerant) title similarity, and it is
+# flagged `author_unverified` so the review UI shows a warning.
+UNVERIFIED_TITLE_SIM = 0.95
 
 # "Not a duplicate" dismissals (#346): user_settings[dup_dismissed] = JSON list of
 # "min_id:max_id" strings. find_duplicates() drops any pair listed here.
@@ -122,12 +127,35 @@ def _other_entry(b, m) -> bool:
     return a is not None and c is not None and float(a) != float(c)
 
 
+def _unverified_match(b, my_author: str, candidates: list, by_id: dict):
+    """(#357) Best owned candidate whose title matches ``b`` at >= UNVERIFIED_TITLE_SIM
+    (subtitle tolerance) where ``b``'s author or the candidate's is blank/'Unknown'. Only
+    consulted when the normal matcher found nothing: an 'Unknown' author drags the composite
+    score under the bar. Returns (id, sim) or None."""
+    tok, core = _word_tokens(b.title), _title_core_tokens(b.title)
+    if not tok:
+        return None
+    best = None
+    for e in candidates:
+        if e[0] == b.id or not e[3]:
+            continue
+        if not (is_blank_author(my_author) or is_blank_author(by_id[e[0]][2])):
+            continue
+        sim = title_similarity(tok, core, e[1], e[3])
+        if sim >= UNVERIFIED_TITLE_SIM and (best is None or sim > best[1]
+                                            or (sim == best[1] and e[0] < best[0])):
+            best = (e[0], sim)
+    return best
+
+
 def find_duplicates(db: Session, threshold: float = DUP_THRESHOLD) -> list[dict]:
     """Likely duplicates at >= threshold, best score first. Two kinds (#344):
       "wishlist" — a Wishlist book matching an OWNED book (`wishlist` = loser, `owned` = survivor)
       "owned"    — two owned books that are the same work (each unordered pair once;
                    `survivor` = the lower/older id, `loser` = the other)
-    Every pair also carries `survivor`/`loser` {id,title,author} for the merge link."""
+    Every pair also carries `survivor`/`loser` {id,title,author} for the merge link, and
+    `author_unverified` (#357): True when either side's author is blank/'Unknown', so the
+    author could not corroborate the title match."""
     owned = _owned_ids(db)
     everything = _build_existing(db)
     existing = [e for e in everything if e[0] in owned]   # candidates: owned only
@@ -155,7 +183,17 @@ def find_duplicates(db: Session, threshold: float = DUP_THRESHOLD) -> list[dict]
                               [e for e in stored if e[0] != b.id],
                               [e for e in existing if e[0] != b.id])
             if not m or m["id"] not in by_id or m["score"] < threshold or _other_entry(b, m):
-                continue
+                m = None
+                u = _unverified_match(b, author[0], stored, by_id)      # (#357)
+                if u:
+                    m = {"id": u[0], "score": round(u[1], 2)}
+                    for e in stored:
+                        if e[0] == u[0]:
+                            m.update(title=e[1], series=e[4], series_number=e[5])
+                    if _other_entry(b, m):
+                        m = None
+                if not m:
+                    continue
             key = (min(b.id, m["id"]), max(b.id, m["id"]))
             if key in seen_owned:
                 continue
@@ -166,11 +204,22 @@ def find_duplicates(db: Session, threshold: float = DUP_THRESHOLD) -> list[dict]
                 "kind": "owned",
                 "survivor": side(lo), "loser": side(hi),
                 "score": m["score"],
+                "author_unverified": is_blank_author(by_id[lo][2]) or is_blank_author(by_id[hi][2]),
             })
             continue
         m = _match_either(b.title, author, b.series, b.series_number, year, stored, existing)
         if not m or m["id"] == b.id or m["id"] not in by_id or m["score"] < threshold or _other_entry(b, m):
-            continue
+            m = None
+            u = _unverified_match(b, author[0], stored, by_id)          # (#357)
+            if u:
+                m = {"id": u[0], "score": round(u[1], 2)}
+                for e in stored:
+                    if e[0] == u[0]:
+                        m.update(title=e[1], series=e[4], series_number=e[5])
+                if _other_entry(b, m):
+                    m = None
+            if not m:
+                continue
         owned_side = {"id": m["id"], "title": m["title"], "author": by_id[m["id"]][2]}
         wish_side = {"id": b.id, "title": b.title, "author": author[0]}
         pairs.append({
@@ -179,6 +228,7 @@ def find_duplicates(db: Session, threshold: float = DUP_THRESHOLD) -> list[dict]
             "owned": owned_side,
             "survivor": owned_side, "loser": wish_side,
             "score": m["score"],
+            "author_unverified": is_blank_author(owned_side["author"]) or is_blank_author(wish_side["author"]),
         })
     dismissed = get_dismissed(db)   # #346: "Not a duplicate" pairs never come back
     if dismissed:

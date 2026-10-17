@@ -1286,3 +1286,47 @@ async def libby_wishlist_acquire_run(
     # run_once holds a process-wide lock shared with the scheduled job (#297): if a pass
     # is already running this returns {"skipped": "already running"}.
     return await asyncio.to_thread(run_once, db)
+
+
+# ── Library-card borrow budget (#357) ────────────────────────────────────────
+
+class CardBudgetRequest(BaseModel):
+    per_day: int | None = None            # borrows per card per rolling 24 h
+    per_week: int | None = None           # borrows per card per rolling 7 days
+    global_per_day: int | None = None     # borrows across all cards per rolling 24 h
+    min_loan_days: float | None = None    # a loan must be this old before #179 auto-returns it
+    clear_cooldown: str | None = None     # card_id whose cooldown to lift
+
+
+async def _card_budget_view(db: Session) -> dict:
+    from ..services import card_budget
+    from ..services.wishlist_acquire_service import _libby_cards
+    try:
+        cards = await asyncio.to_thread(_libby_cards)     # names only; the table works without
+    except Exception as exc:
+        logger.warning("card-budget: could not read card names: %s", exc)
+        cards = []
+    return card_budget.status(db, cards)
+
+
+@router.get("/card-budget")
+async def libby_card_budget(
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    return await _card_budget_view(db)
+
+
+@router.post("/card-budget")
+async def libby_card_budget_set(
+    payload: CardBudgetRequest = Body(...),
+    current_user: User = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    from ..services import card_budget
+    card_budget.set_limits(db, per_day=payload.per_day, per_week=payload.per_week,
+                           global_per_day=payload.global_per_day,
+                           min_loan_days=payload.min_loan_days)
+    if payload.clear_cooldown:
+        card_budget.clear_cooldown(db, payload.clear_cooldown)
+    return await _card_budget_view(db)

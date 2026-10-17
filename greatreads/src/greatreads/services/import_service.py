@@ -280,6 +280,28 @@ def _get_calibre_word_count_map(conn: sqlite3.Connection) -> dict[int, int]:
         return {}
 
 
+def is_blank_author(author: Optional[str]) -> bool:
+    """(#357) No usable author: empty/whitespace, or the placeholder 'Unknown' (any case or
+    whitespace), which Calibre stamps on authorless books."""
+    return re.sub(r"\s+", " ", author or "").strip().lower() in ("", "unknown")
+
+
+def title_similarity(title_tok: set, core_tok: Optional[set], other_title: str, other_tok: set) -> float:
+    """Jaccard title similarity with the #204 subtitle tolerance: when exactly ONE side has
+    a subtitle, its head is also tried against the other side's full title."""
+    u = len(title_tok | other_tok)
+    sim = len(title_tok & other_tok) / u if u else 0.0
+    if sim < 1.0:
+        other_core = _title_core_tokens(other_title)
+        if core_tok is not None and other_core is None:
+            u = len(core_tok | other_tok)
+            sim = max(sim, len(core_tok & other_tok) / u if u else 0.0)
+        elif other_core is not None and core_tok is None:
+            u = len(title_tok | other_core)
+            sim = max(sim, len(title_tok & other_core) / u if u else 0.0)
+    return sim
+
+
 def _best_match(
     title: str,
     author: str,
@@ -303,6 +325,8 @@ def _best_match(
     prefer_ids (#344): on an exact score tie, a book whose id is in this set (owned /
     imported) beats one that isn't (a Wishlist record). Default None = first wins.
     """
+    if is_blank_author(author):
+        author = ""      # (#357) 'Unknown' is no author: neutral, never a mismatch
     in_title_tok = _word_tokens(title)
     in_core_tok = _title_core_tokens(title)
     in_author_tok = _word_tokens(author)
@@ -342,7 +366,7 @@ def _best_match(
         # Best of the whole strings and each co-author pair (#324): 'Brandon
         # Sanderson, Janci Patterson' vs 'Brandon Sanderson' is the same author, but
         # whole-string Jaccard is only 0.5 and the audiobook spawned a duplicate.
-        if in_author_tok and book_author_tok:
+        if in_author_tok and book_author_tok and not is_blank_author(book_author):
             a_union = len(in_author_tok | book_author_tok)
             author_sim = len(in_author_tok & book_author_tok) / a_union if a_union else 0.0
             for a in in_author_parts:
