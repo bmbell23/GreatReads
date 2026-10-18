@@ -3970,27 +3970,32 @@
                 const ms  = _pageTimeMs();
                 const wpp = _currentWPP();
                 const lo  = READING_SPEED.minSec * 1000;
-                const hi  = READING_SPEED.maxSec * 1000;
-                // #364: a page held longer than maxSec (reading across midnight, a long
-                // pause on one page) is still real reading time — CAP its activity credit
-                // at maxSec instead of dropping it. It stays out of the speed buffer
-                // (_recentPages) so a stalled page can't skew WPM; sub-minSec skims are
-                // still dropped entirely.
-                if (ms > hi) {
-                    _activityMsSinceFlush += hi;
-                    const w2 = _currentWPP();
-                    if (w2 != null) _activityWordsSinceFlush += Math.round(w2);
-                }
-                if (ms >= lo && ms <= hi) {
-                    _recentPages.push({
-                        ms: Math.round(ms),
-                        words: wpp != null ? Math.round(wpp) : null
-                    });
-                    if (_recentPages.length > READING_SPEED.bufferSize) _recentPages.shift();
-                    // Measured activity for the daily analytics series (#30) —
-                    // real time + words on this page, accrued until the next flush.
-                    _activityMsSinceFlush += Math.round(ms);
+                // #364: a page held a long time (reading across midnight, a long pause) is
+                // still real reading, so it is CAPPED, not dropped. The ceiling is dynamic:
+                // a flat maxSec would shortchange big pages (a 2000-word laptop page can
+                // honestly take 8+ min). allowedMs = max(maxSec, time to read this page at
+                // HALF the reader's measured WPM; 100 wpm if unknown). Up to allowedMs the
+                // full time counts; beyond it we credit allowedMs (they likely walked away).
+                // The same allowedMs is the speed-buffer's upper bound (instead of the flat
+                // maxSec) so big-page layouts can still feed the WPM estimate; the buffer
+                // is per-word (MAD on ms/word), and the 0.5x-WPM floor keeps a stalled page
+                // out. Sub-minSec skims are dropped entirely. wpp is the AVERAGE words per
+                // page (no per-page count is available).
+                const wpm       = _avgWPM();
+                const slowWpm   = wpm != null ? wpm * 0.5 : 100;
+                const allowedMs = Math.max(READING_SPEED.maxSec * 1000,
+                                           wpp != null ? (wpp / slowWpm) * 60000 : 0);
+                if (ms >= lo) {
+                    // Credited exactly once: the min() IS the cap (no separate over-cap branch).
+                    _activityMsSinceFlush += Math.round(Math.min(ms, allowedMs));
                     if (wpp != null) _activityWordsSinceFlush += Math.round(wpp);
+                    if (ms <= allowedMs) {
+                        _recentPages.push({
+                            ms: Math.round(ms),
+                            words: wpp != null ? Math.round(wpp) : null
+                        });
+                        if (_recentPages.length > READING_SPEED.bufferSize) _recentPages.shift();
+                    }
                     // Piggyback on the existing reading-state push — the
                     // debounced PUT will pick up _recentPages via the
                     // flushReadingState body.
