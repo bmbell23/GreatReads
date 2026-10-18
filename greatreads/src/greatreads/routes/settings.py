@@ -17,6 +17,7 @@ from ..models.user_settings import (
 from ..services.settings_service import (
     calculate_auto_wpd,
     get_wpd_mode as _get_wpd_mode,
+    get_reading_speeds as _get_effective_speeds,
 )
 
 router = APIRouter()
@@ -130,6 +131,25 @@ async def get_reading_speeds(db: Session = Depends(get_db)):
 
     # Return defaults if not found
     return ReadingSpeedsSettings()
+
+
+class EffectiveReadingSpeeds(BaseModel):
+    mode: str
+    ebook_wpd: int
+    physical_wpd: int
+    audio_wpd: int
+
+
+@router.get("/reading-speeds/effective", response_model=EffectiveReadingSpeeds)
+async def get_effective_reading_speeds(db: Session = Depends(get_db)):
+    """Words/day actually in force: auto values when wpd_mode=auto, else manual (#362)."""
+    speeds = _get_effective_speeds(db)
+    return EffectiveReadingSpeeds(
+        mode=_get_wpd_mode(db),
+        ebook_wpd=speeds["ebook"],
+        physical_wpd=speeds["physical"],
+        audio_wpd=speeds["audio"],
+    )
 
 
 @router.put("/reading-speeds", response_model=ReadingSpeedsSettings)

@@ -2002,7 +2002,8 @@ async function ensureDaySessions(ds) {
 }
 
 async function loadGoals() {
-    try { goalGoals = await GreatReads.apiCall('/settings/reading-speeds') || {}; } catch (_) { goalGoals = {}; }
+    // #362: effective (auto-aware) words/day, not the manual values
+    try { goalGoals = await GreatReads.apiCall('/settings/reading-speeds/effective') || {}; } catch (_) { goalGoals = {}; }
     // #289: which formats still get a daily goal. Fails OPEN (track everything)
     // so a settings hiccup never silently hides the user's goals.
     try { goalTracking = await GreatReads.apiCall('/settings/format-tracking') || goalTracking; } catch (_) {}
