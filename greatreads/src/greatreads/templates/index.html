@@ -343,22 +343,65 @@ function formatBreakdownHtml(formats, primary) {
         }).join('') + '</div>';
 }
 
+// #370: Currently Reading survives the server being unreachable. Every successful
+// load stores the list (+ per-book stats) under localStorage 'gr:wip'; when the
+// fetch fails (offline, native-cache miss) Home renders from that copy instead
+// of "Error loading current books." `pinned` = the WIP book ids (nothing may
+// evict their cached EPUB/audio from EreaderDB).
+const GR_WIP_KEY = 'gr:wip';
+function grSaveWip(readings, stats) {
+    try {
+        localStorage.setItem(GR_WIP_KEY, JSON.stringify({
+            saved: Date.now(), readings, stats,
+            pinned: (readings || []).map(r => r && r.book && r.book.id).filter(x => x != null)
+        }));
+    } catch (_) { /* quota / private mode */ }
+}
+function grLoadWip() {
+    try {
+        const o = JSON.parse(localStorage.getItem(GR_WIP_KEY) || 'null');
+        return (o && Array.isArray(o.readings)) ? o : null;
+    } catch (_) { return null; }
+}
+
 async function loadCurrentlyReading() {
     const container = document.getElementById('currently-reading');
+    let readings, stats;
     try {
-        const readings = await GreatReads.apiCall('/readings/?status=in_progress&limit=1000');
+        readings = await GreatReads.apiCall('/readings/?status=in_progress&limit=1000', { silent: true });
+        if (!Array.isArray(readings)) throw new Error('bad readings payload');
         homeIPReadings = readings || [];
 
         if (!readings || readings.length === 0) {
+            grSaveWip([], []);
             container.innerHTML = '<p class="text-muted mb-0">No books currently in progress.</p>';
             return;
         }
 
         // One /stats/book-time call per book → primary_format + per-format split (#67),
         // driving the card theme, the dominance breakdown, and time read.
-        const stats = await Promise.all(readings.map(r =>
-            GreatReads.apiCall(`/stats/book-time/${r.book.id}`).catch(() => null)));
-
+        stats = await Promise.all(readings.map(r =>
+            GreatReads.apiCall(`/stats/book-time/${r.book.id}`, { silent: true }).catch(() => null)));
+        grSaveWip(readings, stats);
+    } catch (error) {
+        console.warn('Currently reading: live load failed, trying the on-phone copy', error);
+        const wip = grLoadWip();
+        if (!wip) {
+            const off = document.documentElement.classList.contains('gr-offline');
+            container.innerHTML = off
+                ? '<p class="text-muted mb-0">Offline \u2014 open Home once while connected to keep your current books here.</p>'
+                : '<p class="text-danger mb-0">Error loading current books.</p>';
+            return;
+        }
+        readings = wip.readings;
+        stats = wip.stats || [];
+        homeIPReadings = readings;
+        if (!readings.length) {
+            container.innerHTML = '<p class="text-muted mb-0">No books currently in progress.</p>';
+            return;
+        }
+    }
+    try {
         container.innerHTML = '<div class="d-flex flex-column gap-3" id="ip-list"></div>';
         const list = document.getElementById('ip-list');
 

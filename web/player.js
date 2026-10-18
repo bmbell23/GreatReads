@@ -1358,9 +1358,16 @@ function saveProgress() {
     const pos = globalTime();
     const total = bookTotal();
     const stamp = currentChapterStamp();   // #25 cross-format resume anchor
-    fetch(`${API_URL}/progress/${encodeURIComponent(PROGRESS_KEY)}`, {
+    // #370: via the outbox so listening done offline is queued and replayed
+    // (deduped by flush_id), filed on the phone's local day (clientDate).
+    const _d = new Date();
+    const _clientDate = _d.getFullYear() + '-' + String(_d.getMonth() + 1).padStart(2, '0') + '-' + String(_d.getDate()).padStart(2, '0');
+    const _url = `${API_URL}/progress/${encodeURIComponent(PROGRESS_KEY)}`;
+    const _opts = {
         method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        kind: 'audio-progress',
         body: JSON.stringify({
+            clientDate: _clientDate,
             bookTitle: TITLE, bookAuthor: AUTHOR, mediaType: 'audiobook',
             absId: ABS_ID, format: 'audiobook',
             position: pos, duration: total,
@@ -1375,7 +1382,9 @@ function saveProgress() {
             sessionStart: _session ? _session.start : undefined,
         }),
         keepalive: true,
-    }).catch(() => {});
+    };
+    if (window.GROutbox) GROutbox.send(_url, _opts).catch(() => {});
+    else fetch(_url, _opts).catch(() => {});
     persistSession();   // keep the coalesce timestamp fresh
 }
 

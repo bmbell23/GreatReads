@@ -2,7 +2,7 @@
 
 from datetime import date, datetime
 from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import and_, or_, func
@@ -282,6 +282,10 @@ async def update_reading_progress(
     session_seconds: Optional[float] = None,
     start_percent: Optional[float] = None,
     physical: Optional[bool] = False,
+    client_date: Optional[str] = None,
+    add_minutes: Optional[float] = None,
+    flush_id: Optional[str] = None,
+    request: Request = None,
     db: Session = Depends(get_db)
 ):
     """Realign the current progress percentage for an in-progress reading.
@@ -296,6 +300,20 @@ async def update_reading_progress(
     3. Continue auto-calculating from this point forward
     """
     from datetime import date, timedelta
+    from .. import flush_dedup
+
+    # #370: an outbox replay we already applied is acknowledged, not re-applied.
+    _fid = flush_id or (request.headers.get('x-flush-id') if request is not None else None)
+    if flush_dedup.already(_fid):
+        return {"dedup": True}
+    # #370: a sitting queued offline is filed on the day it happened (the phone's
+    # local date), not the day it finally syncs.
+    _day = date.today().isoformat()
+    if client_date:
+        try:
+            _day = date.fromisoformat(client_date).isoformat()
+        except ValueError:
+            pass
 
     db_reading = db.query(Reading).filter(Reading.id == reading_id).first()
     if not db_reading:
@@ -357,7 +375,7 @@ async def update_reading_progress(
     is_phys_sitting = is_pure_physical or bool(physical)
     if is_phys_sitting and db_reading.book and db_reading.book.word_count:
         from sqlalchemy import text as _sql
-        today_str = date.today().isoformat()
+        today_str = _day
         book_key = f"phys:{db_reading.id}"
         word_count = db_reading.book.word_count
         db.execute(_sql(
@@ -366,6 +384,15 @@ async def update_reading_progress(
             " minutes REAL NOT NULL DEFAULT 0, words INTEGER NOT NULL DEFAULT 0,"
             " wpm_mpw_sum REAL NOT NULL DEFAULT 0, wpm_n INTEGER NOT NULL DEFAULT 0,"
             " PRIMARY KEY(activity_date, book_key, format))"))
+        # #370: a sitting saved while the phone couldn't read today's total (offline)
+        # sends add_minutes instead of the absolute minutes_read; fold it into the
+        # day's existing total here so the minutes still land on the right day.
+        if minutes_read is None and add_minutes and add_minutes > 0:
+            _cur = db.execute(_sql(
+                "SELECT COALESCE(SUM(minutes),0) FROM reading_activity "
+                "WHERE book_key=:bk AND format='Physical' AND activity_date=:d"),
+                {"bk": book_key, "d": today_str}).scalar() or 0
+            minutes_read = float(_cur) + float(add_minutes)
         # Minutes only overwrite when the caller carries a value: a page-only save
         # (minutes_read=None) must NOT clobber today's logged minutes to 0. When given,
         # minutes_read is the *today total* the UI carries (via /today-minutes). (#39/#40/#44)
@@ -509,6 +536,7 @@ async def update_reading_progress(
         joinedload(Reading.book)
     ).filter(Reading.id == reading_id).first()
 
+    flush_dedup.remember(_fid)   # #370: applied → a replay of this id is a no-op
     return db_reading.to_dict()
 
 
