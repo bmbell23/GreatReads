@@ -1978,6 +1978,9 @@
         // #10: ebook content anchors as file fractions (0..1). Defaults = whole file;
         // overridden from /api/ebooks/{id} once loaded. Drive the story-relative % only.
         let _contentStart = 0, _contentEnd = 1;
+        // #359: set once /api/ebooks/{id} answers ({manualStart, manualEnd, autoStored, grBookId});
+        // _boundsDetected flips when TOC detection has run (or is moot) so it happens once per open.
+        let _boundsMeta = null, _boundsDetected = false;
 
         // EPUB pagination state
         let epubPages = [];
@@ -3589,6 +3592,98 @@
             for (const s of flat) {
                 if (s.page !== last) { chapterStarts.push(s); last = s.page; }
             }
+            maybeDetectContentBounds();   // #359 (no-op until the book meta has loaded)
+        }
+
+        // #359: auto-detect the real story bounds from the TOC so % and time-left stop at the
+        // story's end (acknowledgements, excerpts, "also by", ...) without a manual anchor.
+        // detectContentBounds() is pure (unit-tested standalone): entries = [{title, frac}]
+        // in reading order, frac = file fraction (page / totalPages — the same space as
+        // _contentStart/_contentEnd). Returns {start, end, titles:{start,end}}; no match → 0/1.
+        // BEGIN detectContentBounds
+        const _BACK_MATTER_RE = new RegExp([
+            'acknowledg(?:e)?ments?', 'about the authors?', 'also by', 'other books by',
+            'excerpts?', 'sneak peek', 'preview', 'bonus(?: content| chapter| material)?',
+            'reading group guide', "reader(?:['\u2019\u2018]s?|s['\u2019\u2018]?)? guide", 'discussion (?:questions|guide)', 'book club',
+            'a conversation with', '(?:^|\\W)q\\s*(?:&|&amp;|and)\\s*a(?:\\W|$)', 'copyright',
+            'newsletter', 'keep reading', 'read on', 'coming soon', 'continue reading', 'teaser',
+            'praise for', 'dear reader', "author(?:['’‘]s?|s)? note",
+            'a note from the author', 'about the publisher', 'credits'
+        ].map(p => p.startsWith('(?:^') ? p : '\\b' + p + '\\b').join('|'), 'i');
+        const _FRONT_MATTER_RE = /^\s*(?:(?:front\s+)?cover(?:\s+page)?|(?:half[\s-]*)?title\s+page|copyright(?:\s+page)?|dedication|(?:table\s+of\s+)?contents|epigraphs?|also by\b.*|other books by\b.*)\s*$/i;
+        function detectContentBounds(entries) {
+            const out = { start: 0, end: 1, titles: { start: [], end: [] } };
+            const list = (entries || []).filter(e => e && typeof e.title === 'string' && Number.isFinite(e.frac));
+            if (list.length < 2) return out;
+            // Back matter: the trailing run of matching entries. The end anchor is the first
+            // entry of that run — sane only if the run starts past 50% of the file and what
+            // follows is under 40% of it.
+            let i = list.length;
+            while (i > 0 && _BACK_MATTER_RE.test(list[i - 1].title)) i--;
+            if (i > 0 && i < list.length) {
+                const f = list[i].frac;
+                if (f > 0.5 && f < 1 && (1 - f) < 0.4) {
+                    out.end = f;
+                    out.titles.end = list.slice(i).map(e => e.title.trim());
+                }
+            }
+            // Front matter: the leading run (maps are story-adjacent, so they end the run and
+            // are kept). The start anchor is the first entry after it; only if it lands < 15%.
+            let j = 0;
+            while (j < list.length && _FRONT_MATTER_RE.test(list[j].title)) j++;
+            if (j > 0 && j < list.length) {
+                const f = list[j].frac;
+                if (f > 0 && f < 0.15 && f < out.end) {
+                    out.start = f;
+                    out.titles.start = list.slice(0, j).map(e => e.title.trim());
+                }
+            }
+            return out;
+        }
+        // END detectContentBounds
+
+        // Top-level TOC entries as {title, frac}, descending through a lone wrapper node
+        // (a TOC that is one "Book" entry holding every chapter), in reading order.
+        function collectTocEntriesForBounds() {
+            if (!tocTree || !tocTree.length || totalPages <= 1) return [];
+            let nodes = tocTree;
+            while (nodes.length === 1 && nodes[0].children && nodes[0].children.length) nodes = nodes[0].children;
+            const entries = [];
+            for (const n of nodes) {
+                if (typeof n.anchor !== 'number' || !(n.title || '').trim()) continue;
+                const p = findPageForAnchor(n.anchor);
+                if (p != null) entries.push({ title: n.title.trim(), frac: p / totalPages });
+            }
+            return entries.sort((a, b) => a.frac - b.frac);   // stable: ties keep TOC order
+        }
+
+        function maybeDetectContentBounds() {
+            if (_boundsDetected || !_boundsMeta || format.toLowerCase() !== 'epub') return;
+            if (!tocTree || !tocTree.length || totalPages <= 1) return;   // not paginated yet
+            _boundsDetected = true;
+            // Manual wins; a stored auto value means we already detected — don't redo it.
+            if (_boundsMeta.autoStored || (_boundsMeta.manualStart && _boundsMeta.manualEnd)) return;
+            const r = detectContentBounds(collectTocEntriesForBounds());
+            const useStart = !_boundsMeta.manualStart && r.start > 0;
+            const useEnd   = !_boundsMeta.manualEnd && r.end < 1;
+            if (!useStart && !useEnd) return;
+            const s = useStart ? r.start : _contentStart, e = useEnd ? r.end : _contentEnd;
+            if (!(e > s)) return;
+            _contentStart = s; _contentEnd = e;
+            _pageStartBookRemainSec = null;   // drop the stale time-left baseline; recomputed on the next turn
+            updateProgress();
+            // Fire-and-forget save (skipped offline / when the book isn't in GreatReads).
+            if (_boundsMeta.grBookId != null && navigator.onLine !== false) {
+                fetch(`${API_URL}/books/${_boundsMeta.grBookId}/content-anchors/auto`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        start_pct: useStart ? Math.round(r.start * 10000) / 100 : null,
+                        end_pct:   useEnd   ? Math.round(r.end * 10000) / 100 : null,
+                        titles: { start: useStart ? r.titles.start : [], end: useEnd ? r.titles.end : [] }
+                    })
+                }).catch(() => {});
+            }
         }
 
         function updateProgress() {
@@ -3852,6 +3947,12 @@
         // on every page turn when a new reading sample is recorded.
         let _pageStartChRemainSec  = null;
         let _pageStartBookRemainSec = null;
+        // #359: page where the STORY ends (the content-end anchor), so "book time left" stops
+        // at the real end instead of counting acknowledgements/excerpts. = totalPages when
+        // there is no end anchor (unchanged behaviour).
+        function _storyEndPage() {
+            return Math.min(totalPages, Math.round(_contentEnd * totalPages));
+        }
         function _onPageTurn() {
             // EPUB only — PDFs don't have the chapter/pagination model the
             // metrics row depends on.
@@ -3889,7 +3990,7 @@
             const avgMs  = _avgMs();
             const avgSec = avgMs != null ? avgMs / 1000 : null;
             if (avgSec != null) {
-                _pageStartBookRemainSec = Math.max(0, totalPages - currentEpubPage) * avgSec;
+                _pageStartBookRemainSec = Math.max(0, _storyEndPage() - currentEpubPage) * avgSec;
                 if (chapterStarts && chapterStarts.length > 0) {
                     let idx = 0;
                     for (let i = 0; i < chapterStarts.length; i++) {
@@ -4038,7 +4139,7 @@
                 bookRemain = Math.max(0, _pageStartBookRemainSec - pageSecNow);
             } else if (avgSec != null) {
                 // Include the current page in the estimate (currentEpubPage is 0-indexed).
-                bookRemain = Math.max(0, totalPages - currentEpubPage) * avgSec;
+                bookRemain = Math.max(0, _storyEndPage() - currentEpubPage) * avgSec;
             }
 
             if (_pageStartChRemainSec != null) {
@@ -4415,7 +4516,7 @@
             if (!bookId) return;
             try {
                 const r = await fetch(`${API_URL}/ebooks/${encodeURIComponent(bookId)}`);
-                if (!r.ok) return;
+                if (!r.ok) { _detectBoundsWithoutMeta(); return; }
                 const meta = await r.json();
                 if (Number.isFinite(meta.wordCount) && meta.wordCount > 0) {
                     _bookWordCount = meta.wordCount;
@@ -4423,8 +4524,27 @@
                 // #10: content anchors (percent-of-file) → story-relative displayed %.
                 if (Number.isFinite(meta.contentStartPct)) _contentStart = Math.max(0, Math.min(1, meta.contentStartPct / 100));
                 if (Number.isFinite(meta.contentEndPct))   _contentEnd   = Math.max(0.01, Math.min(1, meta.contentEndPct / 100));
+                // #359: precedence per side — manual (above) > stored auto > detect from the TOC.
+                const manualS = Number.isFinite(meta.contentStartPct), manualE = Number.isFinite(meta.contentEndPct);
+                const autoS = Number.isFinite(meta.contentStartPctAuto), autoE = Number.isFinite(meta.contentEndPctAuto);
+                let s = _contentStart, e = _contentEnd;
+                if (!manualS && autoS) s = Math.max(0, Math.min(1, meta.contentStartPctAuto / 100));
+                if (!manualE && autoE) e = Math.max(0.01, Math.min(1, meta.contentEndPctAuto / 100));
+                if (e > s) { _contentStart = s; _contentEnd = e; }   // a stale auto value never inverts the span
+                _boundsMeta = { manualStart: manualS, manualEnd: manualE, autoStored: autoS || autoE,
+                                grBookId: Number.isFinite(meta.grBookId) ? meta.grBookId : null };
+                maybeDetectContentBounds();
                 updateProgress();   // repaint the % now that anchors are known
-            } catch (_) {}
+            } catch (_) { _detectBoundsWithoutMeta(); }
+        }
+
+        // #359: offline / meta unavailable — we can't know about manual or stored-auto values,
+        // but before this the reader showed the raw whole-file % in that case anyway, so local
+        // TOC detection is strictly better. Applies locally only (no grBookId → no save).
+        function _detectBoundsWithoutMeta() {
+            if (_boundsMeta) return;
+            _boundsMeta = { manualStart: false, manualEnd: false, autoStored: false, grBookId: null };
+            try { maybeDetectContentBounds(); } catch (_) {}
         }
 
         // Force a flush whenever the WebView is about to drop us (user backs

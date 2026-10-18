@@ -434,6 +434,106 @@ def _gr_anchors_for(book_key):
         pass
     return None
 
+# ── Auto-detected story bounds (#359) ────────────────────────────────────────
+# The reader detects back/front matter from the EPUB TOC and saves the result in the
+# content_anchor_auto table (percent-of-file, same space as books.content_*_pct). Manual
+# anchors on `books` always win; the reader applies that precedence from this meta.
+def _gr_auto_anchors_for(book_key):
+    """{'grBookId', 'start', 'end', 'titles'} for a reader book_key (#359), via
+    external_imports. grBookId is None when the book isn't in GreatReads; start/end/
+    titles are None when nothing is stored. Best-effort."""
+    out = {'grBookId': None, 'start': None, 'end': None, 'titles': None}
+    try:
+        bk = str(book_key)
+        source, ext_id = ('audiobookshelf', bk[4:]) if bk.startswith('abs:') else ('calibre', bk)
+        conn = _gr_db()
+        try:
+            row = conn.execute(
+                'SELECT ei.book_id FROM external_imports ei '
+                'WHERE ei.source=? AND ei.external_id=? LIMIT 1', (source, ext_id)).fetchone()
+            if not row:
+                return out
+            out['grBookId'] = row['book_id']
+            try:
+                a = conn.execute(
+                    'SELECT start_pct, end_pct, toc_titles FROM content_anchor_auto '
+                    'WHERE book_id=?', (row['book_id'],)).fetchone()
+            except sqlite3.OperationalError:
+                a = None   # table not created yet (pre-restart)
+        finally:
+            conn.close()
+        if a:
+            out['start'], out['end'] = a['start_pct'], a['end_pct']
+            try:
+                out['titles'] = json.loads(a['toc_titles']) if a['toc_titles'] else None
+            except Exception:
+                out['titles'] = None
+    except Exception:
+        pass
+    return out
+
+def _valid_pct(v):
+    """A finite number in [0, 100] as float, else None (#359)."""
+    if isinstance(v, bool) or not isinstance(v, (int, float)):
+        return None
+    v = float(v)
+    return v if 0.0 <= v <= 100.0 else None
+
+@router.post('/api/books/{gr_book_id}/content-anchors/auto')
+async def save_auto_content_anchors(gr_book_id: int, request: Request):
+    """Upsert the reader-detected story bounds {start_pct, end_pct, titles} (#359).
+    Out-of-range values are ignored (that side stays NULL); if both survive, start must
+    be < end. gr_book_id is the GreatReads book id (the reader gets it as `grBookId`)."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail='JSON object body required')
+    s = _valid_pct(body.get('start_pct'))
+    e = _valid_pct(body.get('end_pct'))
+    if s is not None and e is not None and not (s < e):
+        raise HTTPException(status_code=400, detail='start_pct must be < end_pct')
+    if s is None and e is None:
+        raise HTTPException(status_code=400, detail='no valid start_pct/end_pct (0..100)')
+    # titles: a list, or {'start': [...], 'end': [...]} (what the reader sends) — matched TOC entries
+    def _clean_titles(t):
+        return [str(x)[:200] for x in t[:50]] if isinstance(t, list) else []
+    titles = body.get('titles')
+    if isinstance(titles, dict):
+        titles_json = json.dumps({'start': _clean_titles(titles.get('start')),
+                                  'end': _clean_titles(titles.get('end'))})
+    elif isinstance(titles, list):
+        titles_json = json.dumps(_clean_titles(titles))
+    else:
+        titles_json = None
+    conn = _gr_db()
+    try:
+        if not conn.execute('SELECT 1 FROM books WHERE id=?', (gr_book_id,)).fetchone():
+            raise HTTPException(status_code=404, detail='Book not found')
+        conn.execute(
+            'INSERT INTO content_anchor_auto (book_id, start_pct, end_pct, detected_at, toc_titles) '
+            'VALUES (?,?,?,?,?) ON CONFLICT(book_id) DO UPDATE SET '
+            'start_pct=excluded.start_pct, end_pct=excluded.end_pct, '
+            'detected_at=excluded.detected_at, toc_titles=excluded.toc_titles',
+            (gr_book_id, s, e, _datetime.datetime.utcnow().isoformat(sep=' '), titles_json))
+        conn.commit()
+    finally:
+        conn.close()
+    return {'ok': True, 'book_id': gr_book_id, 'start_pct': s, 'end_pct': e}
+
+@router.delete('/api/books/{gr_book_id}/content-anchors/auto')
+def clear_auto_content_anchors(gr_book_id: int):
+    """Drop the auto-detected story bounds so the reader re-detects next open (#359)."""
+    conn = _gr_db()
+    try:
+        cur = conn.execute('DELETE FROM content_anchor_auto WHERE book_id=?', (gr_book_id,))
+        conn.commit()
+        deleted = cur.rowcount
+    finally:
+        conn.close()
+    return {'ok': True, 'deleted': deleted}
+
 # ── Cross-format progress mapping (#256) ─────────────────────────────────────
 # The shared reading cursor is a single STORY-RELATIVE fraction (0..1) — 0 = the
 # real story start, 1 = the real story end — kept in every progress record as
@@ -2123,6 +2223,12 @@ def get_book_info(book_id):
         a = _gr_anchors_for(str(book_id))   # #10: ebook story bounds for the reader %
         book['contentStartPct'] = a[0] if a else None
         book['contentEndPct'] = a[1] if a else None
+        # #359: auto-detected bounds (manual above wins in the reader) + the GR id to save under
+        au = _gr_auto_anchors_for(str(book_id))
+        book['grBookId'] = au['grBookId']
+        book['contentStartPctAuto'] = au['start']
+        book['contentEndPctAuto'] = au['end']
+        book['contentAutoTitles'] = au['titles']
         return book
     else:
         return JSONResponse({'error': 'Book not found'}, status_code=404)

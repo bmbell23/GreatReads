@@ -1,6 +1,7 @@
 """Book management API routes."""
 
 import os
+import json
 from datetime import date
 from typing import List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File, Request, Body
@@ -17,6 +18,7 @@ from ..models.tag import Tag, book_tags
 from ..models.inventory import Inventory
 from ..models.external_import import ExternalImport
 from ..models.book_contributor import BookContributor  # noqa: F401 — register table for create_tables (#192)
+from ..models.content_anchor_auto import ContentAnchorAuto  # #359
 from ..models.user import User
 from ..config import settings
 from ..auth import get_current_user
@@ -508,6 +510,21 @@ async def get_book(
         } for inv in book.inventory]
     else:
         book_dict["inventory"] = []
+
+    # #359: reader-detected story bounds (shown in Edit Book when there's no manual value)
+    try:
+        auto = db.query(ContentAnchorAuto).filter(ContentAnchorAuto.book_id == book_id).first()
+    except Exception:
+        auto = None   # table not created yet
+    if auto:
+        try:
+            titles = json.loads(auto.toc_titles) if auto.toc_titles else []
+        except Exception:
+            titles = []
+        book_dict["content_auto"] = {"start_pct": auto.start_pct, "end_pct": auto.end_pct,
+                                     "titles": titles}
+    else:
+        book_dict["content_auto"] = None
 
     return book_dict
 
