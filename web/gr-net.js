@@ -15,7 +15,8 @@
   var HOST = (location.hostname && /^\d+\.\d+\.\d+\.\d+$|\./.test(location.hostname))
     ? location.hostname : '100.69.184.113';
   var HEALTH = 'http://' + HOST + ':8092/api/health';
-  var PROBE_MS = 15000, TIMEOUT_MS = 4000;
+  var PROBE_MS = 15000, PROBE_OFFLINE_MS = 5000, TIMEOUT_MS = 4000, FAILS_TO_OFFLINE = 2;
+  var fails = 0, timerId = null;
   var root = document.documentElement;
   var listeners = [];
   var probing = false;
@@ -53,7 +54,13 @@
     return fetch(HEALTH + '?_=' + Date.now(), { mode: 'cors', cache: 'no-store', signal: ctl ? ctl.signal : undefined })
       .then(function () { return true; }, function () { return false; })
       .then(function (up) {
-        clearTimeout(timer); probing = false; setOnline(up); return up;
+        clearTimeout(timer); probing = false;
+        // Online at once on success; offline only after consecutive failures,
+        // so one network blip never shows the banner.
+        if (up) { fails = 0; setOnline(true); }
+        else { fails++; if (fails >= FAILS_TO_OFFLINE) setOnline(false); }
+        schedule();
+        return up;
       });
   };
 
@@ -88,15 +95,22 @@
   }
   GRNet.refreshPending = refreshPending;
 
+  // 15s while healthy; 5s after a failure or while offline (confirm blips, recover fast).
+  function schedule() {
+    if (timerId) clearTimeout(timerId);
+    timerId = setTimeout(function () { GRNet.probe(); refreshPending(); },
+      (!GRNet.online || fails > 0) ? PROBE_OFFLINE_MS : PROBE_MS);
+  }
+
   function start() {
     if (started) return; started = true;
     renderBanner();
     refreshPending();
     GRNet.probe();
-    setInterval(function () { GRNet.probe(); refreshPending(); }, PROBE_MS);
+    schedule();
     window.addEventListener('online', function () { GRNet.probe(); });
-    // Radio dropped: don't wait for the next tick to say so.
-    window.addEventListener('offline', function () { setOnline(false); });
+    // Radio dropped: confirm with a probe (two failures needed), don't flip on the event alone.
+    window.addEventListener('offline', function () { GRNet.probe(); });
     document.addEventListener('visibilitychange', function () {
       if (document.visibilityState === 'visible') GRNet.probe();
     });

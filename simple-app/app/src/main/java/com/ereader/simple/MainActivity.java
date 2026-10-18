@@ -253,9 +253,13 @@ public class MainActivity extends Activity {
                 startProbing(appCtx);
             } else {
                 new Thread(() -> {
-                    runProbe(appCtx);
+                    // Cold start: the one 3s probe decides the first load. A single
+                    // failure doesn't mark the server down (needs 2), but the first
+                    // page still falls back to offline Home; the 5s re-probe then
+                    // flips back live quickly if it was only a blip.
+                    final boolean probeOk = runProbe(appCtx);
                     wv0.post(() -> {
-                        if (serverUp) {
+                        if (probeOk || serverUp) {
                             wv0.loadUrl("http://100.69.184.113:8090/");
                         } else {
                             if (sClient != null) sClient.forceOffline();
@@ -752,6 +756,7 @@ public class MainActivity extends Activity {
                 if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
 
                 int code = c.getResponseCode();
+                setServerUp(app, "live_fetch");   // #370: any HTTP answer = host is up
                 if (mainFrame) forcedOfflineReload = false;   // the server answered
                 if (code != 200) return null;       // 3xx/4xx/5xx: let WebView handle it
 
@@ -900,6 +905,9 @@ public class MainActivity extends Activity {
             // ceptRequest then serves it from assets, keeping the origin (so the
             // IndexedDB cache stays visible). Guard against a reload loop.
             if (request != null && request.isForMainFrame()) {
+                // #370: a real main-frame load failure on the host counts as down at once.
+                Uri ef = request.getUrl();
+                if (ef != null && SHELL_HOST.equals(ef.getHost())) markServerDownNow(app);
                 NativeDiag.note(app, "load_error", NativeDiag.d(
                     "url", String.valueOf(request.getUrl()),
                     "code", (error != null ? error.getErrorCode() : 0),
@@ -1768,18 +1776,57 @@ public class MainActivity extends Activity {
     }
 
     // Probe, publish the result, and on a down→up flip reload a cached main page live.
-    private static void runProbe(android.content.Context ctx) {
-        boolean up;
+    // Down only after PROBE_FAILS_TO_DOWN consecutive failures; up at once on any success.
+    private static final int PROBE_FAILS_TO_DOWN = 2;
+    private static int sProbeFails = 0;   // guarded by PROBE_LOCK
+
+    // Returns true if the probe succeeded.
+    private static boolean runProbe(android.content.Context ctx) {
+        boolean up = probeServerOnce();
+        if (up) {
+            setServerUp(ctx, "probe");
+        } else {
+            boolean flipped = false;
+            int fails;
+            synchronized (PROBE_LOCK) {
+                fails = ++sProbeFails;
+                if (fails >= PROBE_FAILS_TO_DOWN && serverUp) {
+                    serverUp = false;
+                    flipped = true;
+                }
+            }
+            if (flipped) NativeDiag.note(ctx, "server_down", NativeDiag.d("fails", fails, "via", "probe"));
+            rescheduleProbe();
+        }
+        return up;
+    }
+
+    // Immediate up: any successful probe, liveFetch, or HTTP answer from the host.
+    static void setServerUp(android.content.Context ctx, String via) {
         boolean was;
         synchronized (PROBE_LOCK) {
-            up = probeServerOnce();
+            sProbeFails = 0;
             was = serverUp;
-            serverUp = up;
+            serverUp = true;
         }
-        if (up != was) {
-            NativeDiag.note(ctx, up ? "server_up" : "server_down", NativeDiag.d("was", was));
-            if (up) goLiveIfShowingOfflineCopy(ctx);
+        if (!was) {
+            NativeDiag.note(ctx, "server_up", NativeDiag.d("via", via));
+            goLiveIfShowingOfflineCopy(ctx);
+            rescheduleProbe();
         }
+    }
+
+    // Immediate down: a real main-frame load failure.
+    static void markServerDownNow(android.content.Context ctx) {
+        boolean flipped = false;
+        int fails;
+        synchronized (PROBE_LOCK) {
+            fails = Math.max(++sProbeFails, PROBE_FAILS_TO_DOWN);
+            sProbeFails = fails;
+            if (serverUp) { serverUp = false; flipped = true; }
+        }
+        if (flipped) NativeDiag.note(ctx, "server_down", NativeDiag.d("fails", fails, "via", "main_frame_error"));
+        rescheduleProbe();
     }
 
     private static void goLiveIfShowingOfflineCopy(android.content.Context ctx) {
@@ -1808,22 +1855,41 @@ public class MainActivity extends Activity {
         }).start();
     }
 
-    // Start-once: every 15s, plus on any network change.
+    // Start-once: every 15s while up and clean, every 5s while down or after a
+    // failed probe (so a blip is confirmed or cleared quickly), plus on any network change.
+    private static android.content.Context sProbeCtx;
+    private static java.util.concurrent.ScheduledFuture<?> sProbeNext;
+
+    private static long probeDelaySec() {
+        synchronized (PROBE_LOCK) { return (!serverUp || sProbeFails > 0) ? 5 : 15; }
+    }
+
+    private static void rescheduleProbe() {
+        final java.util.concurrent.ScheduledExecutorService ex = sProbeExec;
+        if (ex == null) return;
+        synchronized (PROBE_LOCK) {
+            if (sProbeNext != null) sProbeNext.cancel(false);
+            sProbeNext = ex.schedule(() -> {
+                try { runProbe(sProbeCtx); } catch (Exception ignored) {}
+                rescheduleProbe();
+            }, probeDelaySec(), java.util.concurrent.TimeUnit.SECONDS);
+        }
+    }
+
     private static void startProbing(final android.content.Context appCtx) {
         synchronized (PROBE_LOCK) {
             if (sProbeStarted) return;
             sProbeStarted = true;
         }
+        sProbeCtx = appCtx;
         sProbeExec = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
-        sProbeExec.scheduleWithFixedDelay(() -> {
-            try { runProbe(appCtx); } catch (Exception ignored) {}
-        }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+        rescheduleProbe();
         try {
             ConnectivityManager cm = (ConnectivityManager) appCtx.getSystemService(CONNECTIVITY_SERVICE);
             if (cm != null) {
                 cm.registerDefaultNetworkCallback(new ConnectivityManager.NetworkCallback() {
                     private void kick() {
-                        sProbeExec.execute(() -> { try { runProbe(appCtx); } catch (Exception ignored) {} });
+                        sProbeExec.execute(() -> { try { runProbe(appCtx); } catch (Exception ignored) {} rescheduleProbe(); });
                     }
                     @Override public void onAvailable(Network n) { kick(); }
                     @Override public void onLost(Network n) { kick(); }
