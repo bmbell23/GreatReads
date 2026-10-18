@@ -455,7 +455,7 @@ public class MainActivity extends Activity {
         // "online"). While true, shouldInterceptRequest serves the bundled
         // shell even if isOnline() is true — so we recover regardless of the
         // connectivity read. Reset on the next successful page load. (#23)
-        private boolean forcedOfflineReload = false;
+        private volatile boolean forcedOfflineReload = false;
 
         // True while the current main-frame page is a cached/bundled copy rather
         // than a live load. Keeps onPageFinished from clearing the latch for it.
@@ -499,9 +499,8 @@ public class MainActivity extends Activity {
                     // returns to live pages as soon as the server answers.
                     if (online && (!forcedOfflineReload || mainFrame)) {
                         try {
-                            WebResourceResponse live = liveFetch(request, url);
-                            if (live != null && mainFrame) forcedOfflineReload = false;
-                            return live;   // null (non-200 / too big) → WebView handles it
+                            // liveFetch clears the latch itself on ANY HTTP answer.
+                            return liveFetch(request, url, mainFrame);   // null → WebView handles it
                         } catch (IOException netFail) {
                             NativeDiag.note(app, "live_fetch_fail", NativeDiag.d(
                                 "url", url.toString(), "err", String.valueOf(netFail)));
@@ -606,20 +605,100 @@ public class MainActivity extends Activity {
             }
         }
 
-        private static void writeAtomic(java.io.File dest, byte[] data) throws IOException {
-            java.io.File tmp = new java.io.File(dest.getPath() + ".tmp");
-            java.io.FileOutputStream out = new java.io.FileOutputStream(tmp);
-            try { out.write(data); out.getFD().sync(); } finally { out.close(); }
-            if (!tmp.renameTo(dest)) {
-                tmp.delete();
-                throw new IOException("rename failed: " + dest);
+        // Interned per-key locks: writers and readers of one cache entry serialise.
+        private static final java.util.concurrent.ConcurrentHashMap<String, Object> KEY_LOCKS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        private static final Object TRIM_LOCK = new Object();
+        private static final long CACHE_TOTAL_MAX = 200L * 1024 * 1024;
+
+        private static Object keyLock(String key) {
+            Object fresh = new Object();
+            Object prev = KEY_LOCKS.putIfAbsent(key, fresh);
+            return prev != null ? prev : fresh;
+        }
+
+        // One file per entry: [writeUTF mime][writeUTF charset][writeUTF url][body].
+        // Body and meta therefore can never disagree. Written to a unique temp
+        // file in the cache dir, then renamed into place.
+        private void writeEntry(String key, String mime, String charset, String url, byte[] body)
+                throws IOException {
+            java.io.File dir = cacheDir();
+            synchronized (keyLock(key)) {
+                java.io.File tmp = java.io.File.createTempFile("w", ".tmp", dir);
+                boolean ok = false;
+                try {
+                    java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
+                    try {
+                        java.io.DataOutputStream out = new java.io.DataOutputStream(
+                            new java.io.BufferedOutputStream(fo));
+                        out.writeUTF(mime == null ? "" : mime);
+                        out.writeUTF(charset == null ? "" : charset);
+                        out.writeUTF(url);
+                        out.write(body);
+                        out.flush();
+                        fo.getFD().sync();
+                    } finally { fo.close(); }
+                    java.io.File dest = new java.io.File(dir, key + ".bin");
+                    if (!tmp.renameTo(dest)) throw new IOException("rename failed: " + dest);
+                    ok = true;
+                } finally {
+                    if (!ok) tmp.delete();
+                }
+            }
+            trimCache(dir);
+        }
+
+        // Keep the cache dir <= 200 MB: delete least-recently-modified entries
+        // first, never the Home entry. (Stale pre-hardening .body/.meta files and
+        // abandoned temp files are ordinary candidates.)
+        private static void trimCache(java.io.File dir) {
+            synchronized (TRIM_LOCK) {
+                try {
+                    java.io.File[] all = dir.listFiles();
+                    if (all == null) return;
+                    String homeName = sha1(HOME_URL) + ".bin";
+                    long now = System.currentTimeMillis();
+                    long total = 0;
+                    java.util.List<java.io.File> victims = new java.util.ArrayList<>();
+                    for (java.io.File f : all) {
+                        if (!f.isFile()) continue;
+                        // A temp file younger than an hour is a write in progress.
+                        if (f.getName().endsWith(".tmp") && now - f.lastModified() < 3600_000L) continue;
+                        total += f.length();
+                        if (!f.getName().equals(homeName)) victims.add(f);
+                    }
+                    if (total <= CACHE_TOTAL_MAX) return;
+                    java.util.Collections.sort(victims, new java.util.Comparator<java.io.File>() {
+                        @Override public int compare(java.io.File x, java.io.File y) {
+                            return Long.compare(x.lastModified(), y.lastModified());
+                        }
+                    });
+                    for (java.io.File f : victims) {
+                        if (total <= CACHE_TOTAL_MAX) break;
+                        long len = f.length();
+                        if (f.delete()) total -= len;
+                    }
+                } catch (Exception ignored) { }
             }
         }
 
-        // Fetch natively. Returns a 200 response (and stores it), or null when the
-        // server answered anything else / the body is too big to buffer. Throws
-        // IOException on connect/read failure.
-        private WebResourceResponse liveFetch(WebResourceRequest request, Uri url) throws IOException {
+        private static boolean isCacheableType(String mime) {
+            if (mime == null) return false;
+            String m = mime.trim().toLowerCase();
+            return m.equals("text/html") || m.equals("text/css")
+                || m.contains("javascript") || m.contains("ecmascript")
+                || m.equals("application/json")
+                || m.startsWith("font/") || m.contains("font")
+                || m.startsWith("image/");
+        }
+
+        // Fetch natively. Returns a response (storing it when it is a cacheable
+        // 200), or null when the server answered anything other than 200 (the
+        // WebView re-fetches it). Throws IOException on connect/read failure.
+        // Any HTTP answer from a main-frame fetch proves the server is up, so it
+        // clears the forced-offline latch.
+        private WebResourceResponse liveFetch(WebResourceRequest request, Uri url, boolean mainFrame)
+                throws IOException {
             java.net.HttpURLConnection c = null;
             boolean keepOpen = false;
             try {
@@ -648,6 +727,7 @@ public class MainActivity extends Activity {
                 if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
 
                 int code = c.getResponseCode();
+                if (mainFrame) forcedOfflineReload = false;   // the server answered
                 if (code != 200) return null;       // 3xx/4xx/5xx: let WebView handle it
 
                 java.util.List<String> setCookies = new java.util.ArrayList<>();
@@ -660,8 +740,6 @@ public class MainActivity extends Activity {
                 if (!setCookies.isEmpty()) cm.flush();
 
                 long declared = c.getContentLengthLong();
-                if (declared > CACHE_MAX_BYTES) return null;   // too big: plain double fetch
-
                 String ct = c.getContentType();
                 String mime = null, charset = null;
                 if (ct != null) {
@@ -674,8 +752,23 @@ public class MainActivity extends Activity {
                         }
                     }
                 }
-                if (mime == null || mime.isEmpty()) mime = mimeFor(String.valueOf(url.getPath()));
                 String cacheControl = c.getHeaderField("Cache-Control");
+                String disposition = c.getHeaderField("Content-Disposition");
+                String transferEnc = c.getHeaderField("Transfer-Encoding");
+                boolean chunked = transferEnc != null && transferEnc.toLowerCase().contains("chunked");
+
+                java.util.Map<String, String> rh = new java.util.HashMap<>();
+                if (cacheControl != null) rh.put("Cache-Control", cacheControl);
+                if (disposition != null) rh.put("Content-Disposition", disposition);
+
+                boolean cacheable = isCacheableType(mime) && disposition == null && !chunked
+                    && declared <= CACHE_MAX_BYTES;
+                if (!cacheable) {
+                    // Streaming / download / unknown type: never buffer, never cache.
+                    keepOpen = true;
+                    return passthrough(c, c.getInputStream(), mime != null && !mime.isEmpty()
+                        ? mime : mimeFor(String.valueOf(url.getPath())), charset, rh);
+                }
 
                 InputStream in = c.getInputStream();
                 java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream(
@@ -687,27 +780,16 @@ public class MainActivity extends Activity {
                     buf.write(chunk, 0, n);
                     if (buf.size() > CACHE_MAX_BYTES) { overflow = true; break; }
                 }
-                java.util.Map<String, String> rh = new java.util.HashMap<>();
-                if (cacheControl != null) rh.put("Cache-Control", cacheControl);
                 if (overflow) {
                     // Too big to cache: stream the rest straight through, uncached.
                     keepOpen = true;
-                    final java.net.HttpURLConnection toClose = c;
                     InputStream joined = new java.io.SequenceInputStream(
-                        new java.io.ByteArrayInputStream(buf.toByteArray()), in) {
-                        @Override public void close() throws IOException {
-                            try { super.close(); } finally { toClose.disconnect(); }
-                        }
-                    };
-                    return new WebResourceResponse(mime, charset, 200, "OK", rh, joined);
+                        new java.io.ByteArrayInputStream(buf.toByteArray()), in);
+                    return passthrough(c, joined, mime, charset, rh);
                 }
                 byte[] body = buf.toByteArray();
                 try {
-                    String key = sha1(url.toString());
-                    java.io.File dir = cacheDir();
-                    writeAtomic(new java.io.File(dir, key + ".body"), body);
-                    writeAtomic(new java.io.File(dir, key + ".meta"),
-                        (mime + "\n" + (charset == null ? "" : charset) + "\n" + url + "\n").getBytes("UTF-8"));
+                    writeEntry(sha1(url.toString()), mime, charset, url.toString(), body);
                 } catch (Exception storeFail) {
                     NativeDiag.note(app, "cache_store_fail", NativeDiag.d(
                         "url", url.toString(), "err", String.valueOf(storeFail)));
@@ -719,24 +801,50 @@ public class MainActivity extends Activity {
             }
         }
 
+        // Stream the connection straight to the WebView; disconnect on close.
+        private static WebResourceResponse passthrough(final java.net.HttpURLConnection c,
+                InputStream in, String mime, String charset, java.util.Map<String, String> rh) {
+            InputStream wrapped = new java.io.FilterInputStream(in) {
+                @Override public void close() throws IOException {
+                    try { super.close(); } finally { c.disconnect(); }
+                }
+            };
+            return new WebResourceResponse(mime, charset, 200, "OK", rh, wrapped);
+        }
+
         // Replay a cached copy, or null if there is none. A main-frame HTML copy
         // gets gr-offline injected right after <head> so the page can hide
         // live-only sections and show the Offline pill.
         private WebResourceResponse readCache(String url, boolean mainFrame) {
+            java.io.DataInputStream in = null;
             try {
                 String key = sha1(url);
-                java.io.File dir = cacheDir();
-                java.io.File body = new java.io.File(dir, key + ".body");
-                java.io.File meta = new java.io.File(dir, key + ".meta");
-                if (!body.isFile() || !meta.isFile()) return null;
-                String[] m = new String(readAll(meta), "UTF-8").split("\n", -1);
-                String mime = m.length > 0 ? m[0] : "application/octet-stream";
-                String charset = (m.length > 1 && !m[1].isEmpty()) ? m[1] : null;
+                java.io.File entry = new java.io.File(cacheDir(), key + ".bin");
+                String mime, charset;
+                byte[] htmlBytes = null;
+                synchronized (keyLock(key)) {
+                    if (!entry.isFile()) return null;
+                    in = new java.io.DataInputStream(new java.io.BufferedInputStream(
+                        new java.io.FileInputStream(entry)));
+                    mime = in.readUTF();
+                    charset = in.readUTF();
+                    in.readUTF();   // original url
+                    if (mime.isEmpty()) mime = "application/octet-stream";
+                    if (charset.isEmpty()) charset = null;
+                    entry.setLastModified(System.currentTimeMillis());   // LRU touch
+                    if (mainFrame && mime.toLowerCase().contains("html")) {
+                        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                        byte[] b = new byte[16 * 1024];
+                        int n;
+                        while ((n = in.read(b)) != -1) out.write(b, 0, n);
+                        htmlBytes = out.toByteArray();
+                    }
+                }
                 NativeDiag.note(app, "cache_serve", NativeDiag.d(
-                    "url", url, "main", mainFrame, "bytes", body.length()));
-                if (mainFrame && mime.toLowerCase().contains("html")) {
+                    "url", url, "main", mainFrame, "bytes", entry.length()));
+                if (htmlBytes != null) {
                     // ISO-8859-1 round-trips any bytes, and the injected tag is ASCII.
-                    String html = new String(readAll(body), "ISO-8859-1");
+                    String html = new String(htmlBytes, "ISO-8859-1");
                     String tag = "<script>document.documentElement.classList.add('gr-offline');</script>";
                     java.util.regex.Matcher hm = java.util.regex.Pattern
                         .compile("<head[^>]*>", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(html);
@@ -745,26 +853,17 @@ public class MainActivity extends Activity {
                     } else {
                         html = tag + html;
                     }
+                    in.close();
                     return new WebResourceResponse(mime, charset,
                         new java.io.ByteArrayInputStream(html.getBytes("ISO-8859-1")));
                 }
-                return new WebResourceResponse(mime, charset, new java.io.FileInputStream(body));
+                // The stream is positioned at the body; the file is replaced by
+                // rename, so an open handle keeps reading the old inode safely.
+                return new WebResourceResponse(mime, charset, in);
             } catch (Exception e) {
+                if (in != null) try { in.close(); } catch (IOException ignored) {}
                 NativeDiag.note(app, "cache_read_fail", NativeDiag.d("url", url, "err", String.valueOf(e)));
                 return null;
-            }
-        }
-
-        private static byte[] readAll(java.io.File f) throws IOException {
-            java.io.FileInputStream in = new java.io.FileInputStream(f);
-            try {
-                java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream((int) f.length());
-                byte[] b = new byte[16 * 1024];
-                int n;
-                while ((n = in.read(b)) != -1) out.write(b, 0, n);
-                return out.toByteArray();
-            } finally {
-                in.close();
             }
         }
 
@@ -818,7 +917,7 @@ public class MainActivity extends Activity {
         void forceOffline() { forcedOfflineReload = true; }
 
         // The main-frame URL currently loading, for the stall watchdog below.
-        private String pendingMainUrl = null;
+        private volatile String pendingMainUrl = null;
 
         @Override
         public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
