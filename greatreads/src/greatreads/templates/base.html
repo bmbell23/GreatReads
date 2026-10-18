@@ -571,15 +571,23 @@
 
     <!-- Duplicate-review badge (#346): cached count on the Settings link; fails silently. -->
     <script>
-    async function loadDupBadge() {
+    // #363: the endpoint never computes inline; count is null while the server's cache warms
+    // in the background, so re-ask a few times (and re-ask while a stale value refreshes).
+    async function loadDupBadge(tries) {
         const badge = document.getElementById('dupNavBadge');
-        if (!badge) return;
+        if (!badge) return null;
+        tries = (typeof tries === 'number') ? tries : 0;
         try {
             const r = await GreatReads.apiCall('/books/duplicates/count', { silent: true });
+            if (r && r.count == null) {
+                if (tries < 6) setTimeout(() => loadDupBadge(tries + 1), 5000);
+                return null;
+            }
             const n = (r && r.count) || 0;
             if (n > 0) { badge.textContent = n > 99 ? '99+' : n; badge.classList.remove('d-none'); }
             else { badge.classList.add('d-none'); }
-        } catch (e) { /* not signed in / endpoint unavailable — leave hidden */ }
+            return r;
+        } catch (e) { /* not signed in / endpoint unavailable — leave hidden */ return null; }
     }
     if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadDupBadge);
     else loadDupBadge();

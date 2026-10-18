@@ -655,8 +655,10 @@
                 <p class="text-muted small mb-2">Wishlist entries that match a book you already own
                     (e.g. <em>Mindset</em> vs <em>Mindset: The New Psychology of Success</em>). “Compare &amp; merge”
                     opens the review queue at that pair, with your owned copy as the one that is kept.</p>
-                <button class="btn btn-sm btn-primary mb-2" type="button" id="dd-review-all" onclick="openDupQueue(0)" disabled>
+                <button class="btn btn-sm btn-primary mb-2" type="button" id="dd-review-all" onclick="openDupQueueLoaded(0)" disabled>
                     <i class="fas fa-list-check me-1"></i>Review all (0)</button>
+                <button class="btn btn-sm btn-outline-secondary mb-2 ms-1" type="button" id="dd-load-list" onclick="ensureDuplicatesLoaded()">
+                    <i class="fas fa-list me-1"></i>Load full list &amp; blank rows</button>
                 <div class="d-flex justify-content-between border-bottom py-1">
                     <span class="text-muted">Wishlist books you already own</span>
                     <span class="font-monospace" id="dd-pair-count">…</span></div>
@@ -1107,7 +1109,7 @@ document.addEventListener('DOMContentLoaded', function() {
     loadChartPreferences();
     loadLeftHandedMode();
     loadBackfillStatus();
-    loadDuplicates();
+    loadDuplicateSummary();   // #363: cached count only; full list loads on demand
     loadAutofulfill();
     loadWishlistAcquire();
     loadCardBudget();   // #357
@@ -1259,9 +1261,44 @@ let _ddPairs = [];   // #346: last /books/duplicates pairs, in review-queue orde
 const _ddWarn = p => p.author_unverified
     ? ' <span class="badge bg-warning text-dark" title="One record has no author (or \'Unknown\'): matched on title alone, please verify."><i class="fas fa-triangle-exclamation me-1"></i>author unverified</span>'
     : '';
+let _ddLoaded = false;   // #363: full list fetched yet? (only on demand -- it takes ~10s)
+// #363: page load shows only the cached count (instant); the full list loads on demand.
+async function loadDuplicateSummary(tries) {
+    tries = tries || 0;
+    try {
+        const r = await GreatReads.apiCall('/books/duplicates/count', { silent: true });
+        if (_ddLoaded) return;
+        if (!r || r.count == null) {   // server cache still warming in the background
+            if (tries < 6) setTimeout(() => loadDuplicateSummary(tries + 1), 5000);
+            return;
+        }
+        const n = r.count;
+        const rb = document.getElementById('dd-review-all');
+        rb.disabled = n === 0;
+        rb.innerHTML = `<i class="fas fa-list-check me-1"></i>Review all (${n})`;
+        const bn = document.getElementById('dd-banner');
+        document.getElementById('dd-banner-n').textContent = n;
+        bn.classList.toggle('d-none', n === 0);
+        bn.classList.toggle('d-flex', n > 0);
+        document.getElementById('dd-pair-count').textContent = n;
+        document.getElementById('dd-owned-count').textContent = '—';
+    } catch (e) { /* leave placeholders */ }
+}
+// Review queue entry points need the pair list; fetch it first if it isn't loaded yet.
+async function ensureDuplicatesLoaded() {
+    if (_ddLoaded) return true;
+    const rb = document.getElementById('dd-review-all');
+    if (rb) { rb.disabled = true; rb.innerHTML = '<i class="fas fa-spinner fa-spin me-1"></i>Loading…'; }
+    await loadDuplicates();
+    return _ddLoaded;
+}
+async function openDupQueueLoaded(start) {
+    if (await ensureDuplicatesLoaded()) openDupQueue(start);
+}
 async function loadDuplicates() {
     try {
         const d = await GreatReads.apiCall('/books/duplicates');
+        _ddLoaded = true;
         const base = window.APP_BASE_PATH || '';
         const all = d.pairs || [], blank = d.blank || [];
         all.forEach((p, i) => { p._i = i; });   // #346: queue index for the row links
@@ -1299,7 +1336,10 @@ async function loadDuplicates() {
         btn.disabled = del === 0;
         btn.innerHTML = `<i class="fas fa-trash me-1"></i>Delete ${del} blank row${del === 1 ? '' : 's'}`;
         btn.dataset.count = del;
-    } catch (e) { /* leave placeholders */ }
+    } catch (e) {
+        const rb = document.getElementById('dd-review-all');   // undo the "Loading…" state
+        if (rb && !_ddLoaded) { rb.disabled = false; rb.innerHTML = '<i class="fas fa-list-check me-1"></i>Review all'; }
+    }
 }
 async function purgeBlankRows() {
     const btn = document.getElementById('dd-purge'), st = document.getElementById('dd-status');

@@ -128,29 +128,37 @@ async def backfill_status(
     }
 
 
+# Plain `def` (not async) so FastAPI runs the ~10s find_duplicates in its threadpool instead
+# of blocking the event loop (#363). The heavy work uses its own session, created in the
+# worker thread, rather than the request-scoped one.
 @router.get("/duplicates")
-async def wishlist_duplicates(
+def wishlist_duplicates(
     request: Request,
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Wishlist books that duplicate an owned book + blank-title junk rows (#216)."""
+    from ..database import SessionLocal
     from ..services.dedup_service import find_duplicates, find_blank
     from ..services.dedup_service import set_count_cache
-    pairs = find_duplicates(db)
-    set_count_cache(len(pairs))   # #346: a fresh compute refreshes the nav-badge cache
-    return {"pairs": pairs, "blank": find_blank(db)}
+    work_db = SessionLocal()
+    try:
+        pairs = find_duplicates(work_db)
+        set_count_cache(len(pairs))   # #346: a fresh compute refreshes the nav-badge cache
+        return {"pairs": pairs, "blank": find_blank(work_db)}
+    finally:
+        work_db.close()
 
 
 # #346: cheap count for the nav badge + Settings banner (cached in-process, ~10 min).
+# #363: never computes inline -- returns the cache (None while cold) and refreshes it in a
+# background thread when stale; {"count": int|None, "computing": bool}.
 @router.get("/duplicates/count")
-async def duplicates_count(
+def duplicates_count(
     request: Request,
-    db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    from ..services.dedup_service import duplicate_count
-    return {"count": duplicate_count(db)}
+    from ..services.dedup_service import cached_count
+    return cached_count()
 
 
 class DismissRequest(BaseModel):
