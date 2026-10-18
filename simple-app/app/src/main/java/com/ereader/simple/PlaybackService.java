@@ -57,6 +57,11 @@ public class PlaybackService extends Service {
     private float rate = 1f;
     private String title = "", artist = "", coverUrl = "", loadedCoverUrl = "";
     private Bitmap coverBmp = null;
+    // #381: true once player.js has sent START/UPDATE; a media-key cold start
+    // without it is an orphan and stops itself after a short grace period.
+    private boolean playerStarted = false;
+    private final android.os.Handler handler = new android.os.Handler(android.os.Looper.getMainLooper());
+    private final Runnable stopIfOrphan = () -> { if (!playerStarted) stopPlayback(); };
 
     @Override public IBinder onBind(Intent intent) { return null; }
 
@@ -97,10 +102,28 @@ public class PlaybackService extends Service {
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
         if (intent == null) return START_NOT_STICKY;
-        MediaButtonReceiver.handleIntent(session, intent);  // headphone keys while backgrounded
+        // #381: EVERY startForegroundService() must be answered with startForeground()
+        // within ~5s, whatever the action. androidx MediaButtonReceiver starts us
+        // that way for headphone / Bluetooth / car media keys, and skipping it here
+        // got the whole app killed (ForegroundServiceDidNotStartInTimeException).
+        // STOP is the exception: MainActivity sends it with plain startService().
         String action = intent.getAction();
         if (ACTION_STOP.equals(action)) { stopPlayback(); return START_NOT_STICKY; }
+        try {
+            startForeground(NOTIF_ID, buildNotification());
+        } catch (Exception e) {
+            android.util.Log.e("Ereader", "startForeground failed", e);
+        }
+        MediaButtonReceiver.handleIntent(session, intent);  // headphone keys while backgrounded
+        if (!ACTION_START.equals(action) && !ACTION_UPDATE.equals(action) && !playerStarted) {
+            // Cold-started by a media key with no player behind it: give player.js a
+            // moment to answer with START (e.g. "play" resumed it), else go away.
+            handler.removeCallbacks(stopIfOrphan);
+            handler.postDelayed(stopIfOrphan, 4000);
+        }
         if (ACTION_START.equals(action) || ACTION_UPDATE.equals(action)) {
+            playerStarted = true;
+            handler.removeCallbacks(stopIfOrphan);
             if (intent.hasExtra("title"))    title    = str(intent.getStringExtra("title"));
             if (intent.hasExtra("artist"))   artist   = str(intent.getStringExtra("artist"));
             if (intent.hasExtra("coverUrl")) coverUrl = str(intent.getStringExtra("coverUrl"));
@@ -119,6 +142,8 @@ public class PlaybackService extends Service {
     // Direct (same-process) state push from the JsBridge while running, so we
     // refresh the session + ongoing notification without a background FGS start.
     void onStateUpdate(boolean p, double posSec, double durSec, double r) {
+        playerStarted = true;   // #381: a live player is talking to us, not an orphan
+        handler.removeCallbacks(stopIfOrphan);
         playing    = p;
         positionMs = (long) (posSec * 1000);
         durationMs = (long) (durSec * 1000);
@@ -244,6 +269,7 @@ public class PlaybackService extends Service {
     @Override
     public void onDestroy() {
         if (sInstance == this) sInstance = null;
+        handler.removeCallbacks(stopIfOrphan);
         releaseWakeLock();
         if (session != null) { session.setActive(false); session.release(); }
         super.onDestroy();
