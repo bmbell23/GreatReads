@@ -6,7 +6,9 @@ duplicates of books you already own ('Mindset' vs 'Mindset: The New Psychology o
 Success'); this finds them with the importer's own matcher so Settings can offer the
 #131 merge compare. Also finds/purges the blank-title junk rows."""
 import json
+import logging
 import sqlite3
+import threading
 import time
 from datetime import datetime, timezone
 from pathlib import Path
@@ -87,13 +89,48 @@ def set_count_cache(n: int) -> None:
 
 
 def duplicate_count(db: Session) -> int:
-    """Cached count of reviewable pairs; computed (and cached) when cold/expired (#346)."""
+    """Cached count of reviewable pairs; computed (and cached) when cold/expired (#346).
+    This computes inline (~10s) -- request handlers must use cached_count() instead (#363)."""
     n = _count_cache["n"]
     if n is not None and time.monotonic() - _count_cache["t"] < COUNT_TTL:
         return n
     n = len(find_duplicates(db))
     set_count_cache(n)
     return n
+
+
+_refresh_lock = threading.Lock()
+_refreshing = False
+
+
+def _refresh_worker() -> None:
+    global _refreshing
+    from ..database import SessionLocal
+    db = SessionLocal()   # fresh session owned by this thread (#363)
+    try:
+        set_count_cache(len(find_duplicates(db)))
+    except Exception:
+        logging.getLogger(__name__).exception("duplicate count refresh failed")
+    finally:
+        db.close()
+        with _refresh_lock:
+            _refreshing = False
+
+
+def cached_count() -> dict:
+    """Never-blocking count for page loads (#363): returns the cached number (possibly stale,
+    or None when cold) and starts a single background refresh if it is cold/expired.
+    {"count": int|None, "computing": bool}"""
+    global _refreshing
+    n = _count_cache["n"]
+    fresh = n is not None and time.monotonic() - _count_cache["t"] < COUNT_TTL
+    if not fresh:
+        with _refresh_lock:
+            if not _refreshing:
+                _refreshing = True
+                threading.Thread(target=_refresh_worker, name="dup-count-refresh",
+                                 daemon=True).start()
+    return {"count": n, "computing": not fresh}
 
 
 def _owned_ids(db: Session) -> set[int]:
