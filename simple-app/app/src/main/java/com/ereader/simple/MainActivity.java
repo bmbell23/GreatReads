@@ -653,7 +653,7 @@ public class MainActivity extends Activity {
                 throws IOException {
             java.io.File dir = cacheDir();
             synchronized (keyLock(key)) {
-                java.io.File tmp = java.io.File.createTempFile("w", ".tmp", dir);
+                java.io.File tmp = java.io.File.createTempFile("grcache-", ".tmp", dir);   // #375: prefix must be >= 3 chars
                 boolean ok = false;
                 try {
                     java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
