@@ -3971,6 +3971,16 @@
                 const wpp = _currentWPP();
                 const lo  = READING_SPEED.minSec * 1000;
                 const hi  = READING_SPEED.maxSec * 1000;
+                // #364: a page held longer than maxSec (reading across midnight, a long
+                // pause on one page) is still real reading time — CAP its activity credit
+                // at maxSec instead of dropping it. It stays out of the speed buffer
+                // (_recentPages) so a stalled page can't skew WPM; sub-minSec skims are
+                // still dropped entirely.
+                if (ms > hi) {
+                    _activityMsSinceFlush += hi;
+                    const w2 = _currentWPP();
+                    if (w2 != null) _activityWordsSinceFlush += Math.round(w2);
+                }
                 if (ms >= lo && ms <= hi) {
                     _recentPages.push({
                         ms: Math.round(ms),
