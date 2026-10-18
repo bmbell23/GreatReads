@@ -242,11 +242,28 @@ public class MainActivity extends Activity {
             // #337: why the previous process ended, logged ahead of this launch.
             NativeDiag.noteProcessExits(this);
             NativeDiag.note(getApplicationContext(), "cold_launch", NativeDiag.d("online", netUp));
-            if (netUp) {
-                webView.loadUrl("http://100.69.184.113:8090/");
-            } else {
+            // #370: ask the SERVER, not the radio. Radio down → straight to offline
+            // Home; radio up → probe (<=3s) then load live or offline accordingly.
+            final android.content.Context appCtx = getApplicationContext();
+            final WebView wv0 = webView;
+            if (!netUp) {
+                serverUp = false;
                 if (sClient != null) sClient.forceOffline();
-                webView.loadUrl(HOME_URL);
+                wv0.loadUrl(HOME_URL);
+                startProbing(appCtx);
+            } else {
+                new Thread(() -> {
+                    runProbe(appCtx);
+                    wv0.post(() -> {
+                        if (serverUp) {
+                            wv0.loadUrl("http://100.69.184.113:8090/");
+                        } else {
+                            if (sClient != null) sClient.forceOffline();
+                            wv0.loadUrl(HOME_URL);
+                        }
+                    });
+                    startProbing(appCtx);
+                }).start();
             }
         } else {
             sWebCtx.setBaseContext(this);
@@ -473,7 +490,9 @@ public class MainActivity extends Activity {
                 Uri url = request.getUrl();
                 if (url == null || !SHELL_HOST.equals(url.getHost())) return null;
                 boolean mainFrame = request.isForMainFrame();
-                boolean online = isOnline(app);
+                // #370: "online" means the SERVER answered the last probe, not that the
+                // radio is up. Down → bundle/cache immediately, no connect-timeout waits.
+                boolean online = serverUp;
                 String path = url.getPath();
                 if (path == null) path = "";
                 // NOTE: the root URL ("http://host:8090") has an EMPTY path, not "/".
@@ -540,8 +559,14 @@ public class MainActivity extends Activity {
                     android.util.Log.i("EreaderOffline", "served from bundle: " + path);
                     return new WebResourceResponse(mime, isTextMime(mime) ? "utf-8" : null, is);
                 } catch (IOException notBundled) {
-                    // Not part of the shell (API, covers, /greatreads/, …) → let
-                    // it hit the network and fail; the page handles offline.
+                    // Not part of the shell (API, covers, /greatreads/, …) → the page
+                    // handles offline. #370: with the server known-down, fail fast
+                    // instead of waiting out a connect timeout per request.
+                    if (!serverUp) {
+                        return new WebResourceResponse("text/plain", "utf-8", 504, "Offline",
+                            new java.util.HashMap<String, String>(),
+                            new java.io.ByteArrayInputStream(new byte[0]));
+                    }
                     android.util.Log.i("EreaderOffline", "not bundled (network): " + path);
                     if (mainFrame) {
                         NativeDiag.note(app, "intercept_passthru", NativeDiag.d("path", path));
@@ -935,7 +960,7 @@ public class MainActivity extends Activity {
                 // #361: a slow load on a working network is NOT offline. Only
                 // consider the stall when the OS itself reports no usable network;
                 // a genuinely unreachable host surfaces via onReceivedError.
-                if (isOnline(app)) return;
+                if (serverUp) return;
                 new Thread(() -> {
                     final boolean up = hostReachable();
                     view.post(() -> {
@@ -962,7 +987,7 @@ public class MainActivity extends Activity {
             super.onPageFinished(view, url);
 
             // Whatever the device recorded while it was cut off goes out now.
-            if (isOnline(app)) new Thread(() -> NativeDiag.flush(app)).start();
+            if (serverUp) new Thread(() -> NativeDiag.flush(app)).start();
 
             // Last-resort net for the black screen (#275): a "finished" load that
             // produced an EMPTY document renders as the WebView's black background
@@ -977,7 +1002,7 @@ public class MainActivity extends Activity {
                     if (kids > 0) return;
                     // #361: a blank read while the network is fine (page still
                     // painting, quick navigation) must not dump us on offline Home.
-                    if (isOnline(app)) return;
+                    if (serverUp) return;
                     if (servedOfflineMain) return;   // already the cached copy: don't loop
                     NativeDiag.note(app, "blank_page", NativeDiag.d("url", url, "children", kids));
                     android.util.Log.i("EreaderOffline", "blank document after load → offline home: " + url);
@@ -1708,7 +1733,106 @@ public class MainActivity extends Activity {
         // #275: the retained WebView (#210) means resuming does NOT re-run the load,
         // so coming back after losing signal leaves a server page that is stale, blank,
         // or about to fail. Check the host and land on the offline Home if it's gone.
-        maybeLandOfflineOnResume();
+        // #370: re-probe the SERVER first (off-thread), then decide.
+        probeServerAsync(() -> {
+            final WebView w = webView;
+            if (w != null) w.post(this::maybeLandOfflineOnResume);
+        });
+    }
+
+    // ---- #370: server reachability (NOT Android connectivity) -------------------
+    // isOnline() is true on Wi-Fi/LTE with Tailscale off, which made every request
+    // wait out a connect timeout before the cache was used. This probe is the one
+    // offline signal for the whole shell.
+    static volatile boolean serverUp = true;
+    private static final Object PROBE_LOCK = new Object();
+    private static java.util.concurrent.ScheduledExecutorService sProbeExec;
+    private static boolean sProbeStarted = false;
+
+    // Blocking probe; any HTTP answer (even 404/500) means the server is up.
+    private static boolean probeServerOnce() {
+        java.net.HttpURLConnection c = null;
+        try {
+            c = (java.net.HttpURLConnection) new java.net.URL("http://" + SHELL_HOST + ":" + SHELL_PORT + "/").openConnection();
+            c.setRequestMethod("GET");
+            c.setInstanceFollowRedirects(false);
+            c.setUseCaches(false);
+            c.setConnectTimeout(3000);
+            c.setReadTimeout(3000);
+            return c.getResponseCode() > 0;
+        } catch (Exception e) {
+            return false;
+        } finally {
+            if (c != null) try { c.disconnect(); } catch (Exception ignored) {}
+        }
+    }
+
+    // Probe, publish the result, and on a down→up flip reload a cached main page live.
+    private static void runProbe(android.content.Context ctx) {
+        boolean up;
+        boolean was;
+        synchronized (PROBE_LOCK) {
+            up = probeServerOnce();
+            was = serverUp;
+            serverUp = up;
+        }
+        if (up != was) {
+            NativeDiag.note(ctx, up ? "server_up" : "server_down", NativeDiag.d("was", was));
+            if (up) goLiveIfShowingOfflineCopy(ctx);
+        }
+    }
+
+    private static void goLiveIfShowingOfflineCopy(android.content.Context ctx) {
+        final MainActivity a = cur();
+        final WebView wv = sWebView;
+        if (wv == null || sClient == null) return;
+        wv.post(() -> {
+            String u = wv.getUrl();
+            if (u == null || !u.contains(SHELL_HOST)) return;
+            // Never yank the user out of a bundled reader/player they're using;
+            // they keep working and outbox flushing is done by the page itself.
+            if (isBundledPage(u)) return;
+            if (sClient.isShowingOfflineCopy()) {
+                NativeDiag.note(ctx, "server_back_reload", NativeDiag.d("url", u));
+                sClient.clearForce();
+                wv.reload();
+            }
+        });
+    }
+
+    private void probeServerAsync(final Runnable after) {
+        final android.content.Context ctx = getApplicationContext();
+        new Thread(() -> {
+            runProbe(ctx);
+            if (after != null) after.run();
+        }).start();
+    }
+
+    // Start-once: every 15s, plus on any network change.
+    private static void startProbing(final android.content.Context appCtx) {
+        synchronized (PROBE_LOCK) {
+            if (sProbeStarted) return;
+            sProbeStarted = true;
+        }
+        sProbeExec = java.util.concurrent.Executors.newSingleThreadScheduledExecutor();
+        sProbeExec.scheduleWithFixedDelay(() -> {
+            try { runProbe(appCtx); } catch (Exception ignored) {}
+        }, 15, 15, java.util.concurrent.TimeUnit.SECONDS);
+        try {
+            ConnectivityManager cm = (ConnectivityManager) appCtx.getSystemService(CONNECTIVITY_SERVICE);
+            if (cm != null) {
+                cm.registerDefaultNetworkCallback(new ConnectivityManager.NetworkCallback() {
+                    private void kick() {
+                        sProbeExec.execute(() -> { try { runProbe(appCtx); } catch (Exception ignored) {} });
+                    }
+                    @Override public void onAvailable(Network n) { kick(); }
+                    @Override public void onLost(Network n) { kick(); }
+                    @Override public void onCapabilitiesChanged(Network n, NetworkCapabilities c) { kick(); }
+                });
+            }
+        } catch (Exception e) {
+            android.util.Log.w("EreaderOffline", "network callback unavailable: " + e);
+        }
     }
 
     // Probe off the main thread; only redirect a server-rendered page, never a
@@ -1719,7 +1843,7 @@ public class MainActivity extends Activity {
         if (wv == null) return;
         final String u = wv.getUrl();
         if (u == null || !u.contains(SHELL_HOST) || isBundledPage(u)) return;
-        if (isOnline(getApplicationContext())) {
+        if (serverUp) {
             // Back online while showing a cached copy (#361): drop the latch and
             // reload the same URL live so the session doesn't stay pinned offline.
             if (sClient != null && sClient.isShowingOfflineCopy()) {

@@ -6,7 +6,15 @@ const BASE_PATH = window.APP_BASE_PATH || '';
 const API_BASE = `${BASE_PATH}/api`;
 
 // Utility functions
+// #370: offline is announced once by the banner (gr-net.js), not by a red toast per
+// failed request. True while the server is unreachable.
+function grIsOffline() {
+    return document.documentElement.classList.contains('gr-offline') ||
+        (window.GRNet && window.GRNet.online === false);
+}
+
 function showToast(message, type = 'info') {
+    if (type === 'danger' && grIsOffline()) { console.warn('[offline] toast suppressed:', message); return; }
     // Create toast element
     const toastHtml = `
         <div class="toast align-items-center text-white bg-${type} border-0" role="alert" aria-live="assertive" aria-atomic="true">
@@ -218,7 +226,10 @@ async function apiCall(endpoint, options = {}) {
         console.error('API call failed:', error);
         // Callers that render their own status-aware message pass { silent: true } so we
         // don't also flash a generic "Server error" (e.g. Libby borrow → 409/403/502).
-        if (!options.silent) {
+        // Network failures and the Android shell's fast-fail 504 mean "server
+        // unreachable" — the offline banner covers that; no red toast (#370).
+        const netFail = !error.response || error.response.status === 504 || grIsOffline();
+        if (!options.silent && !netFail) {
             if (error.response) {
                 const message = error.response.data?.detail || error.response.data?.message || 'Server error';
                 showToast(message, 'danger');
@@ -1218,7 +1229,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
     const coverUrl = book.cover_url                                   // remote (news) cover
         ? book.cover_url
         : ((book.cover && book.id != null)                            // local cover file
-            ? `${base}/static/covers/${book.id}.jpg?v=${Date.now()}` : '');
+            ? `${base}/static/covers/${book.id}.jpg?v=${book.cover_version || 0}` : '');   // stable URL so the native cache can serve it offline (#370)
     // Remote (news/Libby) books have no DB id → give the popup cover the same Apple
     // Books fallback + 575×750-placeholder detection the grid cards get (#143), so a
     // book that shows a cover in the grid doesn't render "image not available" here.
@@ -1925,6 +1936,22 @@ function grResetCreditMark(key) {
 // Tap the Physical card (in-progress physical book) → lightweight progress popup.
 // Reuses PUT /readings/{id}/progress, which sets the manual override + recalcs
 // days_estimate/chains; physical progress then keeps advancing via WPD (#33).
+// #370: keep the on-phone Currently Reading copy ('gr:wip', see index.html) in step
+// with a physical save so offline Home shows the new page/percent.
+function grSaveWipProgress(readingId, pct, totalPages) {
+    try {
+        const o = JSON.parse(localStorage.getItem('gr:wip') || 'null');
+        if (!o || !Array.isArray(o.readings)) return;
+        o.readings.forEach(r => {
+            if (r && r.id === readingId) {
+                r.current_progress_percent = pct;
+                if (totalPages > 0) r.current_progress_page = Math.round(pct / 100 * totalPages);
+            }
+        });
+        localStorage.setItem('gr:wip', JSON.stringify(o));
+    } catch (_) {}
+}
+
 function grUpdatePhysicalProgress(addMinutes, session) {
     const reading = grActivePhysicalReading;
     if (!reading) return;
@@ -1954,7 +1981,9 @@ function grUpdatePhysicalProgress(addMinutes, session) {
     // Load today's running total, then add any session minutes. Save() awaits this
     // promise so it never reads a racy 0 and wipes the logged total. (#44)
     let _minutesLoaded = false, _minutesTouched = false;
-    const minutesLoad = apiCall(`/readings/${reading.id}/today-minutes`)
+    const minutesLoad = (grIsOffline()
+            ? Promise.reject(new Error('offline'))     // #370: don't wait on a dead server; the timer already ran
+            : apiCall(`/readings/${reading.id}/today-minutes`, { silent: true }))
         .then(d => {
             // Don't clobber a value the user already adjusted while the GET was in flight.
             if (!_minutesTouched) minEl.value = ((d && typeof d.minutes === 'number') ? d.minutes : 0) + extra;
@@ -1997,7 +2026,14 @@ function grUpdatePhysicalProgress(addMinutes, session) {
         // user didn't touch it), omit minutes_read so the backend preserves it. (#44)
         await minutesLoad;
         const params = { current_percent: pct, physical: true };  // #183: credit physical words even if the reading's media is Audio/Ebook
-        if (_minutesLoaded || _minutesTouched) params.minutes_read = Math.max(0, parseInt(minEl.value) || 0);
+        // Today's total known → send it (absolute). Unknown (offline / GET failed) → the
+        // field holds only the minutes of THIS sitting, so send them as an ADD (#370).
+        const _mins = Math.max(0, parseInt(minEl.value) || 0);
+        if (_minutesLoaded) params.minutes_read = _mins;
+        else if (_mins > 0) params.add_minutes = _mins;
+        // File the sitting on the phone's local day, even if it syncs days later (#370).
+        const _cd = new Date();
+        params.client_date = _cd.getFullYear() + '-' + String(_cd.getMonth() + 1).padStart(2, '0') + '-' + String(_cd.getDate()).padStart(2, '0');
         // From a timed reading session → also record a per-sitting Physical session
         // row (#78): minutes from the timer, words from this session's % delta.
         if (session && session.startMs) {
@@ -2008,18 +2044,36 @@ function grUpdatePhysicalProgress(addMinutes, session) {
             params.session_seconds = Math.round(session.seconds || 0);
             params.start_percent = session.startPct || 0;
         }
+        // #370: through the outbox — offline (or unreachable) the sitting is queued on
+        // the phone and replayed later (idempotent by flush_id / session_id).
         try {
-            await apiCall(`/readings/${reading.id}/progress`, {
-                method: 'PUT',
-                params
-            });
+            const qs = new URLSearchParams();
+            Object.keys(params).forEach(k => { if (params[k] !== undefined && params[k] !== null) qs.set(k, String(params[k])); });
+            const url = `${API_BASE}/readings/${reading.id}/progress?${qs.toString()}`;
+            const sent = window.GROutbox
+                ? await GROutbox.send(url, { method: 'PUT', kind: 'physical-session' })
+                : await fetch(url, { method: 'PUT' }).then(r => ({ queued: false, ok: r.ok, status: r.status }));
             const inst = bootstrap.Modal.getInstance(modalEl);
+            if (sent.queued) {
+                grSaveWipProgress(reading.id, pct, totalPages);
+                if (inst) inst.hide();
+                showToast('Saved on this phone \u2014 will sync when you\'re back', 'info');
+                return;
+            }
+            if (!sent.ok) {
+                // 4xx (e.g. reading finished meanwhile): surface the server's reason.
+                let msg = 'Could not save progress';
+                try { const j = await sent.response.json(); msg = j.detail || msg; } catch (_) {}
+                showToast(msg, 'danger');
+                return;
+            }
+            grSaveWipProgress(reading.id, pct, totalPages);
             if (inst) inst.hide();
             showToast('Progress updated', 'success');
             // Re-fetch so the new % / page / WPD-derived estimates show everywhere.
             if (typeof refreshReadings === 'function') refreshReadings();
             else location.reload();
-        } catch (e) { /* handled by apiCall */ }
+        } catch (e) { console.warn('physical progress save failed', e); }
     };
 
     bootstrap.Modal.getOrCreateInstance(modalEl).show();

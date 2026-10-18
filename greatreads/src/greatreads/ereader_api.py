@@ -3619,6 +3619,25 @@ def recredit_ebook_sessions(gr_book_id: int):
 
 @router.put('/api/progress/{book_id}')
 async def put_progress(book_id, request: Request):
+    """#370: idempotent wrapper — an outbox replay carrying a flush_id we already
+    applied is acknowledged without being applied again."""
+    from . import flush_dedup
+    fid = request.headers.get('x-flush-id')
+    if not fid:
+        try:
+            _b = await request.json()
+            fid = _b.get('flush_id') if isinstance(_b, dict) else None
+        except Exception:
+            fid = None
+    if flush_dedup.already(fid):
+        return {'dedup': True}
+    res = await _put_progress_impl(book_id, request)
+    if fid and not (isinstance(res, Response) and res.status_code >= 400):
+        flush_dedup.remember(fid)
+    return res
+
+
+async def _put_progress_impl(book_id, request: Request):
     """Upsert progress for one book. Body is the partial record; we fill in
     bookId + updated timestamp. Last-writer-wins (the client compares
     `updated` against its local copy before pushing)."""

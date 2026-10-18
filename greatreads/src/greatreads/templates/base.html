@@ -407,6 +407,11 @@
         }
     </script>
 
+    <!-- #370: server reachability + offline banner + durable write queue. Root-absolute:
+         served by :8090 (and bundled in the APK) — GreatReads is always reached through it. -->
+    <script src="/gr-net.js"></script>
+    <script src="/gr-outbox.js"></script>
+
     <!-- Bootstrap JS (vendored locally for offline support) -->
     <script src="{{ url_for('static', path='/vendor/bootstrap/js/bootstrap.bundle.min.js') }}"></script>
 
