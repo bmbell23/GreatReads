@@ -16,6 +16,7 @@ from ..models.user_settings import (
 )
 from ..services.settings_service import (
     calculate_auto_wpd,
+    calculate_auto_wpd_breakdown,
     get_wpd_mode as _get_wpd_mode,
     get_reading_speeds as _get_effective_speeds,
 )
@@ -50,6 +51,8 @@ class AutoWpdResponse(BaseModel):
     ebook_sample_count: int = 0
     physical_sample_count: int = 0
     audio_sample_count: int = 0
+    # #369: per-format blend breakdown {recent, historical, weight_recent, wpd, tracked_days, books_used}
+    breakdown: Optional[dict] = None
 
 
 class WpdModeResponse(BaseModel):
@@ -87,7 +90,8 @@ async def get_auto_wpd(db: Session = Depends(get_db)):
     """Calculate and return auto WPD for each format based on historical reads."""
     from ..models.reading import Reading
 
-    auto = calculate_auto_wpd(db)
+    breakdown = calculate_auto_wpd_breakdown(db)
+    auto = {f: breakdown[f]["wpd"] for f in ("ebook", "physical", "audio")}
 
     # Count samples per format
     finished = db.query(Reading).filter(
@@ -114,6 +118,7 @@ async def get_auto_wpd(db: Session = Depends(get_db)):
         ebook_sample_count=counts["ebook"],
         physical_sample_count=counts["physical"],
         audio_sample_count=counts["audio"],
+        breakdown=breakdown,
     )
 
 

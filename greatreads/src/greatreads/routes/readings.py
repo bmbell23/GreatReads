@@ -443,6 +443,13 @@ async def update_reading_progress(
 
     db.commit()
 
+    # #369: reading_activity may have changed -> drop the cached auto-WPD blend.
+    try:
+        from ..services.settings_service import invalidate_auto_wpd_cache
+        invalidate_auto_wpd_cache()
+    except Exception:
+        pass
+
     # Mirror this % into the cross-format progress store (ereader_progress) so
     # opening the ebook / audiobook resumes here — e.g. physical reading drives the
     # ebook's resume point. Keyed by the unified key (calibre id, else abs:<id>);

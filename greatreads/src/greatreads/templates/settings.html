@@ -234,6 +234,7 @@
                     <h6 class="text-muted mb-2">
                         <i class="fas fa-history me-1"></i>Auto-calculated WPD (from your reading history)
                     </h6>
+                    <div id="auto-wpd-breakdown" class="small text-muted mb-2"></div>
                     <div class="table-responsive">
                         <table class="table table-sm table-bordered align-middle mb-0">
                             <thead class="table-light">
@@ -1746,6 +1747,15 @@ async function loadAutoWpd() {
         document.getElementById('auto-ebook-count').textContent = autoResp.ebook_sample_count + ' books';
         document.getElementById('auto-physical-count').textContent = autoResp.physical_sample_count + ' books';
         document.getElementById('auto-audio-count').textContent = autoResp.audio_sample_count + ' books';
+
+        const bd = autoResp.breakdown || {};
+        const num = v => v != null ? Number(v).toLocaleString() : '—';
+        const lines = [['ebook', 'Ebook'], ['physical', 'Physical'], ['audio', 'Audio']].map(([k, label]) => {
+            const b = bd[k];
+            if (!b || b.wpd == null) return '';
+            return `<div>${label}: recent ${num(b.recent)} · history ${num(b.historical)} · blend ${num(b.wpd)} (${Math.round((b.weight_recent || 0) * 100)}% recent)</div>`;
+        });
+        document.getElementById('auto-wpd-breakdown').innerHTML = lines.join('');
 
         document.getElementById('manual-ebook-wpd').textContent = (manualResp.ebook_wpd || 15000).toLocaleString();
         document.getElementById('manual-physical-wpd').textContent = (manualResp.physical_wpd || 12000).toLocaleString();
