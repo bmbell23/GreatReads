@@ -68,18 +68,27 @@
   var bannerEl = null, pending = 0;
   function ensureBanner() {
     if (bannerEl || !document.body) return bannerEl;
+    // The reader paginates to the viewport, so there it is a small corner pill
+    // that never shifts layout. Elsewhere it is a slim sticky bar that takes
+    // space as the first child of body (no overlay, no body padding games).
+    var isReader = /(^|\/)reader\.html$/.test(location.pathname);
     var st = document.createElement('style');
-    st.textContent =
-      '#gr-net-banner{display:none;position:fixed;left:0;right:0;top:0;z-index:2147483000;' +
-      'background:#b45309;color:#fff;font:600 13px/1.35 system-ui,sans-serif;' +
-      'padding:calc(6px + env(safe-area-inset-top,0px)) 12px 6px;text-align:center;pointer-events:none}' +
-      'html.gr-offline #gr-net-banner{display:block}' +
-      'html.gr-offline body{padding-top:0}';
+    st.textContent = isReader
+      ? '#gr-net-banner{display:none;position:fixed;left:8px;bottom:8px;z-index:2147483000;' +
+        'max-width:calc(100vw - 16px);box-sizing:border-box;overflow:hidden;white-space:nowrap;' +
+        'text-overflow:ellipsis;background:#b45309;color:#fff;font:600 11px/1.3 system-ui,sans-serif;' +
+        'padding:3px 10px;border-radius:12px;opacity:.9;pointer-events:none}' +
+        'html.gr-offline #gr-net-banner{display:block}'
+      : '#gr-net-banner{display:none;position:sticky;top:0;flex:none;z-index:2147483000;' +
+        'box-sizing:border-box;width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;' +
+        'background:#b45309;color:#fff;font:600 13px/1.3 system-ui,sans-serif;' +
+        'padding:calc(6px + env(safe-area-inset-top,0px)) 12px 6px;text-align:center;pointer-events:none}' +
+        'html.gr-offline #gr-net-banner{display:block}';
     document.head.appendChild(st);
     bannerEl = document.createElement('div');
     bannerEl.id = 'gr-net-banner';
     bannerEl.setAttribute('role', 'status');
-    document.body.appendChild(bannerEl);
+    document.body.insertBefore(bannerEl, document.body.firstChild);
     return bannerEl;
   }
   function renderBanner() {
