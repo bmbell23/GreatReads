@@ -246,7 +246,7 @@ public class MainActivity extends Activity {
                 webView.loadUrl("http://100.69.184.113:8090/");
             } else {
                 if (sClient != null) sClient.forceOffline();
-                webView.loadUrl(OFFLINE_HOME_URL + "?why=cold");
+                webView.loadUrl(HOME_URL);
             }
         } else {
             sWebCtx.setBaseContext(this);
@@ -407,12 +407,17 @@ public class MainActivity extends Activity {
     // assets/web by build-app.sh from web/.
     private static final String SHELL_HOST = "100.69.184.113";
     private static final String HOME_URL = "http://" + SHELL_HOST + ":8090/greatreads/";
-    // #275: the offline landing. A bundled page that rebuilds GreatReads Home from
-    // what an online visit cached (IndexedDB) — NOT the legacy ereader grid, which
-    // is no longer on the offline path at all. Same origin as the online app, so
-    // the cached books/covers/audiobooks are visible to it.
-    private static final String OFFLINE_HOME_PATH = "/offline-home.html";
-    private static final String OFFLINE_HOME_URL = "http://" + SHELL_HOST + ":8090" + OFFLINE_HOME_PATH;
+    // #361: offline shows the REAL server-rendered Home, replayed from a native
+    // write-through HTTP cache (see OfflineShellWebViewClient) under filesDir.
+    private static final int SHELL_PORT = 8090;
+    private static final long CACHE_MAX_BYTES = 15L * 1024 * 1024;
+    private static final String CACHE_DIR = "offline-cache";
+    private static final String NO_COPY_HTML =
+        "<!DOCTYPE html><html><head><meta charset=\"utf-8\">"
+        + "<meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">"
+        + "<title>GreatReads</title></head>"
+        + "<body style=\"font-family:sans-serif;padding:2rem;text-align:center;color:#444\">"
+        + "<p>No offline copy yet — open GreatReads once while online.</p></body></html>";
     // The client owning the retained WebView, so resume/watchdog paths can force
     // the bundled shell for the next load instead of waiting out a TCP timeout.
     private static OfflineShellWebViewClient sClient;
@@ -450,9 +455,16 @@ public class MainActivity extends Activity {
         // "online"). While true, shouldInterceptRequest serves the bundled
         // shell even if isOnline() is true — so we recover regardless of the
         // connectivity read. Reset on the next successful page load. (#23)
-        private boolean forcedOfflineReload = false;
+        private volatile boolean forcedOfflineReload = false;
+
+        // True while the current main-frame page is a cached/bundled copy rather
+        // than a live load. Keeps onPageFinished from clearing the latch for it.
+        private volatile boolean servedOfflineMain = false;
 
         OfflineShellWebViewClient(android.content.Context app) { this.app = app; }
+
+        boolean isShowingOfflineCopy() { return servedOfflineMain; }
+        void clearForce() { forcedOfflineReload = false; servedOfflineMain = false; }
 
         @Override
         public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
@@ -460,35 +472,71 @@ public class MainActivity extends Activity {
                 if (request == null || !"GET".equalsIgnoreCase(request.getMethod())) return null;
                 Uri url = request.getUrl();
                 if (url == null || !SHELL_HOST.equals(url.getHost())) return null;
-                // Online → load live (preserves live-reload of the web shell) —
-                // unless a prior main-frame load already failed, in which case
-                // we force the bundled shell regardless of the connectivity read.
-                if (isOnline(app) && !forcedOfflineReload) return null;
-                // Offline → try to serve the request from the bundled shell.
-                // NOTE: the root URL ("http://host:8090") has an EMPTY path, not
-                // "/", so we must treat null/""/"/" all as the offline home.
+                boolean mainFrame = request.isForMainFrame();
+                boolean online = isOnline(app);
                 String path = url.getPath();
                 if (path == null) path = "";
-                // Any main-frame navigation to the server-rendered app — the root
-                // bootstrap or /greatreads/… — becomes the offline Home (#275).
-                // Sub-resources are left alone so they still resolve from the
-                // bundle by their own path (or fail and let the page cope).
+                // NOTE: the root URL ("http://host:8090") has an EMPTY path, not "/".
                 boolean rootish = path.isEmpty() || path.equals("/") || path.equals("/index.html");
-                boolean mainFrame = request.isForMainFrame();
-                if (mainFrame && (rootish || path.startsWith("/greatreads"))) {
-                    path = OFFLINE_HOME_PATH;
-                } else if (rootish) {
-                    path = OFFLINE_HOME_PATH;
+                if (mainFrame) servedOfflineMain = false;
+
+                // Online and healthy → everything outside the cache scope loads live
+                // (preserves live-reload of the web shell).
+                if (online && !forcedOfflineReload && !(url.getPort() == SHELL_PORT && path.startsWith("/greatreads"))) {
+                    return null;
                 }
+                // #361: offline (or forced), the root main frame is the real Home.
+                if (mainFrame && rootish) {
+                    url = Uri.parse(HOME_URL);
+                    path = url.getPath();
+                }
+
+                if (url.getPort() == SHELL_PORT && path.startsWith("/greatreads")
+                        && isCacheableRequest(request)) {
+                    // Live first when the network is up. Once a main-frame load has
+                    // failed (latch set) only main-frame requests retry live, so
+                    // sub-resources don't each wait out a timeout, and the session
+                    // returns to live pages as soon as the server answers.
+                    if (online && (!forcedOfflineReload || mainFrame)) {
+                        try {
+                            // liveFetch clears the latch itself on ANY HTTP answer.
+                            return liveFetch(request, url, mainFrame);   // null → WebView handles it
+                        } catch (IOException netFail) {
+                            NativeDiag.note(app, "live_fetch_fail", NativeDiag.d(
+                                "url", url.toString(), "err", String.valueOf(netFail)));
+                            if (mainFrame) forcedOfflineReload = true;
+                        }
+                    }
+                    WebResourceResponse cached = readCache(url.toString(), mainFrame);
+                    if (cached == null && mainFrame) {
+                        cached = readCache(HOME_URL, true);
+                        if (cached == null) {
+                            NativeDiag.note(app, "cache_miss_nohome", NativeDiag.d("url", url.toString()));
+                            servedOfflineMain = true;
+                            return htmlResponse(NO_COPY_HTML);
+                        }
+                    }
+                    if (cached != null) {
+                        if (mainFrame) servedOfflineMain = true;
+                        return cached;
+                    }
+                    // Sub-resource with no cached copy: fail fast instead of a timeout.
+                    return new WebResourceResponse("text/plain", "utf-8", 504, "Offline",
+                        new java.util.HashMap<String, String>(),
+                        new java.io.ByteArrayInputStream(new byte[0]));
+                }
+
+                if (online && !forcedOfflineReload) return null;
                 if (mainFrame) {
                     NativeDiag.note(app, "intercept", NativeDiag.d(
                         "requested", url.getPath(), "serving", path,
-                        "online", isOnline(app), "forced", forcedOfflineReload));
+                        "online", online, "forced", forcedOfflineReload));
                 }
                 String assetPath = "web" + path;   // e.g. web/reader.html, web/vendor/pdf.min.js
                 try {
                     InputStream is = app.getAssets().open(assetPath);
                     String mime = mimeFor(path);
+                    if (mainFrame) servedOfflineMain = true;
                     android.util.Log.i("EreaderOffline", "served from bundle: " + path);
                     return new WebResourceResponse(mime, isTextMime(mime) ? "utf-8" : null, is);
                 } catch (IOException notBundled) {
@@ -501,6 +549,320 @@ public class MainActivity extends Activity {
                     return null;
                 }
             } catch (Exception e) {
+                return null;
+            }
+        }
+
+        // ---- #361 native write-through cache (a hand-rolled service worker) ----
+        // Real service workers cannot register on a plain-http IP origin, and a
+        // localhost server would change the origin (orphaning cached books in
+        // IndexedDB). So GETs under /greatreads on :8090 are fetched natively while
+        // online and written to filesDir/offline-cache; offline they are replayed.
+
+        private static boolean isCacheableRequest(WebResourceRequest request) {
+            java.util.Map<String, String> h = request.getRequestHeaders();
+            if (h != null) {
+                for (java.util.Map.Entry<String, String> e : h.entrySet()) {
+                    String k = e.getKey() == null ? "" : e.getKey().toLowerCase();
+                    String v = e.getValue() == null ? "" : e.getValue().toLowerCase();
+                    if (k.equals("range") || k.equals("upgrade")) return false;
+                    if (k.equals("accept") && (v.startsWith("audio/") || v.startsWith("video/")
+                            || v.contains("text/event-stream"))) return false;
+                }
+            }
+            String p = request.getUrl().getPath();
+            p = p == null ? "" : p.toLowerCase();
+            String[] media = {".mp3", ".m4a", ".m4b", ".mp4", ".webm", ".ogg", ".opus", ".flac",
+                              ".wav", ".mkv", ".m3u8", ".ts", ".epub", ".pdf", ".zip"};
+            for (String ext : media) if (p.endsWith(ext)) return false;
+            return true;
+        }
+
+        private java.io.File cacheDir() {
+            java.io.File d = new java.io.File(app.getFilesDir(), CACHE_DIR);
+            if (!d.isDirectory()) d.mkdirs();
+            return d;
+        }
+
+        private static String sha1(String s) throws IOException {
+            try {
+                byte[] d = java.security.MessageDigest.getInstance("SHA-1")
+                    .digest(s.getBytes("UTF-8"));
+                StringBuilder sb = new StringBuilder();
+                for (byte b : d) sb.append(String.format("%02x", b));
+                return sb.toString();
+            } catch (java.security.NoSuchAlgorithmException e) {
+                throw new IOException(e);
+            }
+        }
+
+        private static WebResourceResponse htmlResponse(String html) {
+            try {
+                return new WebResourceResponse("text/html", "utf-8",
+                    new java.io.ByteArrayInputStream(html.getBytes("UTF-8")));
+            } catch (java.io.UnsupportedEncodingException e) {
+                return null;
+            }
+        }
+
+        // Interned per-key locks: writers and readers of one cache entry serialise.
+        private static final java.util.concurrent.ConcurrentHashMap<String, Object> KEY_LOCKS =
+            new java.util.concurrent.ConcurrentHashMap<>();
+        private static final Object TRIM_LOCK = new Object();
+        private static final long CACHE_TOTAL_MAX = 200L * 1024 * 1024;
+
+        private static Object keyLock(String key) {
+            Object fresh = new Object();
+            Object prev = KEY_LOCKS.putIfAbsent(key, fresh);
+            return prev != null ? prev : fresh;
+        }
+
+        // One file per entry: [writeUTF mime][writeUTF charset][writeUTF url][body].
+        // Body and meta therefore can never disagree. Written to a unique temp
+        // file in the cache dir, then renamed into place.
+        private void writeEntry(String key, String mime, String charset, String url, byte[] body)
+                throws IOException {
+            java.io.File dir = cacheDir();
+            synchronized (keyLock(key)) {
+                java.io.File tmp = java.io.File.createTempFile("w", ".tmp", dir);
+                boolean ok = false;
+                try {
+                    java.io.FileOutputStream fo = new java.io.FileOutputStream(tmp);
+                    try {
+                        java.io.DataOutputStream out = new java.io.DataOutputStream(
+                            new java.io.BufferedOutputStream(fo));
+                        out.writeUTF(mime == null ? "" : mime);
+                        out.writeUTF(charset == null ? "" : charset);
+                        out.writeUTF(url);
+                        out.write(body);
+                        out.flush();
+                        fo.getFD().sync();
+                    } finally { fo.close(); }
+                    java.io.File dest = new java.io.File(dir, key + ".bin");
+                    if (!tmp.renameTo(dest)) throw new IOException("rename failed: " + dest);
+                    ok = true;
+                } finally {
+                    if (!ok) tmp.delete();
+                }
+            }
+            trimCache(dir);
+        }
+
+        // Keep the cache dir <= 200 MB: delete least-recently-modified entries
+        // first, never the Home entry. (Stale pre-hardening .body/.meta files and
+        // abandoned temp files are ordinary candidates.)
+        private static void trimCache(java.io.File dir) {
+            synchronized (TRIM_LOCK) {
+                try {
+                    java.io.File[] all = dir.listFiles();
+                    if (all == null) return;
+                    String homeName = sha1(HOME_URL) + ".bin";
+                    long now = System.currentTimeMillis();
+                    long total = 0;
+                    java.util.List<java.io.File> victims = new java.util.ArrayList<>();
+                    for (java.io.File f : all) {
+                        if (!f.isFile()) continue;
+                        // A temp file younger than an hour is a write in progress.
+                        if (f.getName().endsWith(".tmp") && now - f.lastModified() < 3600_000L) continue;
+                        total += f.length();
+                        if (!f.getName().equals(homeName)) victims.add(f);
+                    }
+                    if (total <= CACHE_TOTAL_MAX) return;
+                    java.util.Collections.sort(victims, new java.util.Comparator<java.io.File>() {
+                        @Override public int compare(java.io.File x, java.io.File y) {
+                            return Long.compare(x.lastModified(), y.lastModified());
+                        }
+                    });
+                    for (java.io.File f : victims) {
+                        if (total <= CACHE_TOTAL_MAX) break;
+                        long len = f.length();
+                        if (f.delete()) total -= len;
+                    }
+                } catch (Exception ignored) { }
+            }
+        }
+
+        private static boolean isCacheableType(String mime) {
+            if (mime == null) return false;
+            String m = mime.trim().toLowerCase();
+            return m.equals("text/html") || m.equals("text/css")
+                || m.contains("javascript") || m.contains("ecmascript")
+                || m.equals("application/json")
+                || m.startsWith("font/") || m.contains("font")
+                || m.startsWith("image/");
+        }
+
+        // Fetch natively. Returns a response (storing it when it is a cacheable
+        // 200), or null when the server answered anything other than 200 (the
+        // WebView re-fetches it). Throws IOException on connect/read failure.
+        // Any HTTP answer from a main-frame fetch proves the server is up, so it
+        // clears the forced-offline latch.
+        private WebResourceResponse liveFetch(WebResourceRequest request, Uri url, boolean mainFrame)
+                throws IOException {
+            java.net.HttpURLConnection c = null;
+            boolean keepOpen = false;
+            try {
+                c = (java.net.HttpURLConnection) new java.net.URL(url.toString()).openConnection();
+                c.setRequestMethod("GET");
+                c.setConnectTimeout(5000);
+                c.setReadTimeout(15000);
+                c.setInstanceFollowRedirects(false);
+                java.util.Map<String, String> h = request.getRequestHeaders();
+                if (h != null) {
+                    for (java.util.Map.Entry<String, String> e : h.entrySet()) {
+                        String k = e.getKey();
+                        if (k == null) continue;
+                        String lk = k.toLowerCase();
+                        // Cookie is re-added from CookieManager; Accept-Encoding is left
+                        // to HttpURLConnection (it gunzips transparently); conditional
+                        // headers would give a 304 we cannot cache.
+                        if (lk.equals("host") || lk.equals("cookie") || lk.equals("accept-encoding")
+                                || lk.equals("connection") || lk.equals("range")
+                                || lk.equals("if-none-match") || lk.equals("if-modified-since")) continue;
+                        c.setRequestProperty(k, e.getValue());
+                    }
+                }
+                android.webkit.CookieManager cm = android.webkit.CookieManager.getInstance();
+                String cookie = cm.getCookie(url.toString());
+                if (cookie != null && !cookie.isEmpty()) c.setRequestProperty("Cookie", cookie);
+
+                int code = c.getResponseCode();
+                if (mainFrame) forcedOfflineReload = false;   // the server answered
+                if (code != 200) return null;       // 3xx/4xx/5xx: let WebView handle it
+
+                java.util.List<String> setCookies = new java.util.ArrayList<>();
+                for (java.util.Map.Entry<String, java.util.List<String>> e : c.getHeaderFields().entrySet()) {
+                    if (e.getKey() != null && e.getKey().equalsIgnoreCase("Set-Cookie")) {
+                        setCookies.addAll(e.getValue());
+                    }
+                }
+                for (String sc : setCookies) cm.setCookie(url.toString(), sc);
+                if (!setCookies.isEmpty()) cm.flush();
+
+                long declared = c.getContentLengthLong();
+                String ct = c.getContentType();
+                String mime = null, charset = null;
+                if (ct != null) {
+                    String[] parts = ct.split(";");
+                    mime = parts[0].trim();
+                    for (int i = 1; i < parts.length; i++) {
+                        String part = parts[i].trim();
+                        if (part.toLowerCase().startsWith("charset=")) {
+                            charset = part.substring(8).trim().replace("\"", "");
+                        }
+                    }
+                }
+                String cacheControl = c.getHeaderField("Cache-Control");
+                String disposition = c.getHeaderField("Content-Disposition");
+                String transferEnc = c.getHeaderField("Transfer-Encoding");
+                boolean chunked = transferEnc != null && transferEnc.toLowerCase().contains("chunked");
+
+                java.util.Map<String, String> rh = new java.util.HashMap<>();
+                if (cacheControl != null) rh.put("Cache-Control", cacheControl);
+                if (disposition != null) rh.put("Content-Disposition", disposition);
+
+                boolean cacheable = isCacheableType(mime) && disposition == null && !chunked
+                    && declared <= CACHE_MAX_BYTES;
+                if (!cacheable) {
+                    // Streaming / download / unknown type: never buffer, never cache.
+                    keepOpen = true;
+                    return passthrough(c, c.getInputStream(), mime != null && !mime.isEmpty()
+                        ? mime : mimeFor(String.valueOf(url.getPath())), charset, rh);
+                }
+
+                InputStream in = c.getInputStream();
+                java.io.ByteArrayOutputStream buf = new java.io.ByteArrayOutputStream(
+                    declared > 0 ? (int) declared : 32 * 1024);
+                byte[] chunk = new byte[16 * 1024];
+                int n;
+                boolean overflow = false;
+                while ((n = in.read(chunk)) != -1) {
+                    buf.write(chunk, 0, n);
+                    if (buf.size() > CACHE_MAX_BYTES) { overflow = true; break; }
+                }
+                if (overflow) {
+                    // Too big to cache: stream the rest straight through, uncached.
+                    keepOpen = true;
+                    InputStream joined = new java.io.SequenceInputStream(
+                        new java.io.ByteArrayInputStream(buf.toByteArray()), in);
+                    return passthrough(c, joined, mime, charset, rh);
+                }
+                byte[] body = buf.toByteArray();
+                try {
+                    writeEntry(sha1(url.toString()), mime, charset, url.toString(), body);
+                } catch (Exception storeFail) {
+                    NativeDiag.note(app, "cache_store_fail", NativeDiag.d(
+                        "url", url.toString(), "err", String.valueOf(storeFail)));
+                }
+                return new WebResourceResponse(mime, charset, 200, "OK", rh,
+                    new java.io.ByteArrayInputStream(body));
+            } finally {
+                if (c != null && !keepOpen) try { c.disconnect(); } catch (Exception ignored) {}
+            }
+        }
+
+        // Stream the connection straight to the WebView; disconnect on close.
+        private static WebResourceResponse passthrough(final java.net.HttpURLConnection c,
+                InputStream in, String mime, String charset, java.util.Map<String, String> rh) {
+            InputStream wrapped = new java.io.FilterInputStream(in) {
+                @Override public void close() throws IOException {
+                    try { super.close(); } finally { c.disconnect(); }
+                }
+            };
+            return new WebResourceResponse(mime, charset, 200, "OK", rh, wrapped);
+        }
+
+        // Replay a cached copy, or null if there is none. A main-frame HTML copy
+        // gets gr-offline injected right after <head> so the page can hide
+        // live-only sections and show the Offline pill.
+        private WebResourceResponse readCache(String url, boolean mainFrame) {
+            java.io.DataInputStream in = null;
+            try {
+                String key = sha1(url);
+                java.io.File entry = new java.io.File(cacheDir(), key + ".bin");
+                String mime, charset;
+                byte[] htmlBytes = null;
+                synchronized (keyLock(key)) {
+                    if (!entry.isFile()) return null;
+                    in = new java.io.DataInputStream(new java.io.BufferedInputStream(
+                        new java.io.FileInputStream(entry)));
+                    mime = in.readUTF();
+                    charset = in.readUTF();
+                    in.readUTF();   // original url
+                    if (mime.isEmpty()) mime = "application/octet-stream";
+                    if (charset.isEmpty()) charset = null;
+                    entry.setLastModified(System.currentTimeMillis());   // LRU touch
+                    if (mainFrame && mime.toLowerCase().contains("html")) {
+                        java.io.ByteArrayOutputStream out = new java.io.ByteArrayOutputStream();
+                        byte[] b = new byte[16 * 1024];
+                        int n;
+                        while ((n = in.read(b)) != -1) out.write(b, 0, n);
+                        htmlBytes = out.toByteArray();
+                    }
+                }
+                NativeDiag.note(app, "cache_serve", NativeDiag.d(
+                    "url", url, "main", mainFrame, "bytes", entry.length()));
+                if (htmlBytes != null) {
+                    // ISO-8859-1 round-trips any bytes, and the injected tag is ASCII.
+                    String html = new String(htmlBytes, "ISO-8859-1");
+                    String tag = "<script>document.documentElement.classList.add('gr-offline');</script>";
+                    java.util.regex.Matcher hm = java.util.regex.Pattern
+                        .compile("<head[^>]*>", java.util.regex.Pattern.CASE_INSENSITIVE).matcher(html);
+                    if (hm.find()) {
+                        html = html.substring(0, hm.end()) + tag + html.substring(hm.end());
+                    } else {
+                        html = tag + html;
+                    }
+                    in.close();
+                    return new WebResourceResponse(mime, charset,
+                        new java.io.ByteArrayInputStream(html.getBytes("ISO-8859-1")));
+                }
+                // The stream is positioned at the body; the file is replaced by
+                // rename, so an open handle keeps reading the old inode safely.
+                return new WebResourceResponse(mime, charset, in);
+            } catch (Exception e) {
+                if (in != null) try { in.close(); } catch (IOException ignored) {}
+                NativeDiag.note(app, "cache_read_fail", NativeDiag.d("url", url, "err", String.valueOf(e)));
                 return null;
             }
         }
@@ -525,18 +887,20 @@ public class MainActivity extends Activity {
                 // root dumped the user on Home mid-book whenever a transient
                 // blip (e.g. Tailscale reconnecting right after unlock) broke a
                 // WebView-initiated reload of reader.html/player.html (#198).
-                // Only retry same-URL when the bundled shell can serve that
-                // path; otherwise (API pages, /greatreads/…) fall back to root
-                // as before so the user at least gets the offline home.
-                String target = OFFLINE_HOME_URL + "?why=error";
+                // Only retry same-URL when the bundled shell or the page cache can
+                // serve that path (/greatreads/… falls back to the cached Home);
+                // otherwise land on Home, which serves from cache while forced.
+                String target = HOME_URL;
                 Uri failed = request.getUrl();
                 if (failed != null && SHELL_HOST.equals(failed.getHost())) {
                     String path = failed.getPath();
-                    if (path != null && !path.isEmpty() && !path.equals("/")) {
+                    if (path != null && path.startsWith("/greatreads")) {
+                        target = failed.toString();
+                    } else if (path != null && !path.isEmpty() && !path.equals("/")) {
                         try {
                             app.getAssets().open("web" + path).close();
                             target = failed.toString();
-                        } catch (IOException notBundled) { /* root fallback */ }
+                        } catch (IOException notBundled) { /* Home fallback */ }
                     }
                 }
                 android.util.Log.i("EreaderOffline",
@@ -553,7 +917,7 @@ public class MainActivity extends Activity {
         void forceOffline() { forcedOfflineReload = true; }
 
         // The main-frame URL currently loading, for the stall watchdog below.
-        private String pendingMainUrl = null;
+        private volatile String pendingMainUrl = null;
 
         @Override
         public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
@@ -568,6 +932,10 @@ public class MainActivity extends Activity {
             pendingMainUrl = url;
             view.postDelayed(() -> {
                 if (!started.equals(pendingMainUrl)) return;      // finished or superseded
+                // #361: a slow load on a working network is NOT offline. Only
+                // consider the stall when the OS itself reports no usable network;
+                // a genuinely unreachable host surfaces via onReceivedError.
+                if (isOnline(app)) return;
                 new Thread(() -> {
                     final boolean up = hostReachable();
                     view.post(() -> {
@@ -577,7 +945,7 @@ public class MainActivity extends Activity {
                         NativeDiag.note(app, "stalled", NativeDiag.d("url", started));
                         forcedOfflineReload = true;
                         pendingMainUrl = null;
-                        view.loadUrl(OFFLINE_HOME_URL + "?why=stalled");
+                        view.loadUrl(HOME_URL);
                     });
                 }).start();
             }, 6000);
@@ -585,9 +953,11 @@ public class MainActivity extends Activity {
 
         @Override
         public void onPageFinished(WebView view, String url) {
-            // A page loaded successfully — clear the forced-offline latch so the
-            // next navigation tries the network (live) again.
-            forcedOfflineReload = false;
+            // A page loaded successfully. If it came live (not a cached/bundled
+            // copy), clear the forced-offline latch so navigation stays live. A
+            // cached copy keeps the latch; the next main-frame request retries live
+            // (see shouldInterceptRequest) and resume clears it when back online.
+            if (!servedOfflineMain) forcedOfflineReload = false;
             pendingMainUrl = null;
             super.onPageFinished(view, url);
 
@@ -605,10 +975,14 @@ public class MainActivity extends Activity {
                     int kids;
                     try { kids = Integer.parseInt(String.valueOf(v).trim()); } catch (Exception e) { kids = -1; }
                     if (kids > 0) return;
+                    // #361: a blank read while the network is fine (page still
+                    // painting, quick navigation) must not dump us on offline Home.
+                    if (isOnline(app)) return;
+                    if (servedOfflineMain) return;   // already the cached copy: don't loop
                     NativeDiag.note(app, "blank_page", NativeDiag.d("url", url, "children", kids));
                     android.util.Log.i("EreaderOffline", "blank document after load → offline home: " + url);
                     forcedOfflineReload = true;
-                    view.loadUrl(OFFLINE_HOME_URL + "?why=blank");
+                    view.loadUrl(HOME_URL);
                 });
         }
 
@@ -833,7 +1207,7 @@ public class MainActivity extends Activity {
 
     // A bundled page keeps working with no host — never redirect away from one.
     private static boolean isBundledPage(String url) {
-        return url.contains("offline-home.html") || url.contains("reader.html") || url.contains("player.html");
+        return url.contains("reader.html") || url.contains("player.html");
     }
 
     // Is the actual host reachable? ConnectivityManager only knows the radio is up,
@@ -1345,13 +1719,26 @@ public class MainActivity extends Activity {
         if (wv == null) return;
         final String u = wv.getUrl();
         if (u == null || !u.contains(SHELL_HOST) || isBundledPage(u)) return;
+        if (isOnline(getApplicationContext())) {
+            // Back online while showing a cached copy (#361): drop the latch and
+            // reload the same URL live so the session doesn't stay pinned offline.
+            if (sClient != null && sClient.isShowingOfflineCopy()) {
+                NativeDiag.note(getApplicationContext(), "resume_go_live", NativeDiag.d("url", u));
+                sClient.clearForce();
+                wv.reload();
+            }
+            return;
+        }
+        // Truly offline: if the host is gone and we're not already on a cached
+        // copy, land on the cached Home (served by the client's cache).
+        if (sClient != null && sClient.isShowingOfflineCopy()) return;
         new Thread(() -> {
             if (hostReachable()) return;
             wv.post(() -> {
-                android.util.Log.i("EreaderOffline", "resume with host unreachable → offline home");
+                android.util.Log.i("EreaderOffline", "resume with host unreachable → cached home");
                 NativeDiag.note(getApplicationContext(), "resume_offline", NativeDiag.d("url", u));
                 if (sClient != null) sClient.forceOffline();
-                wv.loadUrl(OFFLINE_HOME_URL + "?why=resume");
+                wv.loadUrl(HOME_URL);
             });
         }).start();
     }

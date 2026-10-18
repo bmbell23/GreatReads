@@ -2189,16 +2189,25 @@
                 // server. Black House kept showing its broken one-entry TOC on this
                 // device long after the EPUB was repaired. Cheap size check; if we
                 // are offline or the check fails, the cached copy still opens.
+                // #361: cache-first. A cached copy opens IMMEDIATELY; the freshness
+                // check runs in the background and only updates the cache for the
+                // NEXT open (never blocks, never reloads mid-read).
                 let staleCache = false, freshBlob = null;
                 if (cached && cached.blob && navigator.onLine !== false) {
-                    const probe = await serverEpubProbe(bookId);
-                    staleCache = !!probe.bytes && probe.bytes !== cached.blob.size;
-                    if (staleCache) {
-                        console.log('♻️ Server copy changed', cached.blob.size,
-                                    '→', probe.bytes, '- replacing cached copy');
-                        freshBlob = probe.blob;
-                        putCachedBookBlob(bookId, 'epub', probe.blob, { title });
-                    }
+                    const cachedSize = cached.blob.size;
+                    serverEpubProbe(bookId).then((probe) => {
+                        if (!probe || !probe.bytes || probe.bytes === cachedSize) return;
+                        console.log('♻️ Server copy changed', cachedSize, '→', probe.bytes,
+                                    '- updating cache for next open');
+                        if (probe.blob) {
+                            putCachedBookBlob(bookId, 'epub', probe.blob, { title });
+                        } else {
+                            fetch(`${API_URL}/ebooks/${bookId}/download?format=epub`, { cache: 'no-store' })
+                                .then((r) => (r.ok ? r.blob() : null))
+                                .then((b) => { if (b && b.size) putCachedBookBlob(bookId, 'epub', b, { title }); })
+                                .catch(() => {});
+                        }
+                    }).catch(() => {});
                 }
                 _mark('cache_freshness');
                 if (freshBlob) {
@@ -2264,7 +2273,7 @@
                 // Backfill title/author onto the cached record (#54). Runs on
                 // BOTH cache-hit and cache-miss opens, so books cached before
                 // this change get their names filled in on next open.
-                updateCachedBookMeta(bookId, { title, author: bookAuthor });
+                updateCachedBookMeta(bookId, { title, author: bookAuthor, lastOpened: Date.now() });
 
                 opfDoc.querySelectorAll('manifest item').forEach(item => {
                     manifest[item.getAttribute('id')] = item.getAttribute('href');
@@ -6861,6 +6870,7 @@
                         if (!rec) return; // nothing cached to annotate
                         if (meta.title != null)  rec.title = meta.title;
                         if (meta.author != null) rec.author = meta.author;
+                        if (meta.lastOpened != null) rec.lastOpened = meta.lastOpened;   // #361
                         store.put(rec);
                     };
                     tx.oncomplete = () => resolve(true);
@@ -6868,6 +6878,17 @@
                 } catch (e) { resolve(false); }
             });
         }
+
+        // #361: ask Android not to evict cached books (once; best effort).
+        (function requestPersistentStorage() {
+            try {
+                if (navigator.storage && navigator.storage.persist) {
+                    navigator.storage.persisted().then((p) => {
+                        if (!p) navigator.storage.persist().catch(() => {});
+                    }).catch(() => {});
+                }
+            } catch (_) {}
+        })();
 
         // ---- Linked-audiobook pre-cache (#264) ----
         // The reader owns EreaderDB's v3 schema, so it can write the `audio` /
