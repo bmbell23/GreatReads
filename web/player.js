@@ -401,7 +401,21 @@ async function init() {
     {
         const cov = $('cover');
         const absCover = ABS_ID ? `${API_URL}/audiobooks/${encodeURIComponent(ABS_ID)}/cover` : '';
-        if (TITLE) {
+        // #377: Home's exact cover URL (same-origin, natively cached) wins, online and
+        // offline; if it fails, fall through to the title-matched / ABS logic.
+        const homeCover = params.get('cover') || '';
+        const fallbackCover = () => {
+            if (TITLE) {
+                cov.onerror = () => { cov.onerror = null; if (absCover) cov.src = absCover; };
+                cov.src = `${API_URL}/books/cover-by-title?title=${encodeURIComponent(TITLE)}&author=${encodeURIComponent(AUTHOR)}`;
+            } else if (absCover) {
+                cov.src = absCover;
+            }
+        };
+        if (homeCover && homeCover.charAt(0) === '/') {
+            cov.onerror = () => { cov.onerror = null; fallbackCover(); };
+            cov.src = homeCover;
+        } else if (TITLE) {
             cov.onerror = () => { cov.onerror = null; if (absCover) cov.src = absCover; };
             cov.src = `${API_URL}/books/cover-by-title?title=${encodeURIComponent(TITLE)}&author=${encodeURIComponent(AUTHOR)}`;
         } else if (absCover) {

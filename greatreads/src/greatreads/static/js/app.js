@@ -747,9 +747,12 @@ function grOpenEbook(calibreId, titleEnc) {
 }
 // calibreId (optional) links a matching ebook so the player can offer in-book
 // search / read-while-listening (dual-format).
-function grOpenAudio(absId, titleEnc, authorEnc, calibreId) {
+// coverUrl (optional) is the exact cover URL Home shows, so the player hits the
+// same natively-cached resource offline (#377).
+function grOpenAudio(absId, titleEnc, authorEnc, calibreId, coverUrl) {
     const v = Date.now();
     let url = `/player.html?v=${v}&absId=${encodeURIComponent(absId)}&title=${titleEnc}&author=${authorEnc}`;
+    if (coverUrl) url += `&cover=${encodeURIComponent(coverUrl)}`;
     if (calibreId) {
         url += `&bookId=${encodeURIComponent(calibreId)}&format=epub&hasEbook=1`;
     }
@@ -1291,7 +1294,7 @@ function grOpenBookActions(book, opts = {}, keepNav = false) {
         onclick="grOpenEbook('${book.calibre_id}', '${titleEnc}')">
         <i class="fas fa-tablet-alt"></i><span class="fw-bold">Read</span></button></div>`);
     if (canListen) tiles.push(`<div class="col"><button type="button" class="open-type-btn open-type-sm open-type-audio"
-        onclick="grOpenAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}', '${book.calibre_id || ''}')">
+        onclick="grOpenAudio('${book.abs_id}', '${titleEnc}', '${authorEnc}', '${book.calibre_id || ''}', '${(!book.cover_url && coverUrl) ? coverUrl : ''}')">
         <i class="fas fa-headphones"></i><span class="fw-bold">Listen</span></button></div>`);
     if (phys) {
         const physClickable = !!ipReading;

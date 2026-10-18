@@ -721,6 +721,12 @@ public class MainActivity extends Activity {
                 || m.startsWith("image/");
         }
 
+        private static boolean isFontPath(String path) {
+            String p = path.toLowerCase();
+            return p.endsWith(".woff2") || p.endsWith(".woff") || p.endsWith(".ttf")
+                || p.endsWith(".otf") || p.endsWith(".eot") || p.endsWith(".svg");
+        }
+
         // Fetch natively. Returns a response (storing it when it is a cacheable
         // 200), or null when the server answered anything other than 200 (the
         // WebView re-fetches it). Throws IOException on connect/read failure.
@@ -791,7 +797,12 @@ public class MainActivity extends Activity {
                 if (cacheControl != null) rh.put("Cache-Control", cacheControl);
                 if (disposition != null) rh.put("Content-Disposition", disposition);
 
-                boolean cacheable = isCacheableType(mime) && disposition == null && !chunked
+                // #377: :8090 serves Font Awesome webfonts as application/octet-stream;
+                // cache by extension and store/serve them with a proper mime.
+                String urlPath = String.valueOf(url.getPath());
+                boolean fontByExt = isFontPath(urlPath);
+                if (fontByExt) mime = mimeFor(urlPath);
+                boolean cacheable = (fontByExt || isCacheableType(mime)) && disposition == null && !chunked
                     && declared <= CACHE_MAX_BYTES;
                 if (!cacheable) {
                     // Streaming / download / unknown type: never buffer, never cache.
@@ -1297,6 +1308,8 @@ public class MainActivity extends Activity {
         if (p.endsWith(".woff2")) return "font/woff2";
         if (p.endsWith(".woff"))  return "font/woff";
         if (p.endsWith(".ttf"))   return "font/ttf";
+        if (p.endsWith(".otf"))   return "font/otf";
+        if (p.endsWith(".eot"))   return "application/vnd.ms-fontobject";
         if (p.endsWith(".mp3"))   return "audio/mpeg";
         return "application/octet-stream";
     }
