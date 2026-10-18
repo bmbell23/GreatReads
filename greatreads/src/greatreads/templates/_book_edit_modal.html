@@ -105,6 +105,10 @@
                                 <input class="form-control form-control-sm" id="bkeContentStartPct" type="number" min="0" max="100" step="0.1" placeholder="0"></div>
                             <div class="col-3"><label class="form-label small mb-0">Ebook end %</label>
                                 <input class="form-control form-control-sm" id="bkeContentEndPct" type="number" min="0" max="100" step="0.1" placeholder="100"></div>
+                            <!-- #359: reader-detected bounds, shown only when there's no manual value -->
+                            <div class="col-12 d-none small text-muted" id="bkeContentAutoHint">
+                                <span id="bkeContentAutoStart"></span> <span id="bkeContentAutoEnd"></span>
+                                <a href="#" id="bkeContentAutoClear" class="ms-1">Clear auto</a></div>
                             <div class="col-3"><label class="form-label small mb-0">Phys start pg</label>
                                 <input class="form-control form-control-sm" id="bkeContentStartPage" type="number" min="0"></div>
                             <div class="col-3"><label class="form-label small mb-0">Phys end pg</label>

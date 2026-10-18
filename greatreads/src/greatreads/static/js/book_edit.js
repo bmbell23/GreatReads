@@ -244,6 +244,7 @@
          'bkeContentStartSeconds', 'bkeContentEndSeconds']
             .forEach(id => { const el = document.getElementById(id); if (el) el.value = ''; });
         bkeSetGenres([]);
+        bkeRenderAutoHint(null);   // #359
         _bkeResetContributors();   // #192
         if (prefill) {
             const set = (id, v) => { const el = document.getElementById(id); if (el && v != null && v !== '') el.value = v; };
@@ -262,6 +263,39 @@
         bkeRenderCover();
         bootstrap.Modal.getOrCreateInstance(document.getElementById('bkEditModal')).show();
         setTimeout(() => document.getElementById('bkeTitle')?.focus(), 300);
+    }
+
+    // #359: show the reader's auto-detected story bounds beside the manual fields — only the
+    // sides with NO manual value — plus a "Clear auto" link that deletes the stored row (the
+    // reader then re-detects on its next open). b = GET /books/{id} (carries content_auto).
+    function bkeRenderAutoHint(b) {
+        const wrap = document.getElementById('bkeContentAutoHint');
+        if (!wrap) return;
+        const sEl = document.getElementById('bkeContentAutoStart');
+        const eEl = document.getElementById('bkeContentAutoEnd');
+        const a = b && b.content_auto;
+        const t = a && a.titles;
+        const startT = Array.isArray(t) ? [] : ((t && t.start) || []);
+        const endT = Array.isArray(t) ? t : ((t && t.end) || []);
+        const fmt = v => (Math.round(v * 10) / 10) + '%';
+        sEl.textContent = (a && a.start_pct != null && b.content_start_pct == null)
+            ? 'auto start: ' + fmt(a.start_pct) : '';
+        sEl.title = startT.join(', ');
+        eEl.textContent = (a && a.end_pct != null && b.content_end_pct == null)
+            ? 'auto end: ' + fmt(a.end_pct) + (endT.length ? ' (' + endT[0] + ')' : '') : '';
+        eEl.title = endT.join(', ');
+        const show = !!(sEl.textContent || eEl.textContent);
+        wrap.classList.toggle('d-none', !show);
+        const clear = document.getElementById('bkeContentAutoClear');
+        if (clear) clear.onclick = async (ev) => {
+            ev.preventDefault();
+            try {
+                await api('/books/' + b.id + '/content-anchors/auto', { method: 'DELETE' });
+                b.content_auto = null;
+                bkeRenderAutoHint(b);
+                toast('Auto story bounds cleared', 'success');
+            } catch (e) { toast('Could not clear auto bounds', 'danger'); }
+        };
     }
 
     async function bkeOpen(bookId) {
@@ -284,6 +318,7 @@
         set('bkeUniverse', b.universe); set('bkeDate', b.date_published);
         set('bkePages', b.page_count); set('bkeWords', b.word_count); set('bkeIsbn', b.isbn_id);
         set('bkeContentStartPct', b.content_start_pct); set('bkeContentEndPct', b.content_end_pct);
+        bkeRenderAutoHint(b);   // #359
         set('bkeContentStartPage', b.content_start_page); set('bkeContentEndPage', b.content_end_page);
         set('bkeContentStartSeconds', bkeFmtSecs(b.content_start_seconds));
         set('bkeContentEndSeconds', bkeFmtSecs(b.content_end_seconds));
