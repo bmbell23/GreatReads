@@ -16,6 +16,16 @@
     var REFRESH_MS = 5 * 60 * 1000;      // don't re-snapshot on every navigation
     var COVER_LIMIT = 24;                // in-progress lists are small; cap anyway
 
+    // #361: ask Android not to evict cached books/covers (best effort, only if
+    // not already granted).
+    try {
+        if (navigator.storage && navigator.storage.persist) {
+            navigator.storage.persisted().then(function (p) {
+                if (!p) navigator.storage.persist().catch(function () {});
+            }).catch(function () {});
+        }
+    } catch (_) {}
+
     // Diagnostics live in web/gr-diag.js at the site root (served by :8090, and
     // bundled in the APK). Load it if it's reachable — GreatReads pages are always
     // served through the :8090 proxy in real use; opening :8092 directly just

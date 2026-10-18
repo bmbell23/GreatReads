@@ -568,6 +568,10 @@ public class MainActivity extends Activity {
             pendingMainUrl = url;
             view.postDelayed(() -> {
                 if (!started.equals(pendingMainUrl)) return;      // finished or superseded
+                // #361: a slow load on a working network is NOT offline. Only
+                // consider the stall when the OS itself reports no usable network;
+                // a genuinely unreachable host surfaces via onReceivedError.
+                if (isOnline(app)) return;
                 new Thread(() -> {
                     final boolean up = hostReachable();
                     view.post(() -> {
@@ -605,6 +609,9 @@ public class MainActivity extends Activity {
                     int kids;
                     try { kids = Integer.parseInt(String.valueOf(v).trim()); } catch (Exception e) { kids = -1; }
                     if (kids > 0) return;
+                    // #361: a blank read while the network is fine (page still
+                    // painting, quick navigation) must not dump us on offline Home.
+                    if (isOnline(app)) return;
                     NativeDiag.note(app, "blank_page", NativeDiag.d("url", url, "children", kids));
                     android.util.Log.i("EreaderOffline", "blank document after load → offline home: " + url);
                     forcedOfflineReload = true;
@@ -1345,6 +1352,7 @@ public class MainActivity extends Activity {
         if (wv == null) return;
         final String u = wv.getUrl();
         if (u == null || !u.contains(SHELL_HOST) || isBundledPage(u)) return;
+        if (isOnline(getApplicationContext())) return;   // #361: only when truly offline
         new Thread(() -> {
             if (hostReachable()) return;
             wv.post(() -> {
