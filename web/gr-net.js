@@ -82,7 +82,7 @@
       : '#gr-net-banner{display:none;position:sticky;top:0;flex:none;z-index:2147483000;' +
         'box-sizing:border-box;width:100%;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;' +
         'background:#b45309;color:#fff;font:600 13px/1.3 system-ui,sans-serif;' +
-        'padding:calc(6px + env(safe-area-inset-top,0px)) 12px 6px;text-align:center;pointer-events:none}' +
+        'padding:5px 12px;text-align:center;pointer-events:none}' +
         'html.gr-offline #gr-net-banner{display:block}';
     document.head.appendChild(st);
     bannerEl = document.createElement('div');
