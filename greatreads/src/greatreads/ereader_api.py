@@ -948,6 +948,16 @@ def _record_reading_session(book_key, body, today, fmt, minutes, words, mpw, ite
         conn = _gr_db()
         try:
             _ensure_reading_sessions_table(conn)
+            # Midnight split (#364): a session row is filed on its start day and its
+            # activity_date never changes. If this flush's client-local day is LATER than
+            # the session's day, credit this (delta) flush to a continuation row for the
+            # new day (id '<sid>@<date>', same original start so lineage/qualifying
+            # wall-clock hold) and leave the old day's row frozen at what it accrued.
+            ex = conn.execute('SELECT activity_date FROM reading_sessions WHERE id=?',
+                              (str(sid),)).fetchone()
+            row_day = ex['activity_date'] if ex else None
+            if row_day and today > row_day:
+                sid = f'{sid}@{today}'
             with conn:
                 conn.execute(
                     'INSERT INTO reading_sessions'
