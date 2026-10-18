@@ -815,6 +815,15 @@ def _progress_delta(item, prev):
         return a - b
     return 0.0
 
+def _invalidate_auto_wpd():
+    """Drop the cached auto-WPD blend (#369). Never raises."""
+    try:
+        from .services.settings_service import invalidate_auto_wpd_cache
+        invalidate_auto_wpd_cache()
+    except Exception:
+        pass
+
+
 def _record_reading_activity(book_key, item, prev, body):
     """Accumulate today's per-book reading activity for the analytics time-series
     (#30). Best-effort; never raises. Ebook minutes/words are MEASURED (the reader
@@ -921,6 +930,7 @@ def _record_reading_activity(book_key, item, prev, body):
                         (today, bk, fmt, minutes, words, mpw or 0.0, 1 if mpw else 0))
             finally:
                 conn.close()
+        _invalidate_auto_wpd()
     except Exception as e:
         print(f'reading_activity record failed for {book_key}: {e}')
 
