@@ -453,7 +453,20 @@ async function init() {
     }
 
     let savedPos = 0;
-    const resume = (pre && resumeShapeFromRecord(pre)) || await resolveResumePosition();
+    let resume = (pre && resumeShapeFromRecord(pre)) || null;
+    let serverUpdated = resume ? (pre.updated || 0) : 0;
+    if (!resume) {
+        resume = await resolveResumePosition();
+        serverUpdated = resume.updated || 0;
+    }
+    // #379: NEWEST wins between the server record and the position kept on the
+    // phone (server `updated` and local `updatedAt` are both epoch ms). Offline the
+    // server side is empty/stale, so the local spot is used; after reconnect a stale
+    // server value can't overwrite listening done offline.
+    const localPos = readLocalPos();
+    if (localPos && localPos.currentTime > 0 && localPos.updatedAt > serverUpdated) {
+        resume = { kind: 'seconds', value: localPos.currentTime };
+    }
     if (resume.kind === 'seconds') {
         savedPos = resume.value;
     } else if (resume.kind === 'percent') {
@@ -986,6 +999,16 @@ async function resolveResumePosition() {
     //   - the linked ebook id (cross-format: a spot read in the ebook resumes audio)
     const keys = new Set([PROGRESS_KEY]);
     if (ABS_ID) keys.add('abs:' + ABS_ID);
+    // #379: server known-unreachable -> don't wait on it; the phone copy is used.
+    if (window.GRNet && GRNet.online === false) return { kind: 'none' };
+    // Server gather is capped at 3s so a dead link never stalls the resume.
+    return Promise.race([
+        resolveServerResume(keys),
+        new Promise(function (res) { setTimeout(function () { res({ kind: 'none' }); }, 3000); }),
+    ]);
+}
+
+async function resolveServerResume(keys) {
     await resolveEbookSibling();
     if (linkedEbookId) keys.add(linkedEbookId);
 
@@ -1007,7 +1030,8 @@ async function resolveResumePosition() {
     // Ebook winner: resumeShapeFromRecord prefers a chapter-anchored resume
     // (#25) — its chapter title is title-matched against our audio chapters once
     // loaded (loadPart), falling back to percent when there's no match.
-    return resumeShapeFromRecord(valid[0]) || { kind: 'none' };
+    const shape = resumeShapeFromRecord(valid[0]);
+    return shape ? Object.assign({ updated: valid[0].updated || 0 }, shape) : { kind: 'none' };
 }
 
 function curChapterTitle() {
@@ -1346,6 +1370,64 @@ function saveReadingState() {
     } catch (_) {}
 }
 
+// ---------- Phone-kept position (#379) ----------
+// The listening spot lives on the phone too, so it survives the server being
+// unreachable: localStorage gr.pos.audio.<key> = {currentTime (BOOK-global s),
+// duration, chapter, part, partTime, updatedAt (ms)}. Written under every id the
+// book is known by. On open, the NEWER of this and the server record wins
+// (resolveResumePosition / the resume block in init).
+function localPosKeys() {
+    const ks = [];
+    if (PROGRESS_KEY) ks.push(PROGRESS_KEY);
+    if (ABS_ID && ks.indexOf('abs:' + ABS_ID) < 0) ks.push('abs:' + ABS_ID);
+    return ks;
+}
+function readLocalPos() {
+    let best = null;
+    localPosKeys().forEach(function (k) {
+        try {
+            const o = JSON.parse(localStorage.getItem('gr.pos.audio.' + k) || 'null');
+            if (o && typeof o.currentTime === 'number' && o.updatedAt > (best ? best.updatedAt : 0)) best = o;
+        } catch (_) {}
+    });
+    return best;
+}
+function writeLocalPos() {
+    if (!PROGRESS_KEY || !resumeApplied) return;
+    const pos = globalTime();
+    if (!(pos > 0)) return;
+    const total = bookTotal();
+    const rec = JSON.stringify({
+        currentTime: pos, duration: total, chapter: currentChapterIndex(audio.currentTime || 0),
+        part: curPart, partTime: audio.currentTime || 0, updatedAt: Date.now()
+    });
+    try { localPosKeys().forEach(function (k) { localStorage.setItem('gr.pos.audio.' + k, rec); }); } catch (_) {}
+    // Home's offline Currently Reading cards ('gr:wip', same origin) show this %.
+    if (total > 0) {
+        try {
+            const o = JSON.parse(localStorage.getItem('gr:wip') || 'null');
+            if (o && Array.isArray(o.readings)) {
+                let hit = false;
+                o.readings.forEach(function (r) {
+                    const b = r && r.book;
+                    if (!b) return;
+                    if ((EBOOK_ID && b.calibre_id != null && String(b.calibre_id) === String(EBOOK_ID)) ||
+                        (ABS_ID && b.abs_id != null && String(b.abs_id) === String(ABS_ID))) {
+                        r.current_progress_percent = Math.min(100, pos / total * 100);
+                        r.gr_local_at = Date.now();
+                        hit = true;
+                    }
+                });
+                if (hit) localStorage.setItem('gr:wip', JSON.stringify(o));
+            }
+        } catch (_) {}
+    }
+}
+document.addEventListener('visibilitychange', function () {
+    if (document.visibilityState === 'hidden') writeLocalPos();
+});
+audio.addEventListener('seeked', writeLocalPos);
+
 function saveProgress() {
     // Keep the active-book marker fresh during long locked-screen listening so
     // the "/" bootstrap's staleness check still passes after hours (#198).
@@ -1355,6 +1437,7 @@ function saveProgress() {
     if (!PROGRESS_KEY || !resumeApplied) return;
     if (!_session) initSession();
     saveReadingState();
+    writeLocalPos();   // #379: phone-kept copy (works with no server)
     const pos = globalTime();
     const total = bookTotal();
     const stamp = currentChapterStamp();   // #25 cross-format resume anchor

@@ -364,12 +364,35 @@ function grLoadWip() {
     } catch (_) { return null; }
 }
 
+// #379: the reader/player/physical popup stamp a reading in 'gr:wip' with the
+// position kept on the phone (current_progress_percent/page + gr_local_at). A live
+// (or native-cached, stale) /readings response must not wipe that while the server
+// is unreachable or the outbox still holds unsent progress — so carry the local
+// value over; otherwise the server wins and the marker is dropped.
+function grMergeLocalPos(readings, keepLocal) {
+    const old = grLoadWip();
+    if (!old || !keepLocal) return readings;
+    const byId = {};
+    old.readings.forEach(r => { if (r && r.gr_local_at) byId[r.id] = r; });
+    readings.forEach(r => {
+        const o = r && byId[r.id];
+        if (!o) return;
+        r.current_progress_percent = o.current_progress_percent;
+        if (o.current_progress_page != null) r.current_progress_page = o.current_progress_page;
+        r.gr_local_at = o.gr_local_at;
+    });
+    return readings;
+}
+
 async function loadCurrentlyReading() {
     const container = document.getElementById('currently-reading');
     let readings, stats;
     try {
         readings = await GreatReads.apiCall('/readings/?status=in_progress&limit=1000', { silent: true });
         if (!Array.isArray(readings)) throw new Error('bad readings payload');
+        let pend = 0;
+        try { pend = (window.GROutbox && GROutbox.count) ? (await GROutbox.count()) || 0 : 0; } catch (_) {}
+        grMergeLocalPos(readings, pend > 0 || (window.GRNet && !GRNet.online));
         homeIPReadings = readings || [];
 
         if (!readings || readings.length === 0) {

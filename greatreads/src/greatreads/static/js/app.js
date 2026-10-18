@@ -1939,6 +1939,15 @@ function grResetCreditMark(key) {
 // #370: keep the on-phone Currently Reading copy ('gr:wip', see index.html) in step
 // with a physical save so offline Home shows the new page/percent.
 function grSaveWipProgress(readingId, pct, totalPages) {
+    // #379: also update the in-memory reading the popup/Home card holds, so the NEXT
+    // physical session in this same page view starts from the page just saved (not
+    // the stale one loaded at render time). gr_local_at marks it as phone-kept.
+    const _ar = grActivePhysicalReading;
+    if (_ar && _ar.id === readingId) {
+        _ar.current_progress_percent = pct;
+        if (totalPages > 0) _ar.current_progress_page = Math.round(pct / 100 * totalPages);
+        _ar.gr_local_at = Date.now();
+    }
     try {
         const o = JSON.parse(localStorage.getItem('gr:wip') || 'null');
         if (!o || !Array.isArray(o.readings)) return;
@@ -1946,6 +1955,7 @@ function grSaveWipProgress(readingId, pct, totalPages) {
             if (r && r.id === readingId) {
                 r.current_progress_percent = pct;
                 if (totalPages > 0) r.current_progress_page = Math.round(pct / 100 * totalPages);
+                r.gr_local_at = Date.now();
             }
         });
         localStorage.setItem('gr:wip', JSON.stringify(o));

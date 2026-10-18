@@ -3865,6 +3865,23 @@
                     ts: Date.now()
                 };
                 localStorage.setItem(STATE_KEY, JSON.stringify(state));
+                // #379: keep Home's offline Currently Reading card ('gr:wip', same
+                // origin) in step so it shows this position with no server.
+                try {
+                    const _w = JSON.parse(localStorage.getItem('gr:wip') || 'null');
+                    if (_w && Array.isArray(_w.readings)) {
+                        let _hit = false;
+                        _w.readings.forEach(r => {
+                            const b = r && r.book;
+                            if (b && b.calibre_id != null && String(b.calibre_id) === String(bookId)) {
+                                r.current_progress_percent = Math.max(0, Math.min(100, state.storyFrac * 100));
+                                r.gr_local_at = state.ts;
+                                _hit = true;
+                            }
+                        });
+                        if (_hit) localStorage.setItem('gr:wip', JSON.stringify(_w));
+                    }
+                } catch (_) {}
                 // Mirror to the backend (debounced) so the position survives
                 // APK reinstalls and follows the reader to other devices.
                 schedulePushReadingState(state);
