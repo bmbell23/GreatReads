@@ -2106,20 +2106,84 @@ def ambient_tracks():
     d = _load_ambient()
     return {'tracks': [{'id': k, 'name': v.get('name', k)} for k, v in d.items()]}
 
+_HOST_MEDIA_ROOT = '/mnt/boston/media'   # host path of the MEDIA_ROOT mount
+_AMBIENT_SEPS = ('\uff5c', '|', '\u2013', '\u2014', '\u29f8', '/', ':', '\uff1a', ' - ')
+
+def _ambient_short_title(s):
+    """Pure: make a short display title from a video title or filename."""
+    s = os.path.splitext(s or '')[0] if (s or '').lower().endswith(
+        _AMBIENT_AUDIO_EXTS) else (s or '')
+    s = re.sub(r'\[[^\]]*\]|\([^)]*\)|\uff08[^\uff09]*\uff09|\u3010[^\u3011]*\u3011', ' ', s)
+    s = re.sub(r'#\w+', ' ', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    full = s
+    cut = len(s)
+    for sep in _AMBIENT_SEPS:
+        i = s.find(sep)
+        if i != -1:
+            cut = min(cut, i)
+    for i, ch in enumerate(s[:cut]):
+        if ord(ch) > 0x2500 and unicodedata.category(ch) in ('So', 'Sk'):
+            cut = i
+            break
+    t = re.sub(r'\s+', ' ', s[:cut]).strip(' -_.,')
+    if not t:
+        t = full
+    if t and t == t.lower():
+        t = t.title()
+    if len(t) > 40:
+        head, nxt = t[:40], t[40]
+        t = head.rsplit(' ', 1)[0] if (nxt != ' ' and ' ' in head) else head
+        t = t.rstrip(' -_.,&')
+    return t.strip()
+
 @router.post('/api/ambient/tracks')
 async def ambient_add(request: Request):
-    """Add a track: {name, path} where path is under the media root."""
-    body = await request.json()
-    name = (body.get('name') or '').strip()
-    safe = _safe_media_path((body.get('path') or '').strip())
-    if not name or not safe or not os.path.isfile(safe):
-        raise HTTPException(status_code=400, detail='Need a name and a valid audio file under the media root')
+    """Add a track: {path, name?, source_title?, source_url?}. path may be a host
+    (/mnt/boston/media/...), container (/media/...) or media-relative path.
+    Idempotent by resolved path. Returns {id, name, created}."""
+    try:
+        body = await request.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=400, detail='Send a JSON body with a path')
+    raw = str(body.get('path') or '').strip()
+    if not raw:
+        raise HTTPException(status_code=400, detail='path is required')
+    if raw == _HOST_MEDIA_ROOT or raw.startswith(_HOST_MEDIA_ROOT + '/'):
+        raw = MEDIA_ROOT + raw[len(_HOST_MEDIA_ROOT):]
+    safe = _safe_media_path(raw)
+    if not safe:
+        raise HTTPException(status_code=400, detail='File is outside the media folder')
+    if not os.path.isfile(safe):
+        raise HTTPException(status_code=400, detail='File not found')
+    if not safe.lower().endswith(_AMBIENT_AUDIO_EXTS):
+        raise HTTPException(status_code=400, detail='Not an audio file (' + ', '.join(_AMBIENT_AUDIO_EXTS) + ')')
+    source_title = str(body.get('source_title') or '').strip()
+    source_url = str(body.get('source_url') or '').strip()
+    name = str(body.get('name') or '').strip()
+    if not name:
+        name = (_ambient_short_title(source_title)
+                or _ambient_short_title(os.path.basename(safe))
+                or os.path.basename(safe))
     with _ambient_lock:
         d = _load_ambient()
+        for k, v in d.items():
+            try:
+                if os.path.realpath(v.get('path', '')) == safe:
+                    return {'id': k, 'name': v.get('name', k), 'created': False}
+            except Exception:
+                continue
         tid = uuid.uuid4().hex[:10]
-        d[tid] = {'name': name, 'path': safe}
+        entry = {'name': name, 'path': safe}
+        if source_title:
+            entry['source_title'] = source_title
+        if source_url:
+            entry['source_url'] = source_url
+        d[tid] = entry
         _save_ambient(d)
-    return {'id': tid, 'name': name}
+    return {'id': tid, 'name': name, 'created': True}
 
 @router.put('/api/ambient/tracks/{track_id}')
 async def ambient_rename(track_id: str, request: Request):
