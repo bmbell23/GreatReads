@@ -56,6 +56,22 @@ packages = ["greatreads"]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 pythonpath = ["."]
+addopts = "-ra"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.coverage.run]
+branch = true
+source = ["greatreads"]
+omit = ["*/tests/*"]
+
+[tool.coverage.report]
+show_missing = true
+skip_empty = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.:",
+    "raise NotImplementedError",
+]
 
 [tool.black]
 line-length = 88
