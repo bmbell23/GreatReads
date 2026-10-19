@@ -73,3 +73,8 @@ web/ereader.apk.json
 
 # Build artifact: the stamp baked into the APK, written by build-app.sh (#277)
 web/build-stamp.txt
+
+# Test coverage artifacts (#386)
+coverage.lcov
+htmlcov/
+.coverage
