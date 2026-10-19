@@ -1767,6 +1767,20 @@ def _first_author(item):
     name = a[0] if a else (item.get('author') or '')
     return name.split(',')[0].strip()
 
+def _all_authors(item):
+    """Every author, normalized, lead author first. Comma-splits like
+    _first_author, so ABS's 'Janci Patterson, Brandon Sanderson' and Calibre's
+    ['Brandon Sanderson', 'Janci Patterson'] share keys even though their lead
+    authors differ (#383, Blightfall)."""
+    names = item.get('authors') or [item.get('author') or '']
+    out = []
+    for name in names:
+        for part in str(name or '').split(','):
+            na = _norm_author(part.strip())
+            if na and na not in out:
+                out.append(na)
+    return out or [_norm_author(_first_author(item))]
+
 # A "part" marker inside an ABS title: "(Part 1 of 2)", "(1 of 2)", "Disc 3 of
 # 9", or a bare "... 2 of 2". Captures (index, total). We only treat it as a
 # real multi-part set when total > 1 (see _group_editions).
@@ -1992,13 +2006,15 @@ def match_works(calibre_items, abs_items, include_audio_only=True):
             by_isbn[str(a['isbn']).strip()].append(ed)
         if a.get('asin'):
             by_asin[str(a['asin']).strip()].append(ed)
-        na = _norm_author(_first_author(a))
+        # #383: index under every author, so co-authors listed in a different
+        # order on each side still meet on title + an overlapping author.
         t = a['title']
-        by_ta[(_norm(t), na)].append(ed)
-        by_ta_sub[(_norm(t.split(':')[0]), na)].append(ed)
         ks = _norm(_strip_edition(_strip_part(t.split(':')[0])))
-        if ks:
-            by_ta_strip[(ks, na)].append(ed)
+        for na in _all_authors(a):
+            by_ta[(_norm(t), na)].append(ed)
+            by_ta_sub[(_norm(t.split(':')[0]), na)].append(ed)
+            if ks:
+                by_ta_strip[(ks, na)].append(ed)
 
     consumed = set()
 
@@ -2018,17 +2034,21 @@ def match_works(calibre_items, abs_items, include_audio_only=True):
         if c.get('asin'):
             for ed in by_asin.get(str(c['asin']).strip(), []):
                 add(ed)
-        na = _norm_author(_first_author(c))
-        for ed in by_ta.get((_norm(c['title']), na), []):
-            add(ed)
-        for ed in by_ta_sub.get((_norm(c['title'].split(':')[0]), na), []):
-            add(ed)
         ks = _norm(_strip_edition(c['title'].split(':')[0]))
-        if ks:
-            for ed in by_ta_strip.get((ks, na), []):
+        for na in _all_authors(c):
+            for ed in by_ta.get((_norm(c['title']), na), []):
                 add(ed)
-        # Standard audiobook before dramatized; stable otherwise.
-        found.sort(key=lambda e: 0 if e['kind'] == 'audiobook' else 1)
+            for ed in by_ta_sub.get((_norm(c['title'].split(':')[0]), na), []):
+                add(ed)
+            if ks:
+                for ed in by_ta_strip.get((ks, na), []):
+                    add(ed)
+        # Standard audiobook before dramatized, then editions sharing the lead
+        # author (so a co-author match never displaces the usual primary, #383);
+        # stable otherwise.
+        lead = _norm_author(_first_author(c))
+        found.sort(key=lambda e: (0 if e['kind'] == 'audiobook' else 1,
+                                  0 if _norm_author(_first_author(e['_item'])) == lead else 1))
         return found
 
     merged = []
