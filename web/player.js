@@ -280,6 +280,28 @@ async function loadLocalSession(part) {
 // per part, so a multi-track book otherwise had to stream). Only when EVERY track
 // blob is present — else we leave the single streaming part in place. Book-absolute
 // chapters (if the manifest carries them) are sliced + rebased to each track window.
+// #396: those synthetic track-parts are plumbing, not edition parts. The UI
+// (chapter drawer, chapter line + bar, prev/next) works on the book-global
+// chapters and timeline instead, so a cached 56-file book still shows all its
+// chapters and never "Part 6/56". Null = the UI uses the part's own chapters.
+let BOOK_CHAPTERS = null;
+function uiChapters() { return BOOK_CHAPTERS || chapters; }
+function uiTime() { return BOOK_CHAPTERS ? globalTime() : (audio.currentTime || 0); }
+function uiSeek(t) { if (BOOK_CHAPTERS) seekGlobal(t); else audio.currentTime = t; }
+// chapterBounds() over the UI's chapter list + timeline.
+function uiBounds(t) {
+    const list = uiChapters();
+    const total = BOOK_CHAPTERS ? bookTotal() : partTotal();
+    let ci = -1;
+    for (let i = 0; i < list.length; i++) {
+        if (t >= (list[i].start || 0)) ci = i; else break;
+    }
+    if (ci < 0) return { ci: -1, start: 0, end: total };
+    const start = list[ci].start || 0;
+    let end = list[ci].end;
+    if (!(end > start)) end = (ci + 1 < list.length) ? (list[ci + 1].start || total) : total;
+    return { ci, start, end };
+}
 async function maybeExpandLocalTrackParts() {
     if (!PARTS || PARTS.length !== 1) return;       // multi-part editions untouched
     const absId = PARTS[0].absId;
@@ -307,6 +329,9 @@ async function maybeExpandLocalTrackParts() {
         return { absId, ino: t.ino, title: t.filename || `Track ${idx + 1}`,
                  duration: dur, chapters, _localTrack: true };
     });
+    BOOK_CHAPTERS = bookChapters.length
+        ? bookChapters.map(c => ({ title: c.title, start: c.start || 0, end: c.end }))
+        : null;
     console.log(`[#263] ${tracks.length} cached tracks → parts (local, gapless)`);
 }
 
@@ -764,17 +789,18 @@ function updateUI() {
     $('sync-btn').classList.toggle('behind', gt < _maxPos - 5);
 
     // ---- Chapter bar (within the current part) ----
-    const { ci, start, end } = chapterBounds(t);
+    const ct = uiTime();
+    const { ci, start, end } = uiBounds(ct);
     const clen = Math.max(0, end - start);
-    const cpos = Math.max(0, Math.min(t - start, clen));
+    const cpos = Math.max(0, Math.min(ct - start, clen));
     if (!chScrubbing) { $('ch-scrubber').value = clen ? Math.round((cpos / clen) * 1000) : 0; fillRange($('ch-scrubber')); }
     $('ch-elapsed').textContent = fmt(cpos);
     $('ch-remaining').textContent = '-' + fmt(Math.max(0, clen - cpos) / rate);
     $('ch-pct').textContent = (clen ? ((cpos / clen) * 100).toFixed(1) : '0.0') + '%';
 
-    const ch = ci >= 0 ? chapters[ci] : null;
+    const ch = ci >= 0 ? uiChapters()[ci] : null;
     let ctitle = ch ? (ch.title || `Chapter ${ci + 1}`) : '';
-    if (PARTS.length > 1) ctitle = (ctitle ? ctitle + ' · ' : '') + `Part ${curPart + 1}/${PARTS.length}`;
+    if (PARTS.length > 1 && !BOOK_CHAPTERS) ctitle = (ctitle ? ctitle + ' · ' : '') + `Part ${curPart + 1}/${PARTS.length}`;
     // #281: chapter now lives in the .meta block under author + title, not the top bar.
     $('meta-chapter').textContent = ctitle;
     const rows = $('chapter-list').children;
@@ -800,6 +826,12 @@ function skip(delta) {
     seekGlobal(globalTime() + delta);
 }
 function gotoChapter(i) {
+    if (BOOK_CHAPTERS) {                     // #396: book-global chapters
+        if (i >= BOOK_CHAPTERS.length) return;
+        seekGlobal(BOOK_CHAPTERS[Math.max(0, i)].start || 0);
+        if (audio.paused) audio.play().catch(() => {});
+        return;
+    }
     if (i < 0) {
         // Before the first chapter of this part — go to the previous part's end.
         if (curPart > 0) loadPart(curPart - 1, Math.max(0, partDur(curPart - 1) - 1), !audio.paused);
@@ -814,12 +846,13 @@ function gotoChapter(i) {
     if (audio.paused) audio.play().catch(() => {});
 }
 function prevChapter() {
-    const ci = currentChapterIndex(audio.currentTime || 0);
+    const t = uiTime();
+    const { ci, start } = uiBounds(t);
     // If >3s into the chapter, restart it; otherwise jump to the previous one.
-    if (ci >= 0 && (audio.currentTime - (chapters[ci].start || 0)) > 3) gotoChapter(ci);
+    if (ci >= 0 && (t - start) > 3) gotoChapter(ci);
     else gotoChapter(ci - 1);
 }
-function nextChapter() { gotoChapter(currentChapterIndex(audio.currentTime || 0) + 1); }
+function nextChapter() { gotoChapter(uiBounds(uiTime()).ci + 1); }
 
 $('play').addEventListener('click', togglePlay);
 $('back30').addEventListener('click', () => skip(-30));
@@ -924,14 +957,14 @@ scrubber.addEventListener('change', () => {
 // Chapter scrubber — seeks within the current chapter only.
 const chScrubber = $('ch-scrubber');
 chScrubber.addEventListener('input', () => { chScrubbing = true;
-    const { start, end } = chapterBounds(audio.currentTime || 0);
+    const { start, end } = uiBounds(uiTime());
     const clen = Math.max(0, end - start);
     $('ch-elapsed').textContent = fmt((chScrubber.value / 1000) * clen);
     fillRange(chScrubber); });
 chScrubber.addEventListener('change', () => {
-    const { start, end } = chapterBounds(audio.currentTime || 0);
+    const { start, end } = uiBounds(uiTime());
     const clen = Math.max(0, end - start);
-    audio.currentTime = start + (chScrubber.value / 1000) * clen;
+    uiSeek(start + (chScrubber.value / 1000) * clen);
     chScrubbing = false;
 });
 
@@ -939,7 +972,7 @@ chScrubber.addEventListener('change', () => {
 function renderChapters() {
     const list = $('chapter-list');
     list.innerHTML = '';
-    chapters.forEach((ch, i) => {
+    uiChapters().forEach((ch, i) => {
         const row = document.createElement('div');
         row.className = 'ch-row';
         row.innerHTML = `<span>${(ch.title || 'Chapter ' + (i + 1)).replace(/</g, '&lt;')}</span>`
