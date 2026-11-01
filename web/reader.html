@@ -5369,6 +5369,9 @@
         async function handleSelectionMaybe() {
             let range = getEpubSelectionRange();
             if (!range) return false;
+            // The union below edits the live selection range; don't let the
+            // jump guard revert it (#399).
+            _selGuardMuteUntil = Date.now() + 500;
 
             // Capture and clear immediately so the re-wrap at the end
             // (which sets the selection again and re-arms the settle
@@ -5705,6 +5708,92 @@
             return { x: r.right, y: r.top + r.height / 2 };
         }
 
+        // ---- Column-aware caret resolution (#399) ----
+        // Chromium's point→caret hit-test is unreliable over BLANK space in
+        // our multi-column + translateX layout: the column gap, the gap
+        // between the two columns of a spread, the empty foot of a column
+        // before a forced chapter break, scene-break spacers, paragraph
+        // margins. Over those it resolves to a far-off caret (often the top
+        // of the next column), which is the "selection jumps" bug. These
+        // helpers find the nearest REAL text line inside the column the
+        // finger is over, so a drag across blank space sticks to the closest
+        // text instead of teleporting.
+
+        // Visible column the screen x falls in, and its text box edges.
+        function _columnAtX(x) {
+            const cc = currentColumnCount || 1;
+            const slot = (pageWidth || window.innerWidth) / cc;
+            const k = Math.max(0, Math.min(cc - 1, Math.floor(x / slot)));
+            const left = k * slot + SIDE_PADDING;
+            return { k, left, right: left + slot - 2 * SIDE_PADDING };
+        }
+
+        function _rawCaretAt(x, y) {
+            if (document.caretRangeFromPoint) return document.caretRangeFromPoint(x, y);
+            if (document.caretPositionFromPoint) {
+                const p = document.caretPositionFromPoint(x, y);
+                if (!p) return null;
+                const r = document.createRange();
+                r.setStart(p.offsetNode, p.offset);
+                r.collapse(true);
+                return r;
+            }
+            return null;
+        }
+
+        // Screen rect of a boundary point. A collapsed range often reports a
+        // zero rect in Chromium, so measure the adjacent character instead.
+        function _pointRect(node, offset) {
+            try {
+                const r = document.createRange();
+                if (node.nodeType === Node.TEXT_NODE && node.length) {
+                    if (offset < node.length) { r.setStart(node, offset); r.setEnd(node, offset + 1); }
+                    else { r.setStart(node, offset - 1); r.setEnd(node, offset); }
+                    const rects = r.getClientRects();
+                    // A char split across a line wrap has two rects; the
+                    // boundary sits on the one nearest the offset.
+                    const rr = offset < node.length ? rects[0] : rects[rects.length - 1];
+                    if (rr && rr.height) {
+                        const x = offset < node.length ? rr.left : rr.right;
+                        return { x, y: rr.top + rr.height / 2, h: rr.height };
+                    }
+                }
+                r.setStart(node, offset);
+                r.collapse(true);
+                const b = r.getBoundingClientRect();
+                if (b && b.height) return { x: b.left, y: b.top + b.height / 2, h: b.height };
+            } catch (_) {}
+            return null;
+        }
+
+        // Nearest caret to (x, y) that lands on real book text in the column
+        // under x. Scans outward vertically when (x, y) is over blank space.
+        // Returns a collapsed Range or null (hold position).
+        function _resolveCaretNear(x, y) {
+            const content = document.getElementById('epub-content');
+            if (!content) return null;
+            const col = _columnAtX(x);
+            const cx = Math.max(col.left + 1, Math.min(col.right - 1, x));
+            const top = 0, bottom = window.innerHeight;
+            for (let i = 0; i <= 30; i++) {
+                // 0, +6, -6, +12, -12, … up to ±90px
+                const dy = i === 0 ? 0 : (i % 2 ? 1 : -1) * Math.ceil(i / 2) * 6;
+                const yy = y + dy;
+                if (yy < top || yy > bottom) continue;
+                const caret = _rawCaretAt(cx, yy);
+                if (!caret || !content.contains(caret.startContainer)) continue;
+                if (caret.startContainer.nodeType !== Node.TEXT_NODE) continue;
+                const pr = _pointRect(caret.startContainer, caret.startOffset);
+                if (!pr) continue;
+                // Must be in THIS column and on a line near where we probed;
+                // otherwise Chromium resolved somewhere else entirely.
+                if (pr.x < col.left - 6 || pr.x > col.right + 6) continue;
+                if (Math.abs(pr.y - yy) > pr.h * 1.5) continue;
+                return caret;
+            }
+            return null;
+        }
+
         function _onHandlePointerMove(e) {
             if (!_draggingHandle || !_draggingHLId) return;
             e.preventDefault();
@@ -5713,31 +5802,10 @@
             // Hit-test slightly LEFT of and ABOVE the finger: left so the caret
             // lands under the fingertip instead of biasing to its right; up so
             // the finger doesn't occlude the target line. Both px are tunable.
-            const x = e.clientX - 8;
-            const y = e.clientY - 12;
-            let caret = null;
-            if (document.caretRangeFromPoint) {
-                caret = document.caretRangeFromPoint(x, y);
-            } else if (document.caretPositionFromPoint) {
-                const p = document.caretPositionFromPoint(x, y);
-                if (p) {
-                    caret = document.createRange();
-                    caret.setStart(p.offsetNode, p.offset);
-                    caret.collapse(true);
-                }
-            }
+            // Over blank space this snaps to the nearest text line in the
+            // finger's column rather than freezing or jumping (#399).
+            const caret = _resolveCaretNear(e.clientX - 8, e.clientY - 12);
             if (!caret) return;
-            // Reject hits that resolve OUTSIDE the book text (margins, gaps,
-            // overlays) or land far from the finger — these misfires are what
-            // make the selection "snap to the opposite side". On a rejected
-            // hit the handle simply holds position for this frame.
-            const _content = document.getElementById('epub-content');
-            if (!_content || !_content.contains(caret.startContainer)) return;
-            const _cr = caret.getBoundingClientRect();
-            if (_cr && _cr.height) {
-                const _lineH = _cr.height || 24;
-                if (Math.abs((_cr.top + _cr.height / 2) - y) > _lineH * 2.5) return;
-            }
             try {
                 if (_draggingHandle === 'start') {
                     // Don't let start cross end
@@ -6693,16 +6761,136 @@
         // adjusting the handles. Handle-drag adjustments fire
         // selectionchange but NOT touch events, so this is the only path
         // that catches post-release tweaks.
+        // ---- Native-selection jump guard (#399) ----
+        // Native handle drags give us selectionchange but no touch points, so
+        // we can't re-resolve the finger ourselves. What we CAN see is the
+        // moving endpoint teleporting: a real drag moves it a line or so per
+        // event, while a blank-space misfire throws it many lines away, into
+        // another column, or off the visible page (see _resolveCaretNear).
+        // On such a leap we put the endpoint back where it last was. A leap
+        // that is then confirmed by further *moving* events in the same spot
+        // (a genuinely fast drag) is accepted; a finger resting over blank
+        // space keeps producing the same far caret and stays rejected.
+        let _selGuard = null;        // { a:{n,o,r}, f:{n,o,r} } last good selection
+        let _selGuardPending = null; // { pt, count } unconfirmed far leap
+        // Our own code moves the selection too (handleSelectionMaybe unions a
+        // re-selection with an existing highlight through the live range);
+        // those programmatic leaps must not be reverted.
+        let _selGuardMuteUntil = 0;
+        let _selJumpLogs = 0;
+        const SEL_JUMP_LINES = 3;    // a leap beyond this many lines is suspect
+        const SEL_JUMP_CONFIRM = 3;  // moving events in one spot before we believe it
+
+        function _selPt(node, offset) {
+            return { n: node, o: offset, r: _pointRect(node, offset) };
+        }
+        function _samePt(p, node, offset) { return p && p.n === node && p.o === offset; }
+
+        // Why `to` is an implausible step from `from`, or null if it's fine.
+        function _selLeapReason(from, to) {
+            if (!from || !from.r || !to || !to.r) return null;
+            const w = window.innerWidth;
+            if (to.r.x < 0 || to.r.x > w) return 'offscreen';
+            const dk = _columnAtX(to.r.x).k - _columnAtX(from.r.x).k;
+            if (dk) {
+                // Crossing the spread is legit only at the column ends: bottom
+                // of left → top of right going forward, the reverse going back.
+                const h = window.innerHeight;
+                const ok = dk === 1  ? (from.r.y > h * 0.6 && to.r.y < h * 0.4)
+                         : dk === -1 ? (from.r.y < h * 0.4 && to.r.y > h * 0.6)
+                         : false;
+                return ok ? null : 'column';
+            }
+            const lineH = from.r.h || 24;
+            return Math.abs(to.r.y - from.r.y) > lineH * SEL_JUMP_LINES ? 'lines' : null;
+        }
+
+        function _logSelJump(reason, from, to, verdict) {
+            if (!window.GRDiag || _selJumpLogs >= 30) return;
+            _selJumpLogs++;
+            const el = to.n && (to.n.nodeType === Node.TEXT_NODE ? to.n.parentElement : to.n);
+            try {
+                GRDiag.log('sel_jump', {
+                    reason, verdict,
+                    from: from.r && [Math.round(from.r.x), Math.round(from.r.y)],
+                    to: to.r && [Math.round(to.r.x), Math.round(to.r.y)],
+                    el: el ? (el.tagName + (el.className ? '.' + String(el.className).split(/\s+/).join('.') : '')) : null,
+                    cols: currentColumnCount, page: currentEpubPage,
+                    book: bookId,
+                });
+            } catch (_) {}
+        }
+
+        // Returns true if the change was rejected (selection restored).
+        function _guardSelectionJump(sel) {
+            if (_draggingHandle) { _selGuard = null; return false; } // custom handles own it
+            const an = sel.anchorNode, ao = sel.anchorOffset;
+            const fn = sel.focusNode,  fo = sel.focusOffset;
+            const prev = _selGuard;
+            // Unchanged (e.g. the event from our own restore): keep any
+            // pending confirmation as it is.
+            if (prev && _samePt(prev.a, an, ao) && _samePt(prev.f, fn, fo)) return false;
+            if (Date.now() < _selGuardMuteUntil) {
+                _selGuard = { a: _selPt(an, ao), f: _selPt(fn, fo) };
+                _selGuardPending = null;
+                return false;
+            }
+            // Exactly one endpoint moved = a drag. Anything else (fresh
+            // long-press, programmatic set, both changed) resets the baseline.
+            let fixed = null, moved = null, movedIsFocus = true, oldMoving = null;
+            if (prev) {
+                if (_samePt(prev.a, an, ao) && !_samePt(prev.f, fn, fo)) {
+                    fixed = prev.a; oldMoving = prev.f; moved = _selPt(fn, fo);
+                } else if (_samePt(prev.f, fn, fo) && !_samePt(prev.a, an, ao)) {
+                    fixed = prev.f; oldMoving = prev.a; moved = _selPt(an, ao); movedIsFocus = false;
+                } else if (_samePt(prev.a, fn, fo) && !_samePt(prev.f, an, ao)) {
+                    fixed = prev.a; oldMoving = prev.f; moved = _selPt(an, ao); movedIsFocus = false; // roles swapped
+                } else if (_samePt(prev.f, an, ao) && !_samePt(prev.a, fn, fo)) {
+                    fixed = prev.f; oldMoving = prev.a; moved = _selPt(fn, fo);
+                }
+            }
+            const accept = () => {
+                _selGuard = { a: _selPt(an, ao), f: _selPt(fn, fo) };
+                _selGuardPending = null;
+                return false;
+            };
+            if (!moved) return accept();
+            const reason = _selLeapReason(oldMoving, moved);
+            if (!reason) return accept();
+            // Far leap. Count it toward confirmation only if it MOVED since
+            // the last far leap but stayed near it (a real fast drag).
+            const pend = _selGuardPending;
+            if (pend && pend.pt.r && moved.r &&
+                !(pend.pt.n === moved.n && pend.pt.o === moved.o) &&
+                !_selLeapReason(pend.pt, moved)) {
+                pend.pt = moved; pend.count++;
+            } else if (!pend || !(pend.pt.n === moved.n && pend.pt.o === moved.o)) {
+                _selGuardPending = { pt: moved, count: 1 };
+            }
+            if (_selGuardPending.count >= SEL_JUMP_CONFIRM) {
+                _logSelJump(reason, oldMoving, moved, 'accepted');
+                return accept();
+            }
+            _logSelJump(reason, oldMoving, moved, 'rejected');
+            try {
+                if (movedIsFocus) sel.setBaseAndExtent(fixed.n, fixed.o, oldMoving.n, oldMoving.o);
+                else              sel.setBaseAndExtent(oldMoving.n, oldMoving.o, fixed.n, fixed.o);
+            } catch (_) { return accept(); }
+            return true;
+        }
+
         function onSelectionChangeForSave() {
             const sel = window.getSelection();
             if (!sel || sel.isCollapsed || sel.rangeCount === 0) {
                 if (_selSettleTimer) { clearTimeout(_selSettleTimer); _selSettleTimer = null; }
                 if (_overlaySelTimer) { clearTimeout(_overlaySelTimer); _overlaySelTimer = null; }
+                _selGuard = null; _selGuardPending = null;
                 return;
             }
             const range = sel.getRangeAt(0);
             const content = document.getElementById('epub-content');
             if (content && content.contains(range.endContainer)) {
+                if (content.contains(range.startContainer)) _guardSelectionJump(sel);
                 scheduleSelectionSettleSave();
                 return;
             }
