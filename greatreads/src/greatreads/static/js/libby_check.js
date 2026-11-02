@@ -252,7 +252,16 @@ function _libbyFmtLibs(fmt) {
     // Prefer a harvestable library among equally-available ones (#298) so the
     // default selection is the one that can complete end to end.
     // A card Libby refused (#339) goes last, whatever its availability.
-    return (fmt.libraries || []).slice().sort((a, b) =>
+    // The engine can repeat a library several times per edition (#401):
+    // keep one entry per card + edition.
+    const seen = new Set();
+    const libs = (fmt.libraries || []).filter(l => {
+        const k = l.cardId + '|' + l.titleId;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    });
+    return libs.sort((a, b) =>
         ((libbyCardDead(a.cardId) ? 1 : 0) - (libbyCardDead(b.cardId) ? 1 : 0)) ||
         ((b.isAvailable ? 1 : 0) - (a.isAvailable ? 1 : 0)) ||
         ((libbyCanHarvest(b.cardId) ? 1 : 0) - (libbyCanHarvest(a.cardId) ? 1 : 0)));
@@ -296,11 +305,14 @@ function libbyFormatsHtml(c) {
         // #298: audiobooks only harvest on a card attached to the browser chip. On
         // any other card the borrow still works, but it's borrow-only (no harvest
         // attempt) and the loan stays out for manual fetch + return.
-        const manual = s.media === 'audiobook' && sel && sel.isAvailable && !fmt.onHold
-                       && !libbyCanHarvest(sel.cardId);
+        // #401: onHold is title-level, so a hold at ONE library must not block
+        // borrowing a copy another library has on the shelf right now.
+        const canBorrow = !!(sel && sel.isAvailable);
+        const manual = s.media === 'audiobook' && canBorrow && !libbyCanHarvest(sel.cardId);
         const borrowFn = manual ? 'libbyBorrowAudiobookManual' : s.fn;
-        const harvestBadge = (s.media === 'audiobook' && sel && sel.isAvailable && !fmt.onHold)
+        const harvestBadge = (s.media === 'audiobook' && canBorrow && !(ownThis && fmt.onHold))
             ? libbyHarvestBadge(sel.cardId) : '';
+        const onHoldBadge = '<span class="badge bg-info text-dark me-1"><i class="fas fa-clock me-1"></i>On hold</span>';
         let action, avail;
         if (ownThis) {
             // #292: owning a format is NOT evidence the file is any good — a bad
@@ -323,18 +335,20 @@ function libbyFormatsHtml(c) {
             }
             action = badge + again;
             avail = '<span class="text-success small">In your library</span>';
-        } else if (fmt.onHold) {
-            action = '<span class="badge bg-info text-dark"><i class="fas fa-clock me-1"></i>On hold</span>';
+        } else if (fmt.onHold && !canBorrow) {
+            action = onHoldBadge;
             avail = '<span class="text-info small">On hold</span>';
-        } else if (sel && sel.isAvailable) {
+        } else if (canBorrow) {
+            const held = fmt.onHold ? onHoldBadge : '';
             if (manual) {
-                action = `<button class="btn btn-sm btn-outline-primary" title="This library can't be downloaded automatically — borrow and fetch it with the external tool; the loan stays checked out for you to return"
+                action = held + `<button class="btn btn-sm btn-outline-primary" title="This library can't be downloaded automatically — borrow and fetch it with the external tool; the loan stays checked out for you to return"
                     onclick="${borrowFn}('${tid}','${card}',this)"><i class="fas fa-hand me-1"></i>Borrow (manual)</button>`;
                 avail = '<span class="text-warning small fw-semibold">Available · manual download</span>';
             } else {
-                action = `<button class="btn btn-sm btn-primary" onclick="${s.fn}('${tid}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>Borrow &amp; Download</button>`;
+                action = held + `<button class="btn btn-sm btn-primary" onclick="${s.fn}('${tid}','${card}',this)"><i class="fas fa-cloud-arrow-down me-1"></i>Borrow &amp; Download</button>`;
                 avail = '<span class="text-success small fw-semibold">Available now</span>';
             }
+            if (fmt.onHold) avail = '<span class="text-success small fw-semibold">On hold · available now here</span>';
         } else {
             action = `<button class="btn btn-sm btn-outline-warning" onclick="libbyPlaceHoldFmt('${tid}','${card}',this)"><i class="fas fa-clock me-1"></i>Place hold</button>`;
             avail = `<span class="text-warning small">${esc(libbyWaitText(sel ? sel.estimatedWaitDays : fmt.estimatedWaitDays))}</span>`;
