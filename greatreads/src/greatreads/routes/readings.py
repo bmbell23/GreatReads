@@ -80,13 +80,22 @@ async def get_readings(
 
 
 @router.get("/tbr")
-async def get_tbr_readings(db: Session = Depends(get_db)):
-    """Get TBR (To Be Read) readings in chain order."""
+async def get_tbr_readings(
+    fields: Optional[str] = Query(None),  # "card" = slim TBR-list payload (#411); default = full
+    db: Session = Depends(get_db),
+):
+    """Get TBR (To Be Read) readings in chain order.
+
+    ``fields=card`` drops each book's description / tags / inventory (the popup
+    fetches those per book via ``/books/{id}/details``) and fills the source and
+    owned-media fields from batched queries instead of ~4 queries per reading.
+    """
     # Get TBR readings: not-started OR paused (active in-progress books live on the
     # Home page now, #65). Active in-progress = started AND not paused AND not finished.
-    readings = db.query(Reading).options(
-        joinedload(Reading.book)
-    ).filter(
+    book_load = joinedload(Reading.book)
+    if fields == "card":
+        book_load = book_load.defer(Book.description)
+    readings = db.query(Reading).options(book_load).filter(
         Reading.date_finished_actual.is_(None),
         Reading.date_dnf.is_(None),              # abandoned (DNF) books are not TBR (#271)
         or_(
@@ -104,9 +113,35 @@ async def get_tbr_readings(db: Session = Depends(get_db)):
         r.id  # Then by ID for stable sort
     ))
 
+    if fields == "card":
+        return _slim_reading_dicts(readings, db)
+
     # Convert to dict, enriching each book with source links + owned media so the
     # shared cover-tap popup can offer Read/Listen and show shelf location.
     return [_reading_dict_with_enriched_book(r, db) for r in readings]
+
+
+def _slim_reading_dicts(readings: List[Reading], db: Session) -> List[dict]:
+    """Reading dicts whose book omits description / tags / inventory, with
+    read_count, media_owned, calibre_id and abs_id from the Library's batched
+    card queries (#405) rather than per-reading lookups (#411)."""
+    from .library import _card_payload
+
+    books = list({r.book.id: r.book for r in readings if r.book}.values())
+    cards = {c["id"]: c for c in _card_payload(books, db)}
+    out = []
+    for r in readings:
+        d = r.to_dict(include_book=False)
+        if r.book:
+            c = cards[r.book.id]
+            book = r.book.to_dict(heavy=False)
+            for k in ("read_count", "media_owned", "calibre_id", "abs_id"):
+                book[k] = c[k]
+            d["book"] = book
+        else:
+            d["book"] = None
+        out.append(d)
+    return out
 
 
 @router.get("/journal")
