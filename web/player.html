@@ -34,7 +34,7 @@
                 radial-gradient(120% 60% at 50% -10%, rgba(134,64,192,0.12), transparent 60%),
                 var(--bg);
             color: var(--text); overflow: hidden;
-            height: 100vh; display: flex; flex-direction: column;
+            height: 100vh; height: 100dvh; display: flex; flex-direction: column;
             padding: env(safe-area-inset-top) env(safe-area-inset-right)
                      env(safe-area-inset-bottom) env(safe-area-inset-left);
         }
@@ -58,7 +58,10 @@
            previously-wasted space above it, rather than the growth being split evenly
            above and below by centering (#272). */
         .stage { flex: 1; display: flex; flex-direction: column; align-items: center;
-            justify-content: flex-start; padding: 8px 24px 4px; gap: 16px; min-height: 0; }
+            justify-content: flex-start; padding: 8px 24px 4px; gap: 16px; min-height: 0;
+            /* #408: never clip the controls. If a viewport/browser still can't fit
+               the stack, the stage scrolls instead (ROG Ally: couldn't reach them). */
+            overflow-y: auto; overflow-x: hidden; }
         /* Portrait: the wrapper is transparent so meta/bars/controls remain
            direct flex children of .stage (unchanged layout). Landscape (below)
            turns it into a real column beside the cover. */
@@ -263,11 +266,16 @@
            portrait stack overflows into a square box (controls overlap the
            bars). The near-square aspect ratio (5/6–6/5) catches foldables
            without hitting 4:3 tablets (1.33) or tall phones (~0.46). */
+        /* Third clause (#408): any genuinely wide landscape up to 900px tall —
+           handhelds/laptops like the ROG Ally (a ~1280x600-720 browser viewport),
+           where the portrait stack only fits by crushing the cover or not at all.
+           3/2 keeps 4:3 tablets on the portrait stack. */
         @media (orientation: landscape) and (max-height: 600px),
-               (orientation: landscape) and (min-aspect-ratio: 5/6) and (max-aspect-ratio: 6/5) {
+               (orientation: landscape) and (min-aspect-ratio: 5/6) and (max-aspect-ratio: 6/5),
+               (orientation: landscape) and (min-aspect-ratio: 3/2) and (max-height: 900px) {
             .stage {
                 flex-direction: row;
-                align-items: center;
+                align-items: safe center;
                 justify-content: center;
                 gap: 28px;
                 padding: 6px 28px;
