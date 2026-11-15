@@ -152,6 +152,15 @@ async def create_reading(reading: ReadingCreate, db: Session = Depends(get_db)):
     if reading_data.get('media'):
         reading_data['media'] = normalize_media_type(reading_data['media'])
 
+    # Infer reread server-side (#404): an explicit True is kept; otherwise it's a
+    # reread when a finished reading of the same book already exists.
+    if not reading_data.get('reread') and reading_data.get('book_id') is not None:
+        already_finished = db.query(Reading.id).filter(
+            Reading.book_id == reading_data['book_id'],
+            Reading.date_finished_actual.isnot(None)
+        ).first() is not None
+        reading_data['reread'] = already_finished
+
     # Find the last unfinished reading of the same media type to link to
     media = reading_data.get('media')
     if media:

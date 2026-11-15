@@ -178,7 +178,7 @@
             </div>
             <div class="modal-footer">
                 <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
-                <button type="button" class="btn btn-primary" onclick="submitNewReading()">Add Reading</button>
+                <button type="button" class="btn btn-primary" id="submitNewReadingBtn" onclick="submitNewReading()">Add Reading</button>
             </div>
         </div>
     </div>
@@ -1749,25 +1749,37 @@ async function addNewReading(preselect) {
 
     console.log('Modal shown, loading books...');
 
-    // Load books for selection
-    await loadBooksForSelection();
-
     const bookSearch = document.getElementById('bookSearch');
     const selectedBookId = document.getElementById('selectedBookId');
 
     if (preselect && preselect.bookId) {
-        // Pre-fill the book (mirrors what clicking a search result does) and,
-        // when provided, pre-pick the media type.
-        const book = allBooks.find(b => String(b.id) === String(preselect.bookId));
-        if (book && bookSearch && selectedBookId) {
-            bookSearch.value = `${book.title} by ${book.author}`;
-            selectedBookId.value = book.id;
-        }
+        // #404: usable immediately. Select the book now, pre-pick the media type,
+        // and load the full (multi-MB) book list in the background for searching.
+        if (selectedBookId) selectedBookId.value = preselect.bookId;
         if (preselect.media) {
             const radio = document.querySelector(`input[name="mediaType"][value="${preselect.media}"]`);
             if (radio) radio.checked = true;
         }
-    } else if (bookSearch) {
+        if (bookSearch) bookSearch.value = 'Loading book...';
+        loadBooksForSelection();  // intentionally not awaited
+        try {
+            const book = await GreatReads.apiCall('/books/' + encodeURIComponent(preselect.bookId));
+            if (bookSearch && selectedBookId && String(selectedBookId.value) === String(preselect.bookId)) {
+                bookSearch.value = `${book.title} by ${book.author}`;
+            }
+        } catch (error) {
+            console.error('Error loading preselected book:', error);
+            if (bookSearch && String(selectedBookId.value) === String(preselect.bookId)) {
+                bookSearch.value = `Book #${preselect.bookId}`;
+            }
+        }
+        return;
+    }
+
+    // Load books for selection
+    await loadBooksForSelection();
+
+    if (bookSearch) {
         // Clear the search box AFTER loading books
         bookSearch.value = '';
         // Trigger the input event to reset the filter
@@ -2446,7 +2458,10 @@ function setupAutocomplete() {
     });
 }
 
+let submitNewReadingInFlight = false;  // #404: double-submit guard
+
 async function submitNewReading() {
+    if (submitNewReadingInFlight) return;
     const form = document.getElementById('addReadingForm');
     const bookId = document.getElementById('selectedBookId').value;
 
@@ -2463,20 +2478,19 @@ async function submitNewReading() {
         return;
     }
 
-    try {
-        // Auto-detect if this is a reread by checking if book has been read before
-        let isReread = false;
-        try {
-            const readings = await GreatReads.apiCall('/readings/?limit=10000');
-            isReread = readings.some(r => r.book_id == bookId && r.is_finished);
-        } catch (error) {
-            console.error('Error checking for rereads:', error);
-        }
+    submitNewReadingInFlight = true;
+    const submitBtn = document.getElementById('submitNewReadingBtn');
+    const submitBtnHtml = submitBtn ? submitBtn.innerHTML : '';
+    if (submitBtn) {
+        submitBtn.disabled = true;
+        submitBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-1"></span>Adding...';
+    }
 
+    try {
+        // The server infers reread (a finished reading of this book exists) — #404
         const readingData = {
             book_id: parseInt(bookId),
-            media: media,
-            reread: isReread
+            media: media
         };
 
         const response = await fetch(apiUrl('/api/readings/'), {
@@ -2517,6 +2531,12 @@ async function submitNewReading() {
     } catch (error) {
         console.error('Error adding reading:', error);
         GreatReads.showToast('Error adding reading', 'error');
+    } finally {
+        submitNewReadingInFlight = false;
+        if (submitBtn) {
+            submitBtn.disabled = false;
+            submitBtn.innerHTML = submitBtnHtml;
+        }
     }
 }
 
