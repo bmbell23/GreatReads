@@ -709,6 +709,23 @@ function setupEventListeners() {
     renderSortUI();
 }
 
+// ── Slim list + sessionStorage cache (#405) ──────────────────────────────────
+// The grid only needs the "card" fields; description / inventory / readings are
+// fetched per book (GET /books/{id}/details, /books/{id}) when one is opened.
+const LIB_LIST_URL = '/library/books?limit=10000&fields=card';
+const LIB_CACHE_KEY = 'gr.library.card.v1';   // bump the suffix if the card shape changes
+let libInitialLoadDone = false;
+function libCacheRead() {
+    try { return sessionStorage.getItem(LIB_CACHE_KEY); } catch (_) { return null; }
+}
+function libCacheWrite(raw) {
+    try { sessionStorage.setItem(LIB_CACHE_KEY, raw); }
+    catch (_) { libCacheClear(); }   // quota exceeded / storage disabled: silently go uncached
+}
+function libCacheClear() {
+    try { sessionStorage.removeItem(LIB_CACHE_KEY); } catch (_) {}
+}
+
 async function loadLibraryData() {
     try {
         // Check if GreatReads is available
@@ -716,26 +733,48 @@ async function loadLibraryData() {
             throw new Error('GreatReads library not loaded');
         }
 
+        // #405: first load of the page renders instantly from the sessionStorage copy
+        // of the slim list (if any), then revalidates in the background below.
+        let cachedRaw = null, renderedFromCache = false;
+        if (!libInitialLoadDone) {
+            cachedRaw = libCacheRead();
+            if (cachedRaw) {
+                try {
+                    allBooks = JSON.parse(cachedRaw);
+                    filteredBooks = allBooks;
+                    initializeFiltersFromURL();
+                    initChipMenus();
+                    applyFilters();
+                    renderedFromCache = true;
+                } catch (_) { cachedRaw = null; allBooks = []; }
+            }
+        }
+        libInitialLoadDone = true;
+
         // Load books + filters in parallel.
         const [books, stats, filters] = await Promise.all([
-            GreatReads.apiCall('/library/books?limit=10000'),
+            GreatReads.apiCall(LIB_LIST_URL),
             GreatReads.apiCall('/library/stats'),
             GreatReads.apiCall('/library/filters')
         ]);
 
-        allBooks = books;
-        filteredBooks = books;
+        const freshRaw = JSON.stringify(books);
+        libCacheWrite(freshRaw);
         filterOptions = filters;
 
         displayStats(stats);
         populateFilterOptions(filters);
 
-        // Initialize filters from URL params, then render via applyFilters() so the
-        // default Author sort is applied on first load (the dropdown already says
-        // "Author").
-        initializeFiltersFromURL();
-        initChipMenus();   // #301 long-press / right-click sub-filter menus
-        applyFilters();
+        if (!renderedFromCache || freshRaw !== cachedRaw) {
+            allBooks = books;
+            filteredBooks = books;
+            // Initialize filters from URL params, then render via applyFilters() so the
+            // default Author sort is applied on first load (the dropdown already says
+            // "Author").
+            initializeFiltersFromURL();
+            initChipMenus();   // #301 long-press / right-click sub-filter menus
+            applyFilters();
+        }
 
         // Deep-link from the cover popup's "Edit Book" action (#27): open the
         // book's edit modal directly.
@@ -904,9 +943,11 @@ function libInitBulk() {
         afterEdit: (ids, patch) => {
             const set = new Set(ids);
             allBooks.forEach(b => { if (set.has(b.id)) Object.assign(b, patch); });
+            libCacheWrite(JSON.stringify(allBooks));   // keep the #405 cache in step
             displayBooks(filteredBooks);
         },
         afterDelete: (ids) => {
+            libCacheClear();   // #405
             // Optimistic removal for instant feedback, then refetch so the stat counts
             // (read/unread/format) stay authoritative.
             const set = new Set(ids);
@@ -918,6 +959,7 @@ function libInitBulk() {
         afterEnrich: () => {
             // Enriched fields (synopsis/genres/…) show in the popup — refetch so the
             // loaded book objects carry the new values.
+            libCacheClear();   // #405
             if (typeof loadLibraryData === 'function') loadLibraryData();
         },
     });
@@ -953,10 +995,9 @@ function openBookActions(bookId) {
 // reading in the loaded books, attaches its book, and hands it to showEditModal.
 function libEditReading(readingId) {
     hideOpenBookModal();
-    for (const b of allBooks) {
-        const rd = (b.readings || []).find(r => r.id === readingId);
-        if (rd) { rd.book = rd.book || b; GreatReads.showEditModal(rd); return; }
-    }
+    // #405: the slim list carries no readings[]; the shared helper fetches the reading
+    // and attaches the book currently open in the popup.
+    GreatReads.editReadingById(readingId);
 }
 // The shared edit modal reloads via a global refreshReadings() — point it at Library's.
 window.refreshReadings = () => refreshLibraryData();
@@ -992,7 +1033,9 @@ async function libMarkFinished(id) {
         const media = owned.includes('Ebook') ? 'Ebook'
                     : owned.includes('Audio') ? 'Audio'
                     : owned.includes('Physical') ? 'Physical' : 'Ebook';
-        const unfinished = (book.readings || []).find(r => !r.date_finished_actual);
+        // #405: readings aren't in the slim list — fetch this book's on demand.
+        const detail = await GreatReads.apiCall(`/books/${id}/details`);
+        const unfinished = (detail.readings || []).find(r => !r.date_finished_actual);
         if (unfinished) {
             await GreatReads.apiCall(`/readings/${unfinished.id}`, {
                 method: 'PUT', data: { date_finished_actual: today }
@@ -1038,8 +1081,10 @@ async function libClearProgress(id) {
 // Refresh Library after a shared Edit Book save/delete (#110)
 window.bkeHooks = { afterSave: () => refreshLibraryData(), afterDelete: () => refreshLibraryData() };
 async function refreshLibraryData() {
+    libCacheClear();   // a mutation happened: never serve the pre-change list again
     try {
-        allBooks = await GreatReads.apiCall('/library/books?limit=10000');
+        allBooks = await GreatReads.apiCall(LIB_LIST_URL);
+        libCacheWrite(JSON.stringify(allBooks));
         applyFilters();
     } catch (_) {}
 }
@@ -1323,7 +1368,7 @@ async function loadBooksForLibrarySearch() {
         const books = await GreatReads.apiCall('/books/?limit=10000');
 
         // Get books already in library (using the library endpoint with max allowed limit)
-        const libraryBooks = await GreatReads.apiCall('/library/books?limit=1000');
+        const libraryBooks = await GreatReads.apiCall('/library/books?limit=10000&fields=card');
         const ownedBookIds = new Set(libraryBooks.map(lb => lb.id));
 
         // Filter to only books NOT in library

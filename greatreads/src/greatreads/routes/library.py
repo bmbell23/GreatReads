@@ -2,16 +2,85 @@
 
 from typing import List, Optional, Dict, Any
 from fastapi import APIRouter, Depends, Query
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, defer
 from sqlalchemy import func, and_, or_
 
 from ..database import get_db
 from ..models.book import Book, BookResponse
 from ..models.reading import Reading
 from ..models.inventory import Inventory
+from ..models.external_import import ExternalImport
 from ._book_enrich import enrich_book_dict
 
 router = APIRouter()
+
+_IN_CHUNK = 500  # keep IN (...) lists well under SQLite's variable limit
+
+
+def _card_payload(books: list, db: Session) -> List[Dict[str, Any]]:
+    """Slim Library-grid dicts built from 3 batched queries (no N+1, no tags,
+    no description / inventory / readings arrays). Output is deterministic
+    (sorted media_owned) so the client can cheaply diff it against its cache."""
+    ids = [b.id for b in books]
+    finished: Dict[int, int] = {}
+    in_progress: set = set()
+    owned: Dict[int, set] = {}
+    calibre: Dict[int, Any] = {}
+    abs_: Dict[int, Any] = {}
+
+    for i in range(0, len(ids), _IN_CHUNK):
+        chunk = ids[i:i + _IN_CHUNK]
+        for bid, started, done, dnf in db.query(
+            Reading.book_id, Reading.date_started,
+            Reading.date_finished_actual, Reading.date_dnf,
+        ).filter(Reading.book_id.in_(chunk)):
+            if done:
+                finished[bid] = finished.get(bid, 0) + 1
+            if started and not done and not dnf:
+                in_progress.add(bid)
+        for bid, audio, ebook, physical in db.query(
+            Inventory.book_id, Inventory.owned_audio,
+            Inventory.owned_ebook, Inventory.owned_physical,
+        ).filter(Inventory.book_id.in_(chunk)):
+            s = owned.setdefault(bid, set())
+            if audio:
+                s.add("Audio")
+            if ebook:
+                s.add("Ebook")
+            if physical:
+                s.add("Physical")
+        for bid, source, ext_id in db.query(
+            ExternalImport.book_id, ExternalImport.source, ExternalImport.external_id,
+        ).filter(ExternalImport.book_id.in_(chunk)):
+            if source == "calibre":
+                calibre.setdefault(bid, ext_id)
+            elif source == "audiobookshelf":
+                abs_.setdefault(bid, ext_id)
+
+    out = []
+    for b in books:
+        n = finished.get(b.id, 0)
+        out.append({
+            "id": b.id,
+            "title": b.title,
+            "author": b.author,
+            "author_sorted": b.author_sorted,
+            "universe": b.universe,
+            "series": b.series,
+            "series_number": b.series_number,
+            "date_published": b.date_published.isoformat() if b.date_published else None,
+            "word_count": b.word_count,
+            "page_count": b.page_count,
+            "cover": b.cover,
+            "cover_version": b.cover_version,
+            "read_count": n,
+            "is_read": n > 0,
+            "is_in_progress": b.id in in_progress,
+            "media_owned": sorted(owned.get(b.id, ())),
+            "calibre_id": calibre.get(b.id),
+            "abs_id": abs_.get(b.id),
+        })
+    return out
 
 
 @router.get("/books", response_model=List[Dict[str, Any]])
@@ -26,9 +95,15 @@ async def get_library_books(
     media_owned: Optional[str] = Query(None),  # "ebook", "physical", "audio"
     sort_by: str = Query("title"),  # "title", "author", "date_published", "series"
     sort_order: str = Query("asc"),  # "asc", "desc"
+    fields: Optional[str] = Query(None),  # "card" = slim grid payload (#405); default = full
     db: Session = Depends(get_db)
 ):
-    """Get library books with comprehensive filtering and sorting."""
+    """Get library books with comprehensive filtering and sorting.
+
+    ``fields=card`` returns a slim per-book dict (no description / inventory /
+    readings arrays) holding just the values the Library grid renders, filters
+    and sorts on; the popup/editor fetch full detail per book on demand.
+    """
 
     # Base query with joins - only include books that are owned
     query = db.query(Book).outerjoin(Reading).join(Inventory).filter(
@@ -105,6 +180,14 @@ async def get_library_books(
             query = query.order_by(Book.title.desc())
         else:
             query = query.order_by(Book.title.asc())
+
+    # Slim "card" mode (#405): only what the Library grid needs; no per-book queries.
+    if fields == "card":
+        books = (
+            query.options(defer(Book.description))
+            .distinct(Book.id).offset(skip).limit(limit).all()
+        )
+        return _card_payload(books, db)
 
     # Get distinct books (in case of multiple readings/inventory entries)
     books = query.distinct(Book.id).offset(skip).limit(limit).all()
