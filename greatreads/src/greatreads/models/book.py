@@ -80,9 +80,13 @@ class Book(Base):
             return self.author_name_second
         return f"{self.author_name_second}, {self.author_name_first}"
 
-    def to_dict(self) -> dict:
-        """Convert to dictionary for API responses."""
-        return {
+    def to_dict(self, heavy: bool = True) -> dict:
+        """Convert to dictionary for API responses.
+
+        ``heavy=False`` leaves out ``tags`` and ``description`` (the bulk of a list
+        payload, and ``tags`` is a lazy query per book); list views fetch them per
+        book via ``/books/{id}/details`` when one is opened (#411)."""
+        d = {
             "id": self.id,
             "title": self.title,
             "author": self.author,
@@ -101,8 +105,6 @@ class Book(Base):
             "cover": self.cover,
             "isbn_id": self.isbn_id,
             "words_per_page": self.words_per_page,
-            "tags": [tag.name for tag in self.tags] if self.tags else [],
-            "description": self.description,
             "public_rating": self.public_rating,
             "narrator": self.narrator,
             "audio_duration_seconds": self.audio_duration_seconds,
@@ -114,6 +116,10 @@ class Book(Base):
             "content_end_seconds": self.content_end_seconds,
             "cover_version": self.cover_version,
         }
+        if heavy:
+            d["tags"] = [tag.name for tag in self.tags] if self.tags else []
+            d["description"] = self.description
+        return d
 
     @property
     def cover_version(self) -> int:

@@ -210,9 +210,9 @@ class Reading(Base):
         # Return average rounded to 1 decimal place
         return round(sum(valid_ratings) / len(valid_ratings), 1)
 
-    def to_dict(self) -> dict:
+    def to_dict(self, include_book: bool = True) -> dict:
         """Convert to dictionary for API responses."""
-        return {
+        d = {
             "id": self.id,
             "id_previous": self.id_previous,
             "book_id": self.book_id,
@@ -250,9 +250,11 @@ class Reading(Base):
             "date_progress_set": self.date_progress_set.isoformat() if self.date_progress_set else None,
             "current_progress_percent": self.current_progress_percent,
             "current_progress_page": self.current_progress_page,
-            # Include book data for convenience
-            "book": self.book.to_dict() if self.book else None,
         }
+        if include_book:
+            # Include book data for convenience
+            d["book"] = self.book.to_dict() if self.book else None
+        return d
 
 
 # Pydantic models for API

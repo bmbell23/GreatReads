@@ -740,19 +740,24 @@ const STATIC_BASE = "{{ url_for('static', path='') }}";
 const progressByCalibre = new Map();  // calibre_id -> { progress, page, total, ... }
 const progressByAbs = new Map();      // abs_id     -> { progress, ... }
 
+// Returns the raw progress items (for the #411 cache), or null when unreachable.
 async function loadReadingProgress() {
     try {
         const res = await fetch(`${GR_EREADER_API}/progress`);
-        if (!res.ok) return;
+        if (!res.ok) return null;
         const data = await res.json();
         const items = Array.isArray(data.items) ? data.items : (Array.isArray(data) ? data : []);
-        progressByCalibre.clear();
-        progressByAbs.clear();
-        for (const it of items) {
-            if (it && it.bookId != null) progressByCalibre.set(String(it.bookId), it);
-            if (it && it.absId) progressByAbs.set(String(it.absId), it);
-        }
-    } catch (e) { /* leave maps empty → fall back to the estimate */ }
+        setReadingProgress(items);
+        return items;
+    } catch (e) { return null; /* leave maps as-is → fall back to the estimate */ }
+}
+function setReadingProgress(items) {
+    progressByCalibre.clear();
+    progressByAbs.clear();
+    for (const it of items) {
+        if (it && it.bookId != null) progressByCalibre.set(String(it.bookId), it);
+        if (it && it.absId) progressByAbs.set(String(it.absId), it);
+    }
 }
 
 // The live progress record for a reading: prefer the format it's actually in,
@@ -1064,19 +1069,60 @@ document.addEventListener('DOMContentLoaded', function() {
 
 // Refresh TBR after a shared Edit Book save/delete (#110)
 window.bkeHooks = { afterSave: () => loadTBRReadings(), afterDelete: () => loadTBRReadings() };
+// ── Slim list + sessionStorage cache (#411, same as Library's #405) ──────────
+// The list only needs the "card" fields; description / tags / inventory are
+// fetched per book (/books/{id}/details) when its popup opens. The cache holds the
+// list plus the live reading positions, so a revisit draws the same cards at once.
+const TBR_LIST_URL = '/readings/tbr?fields=card';
+const TBR_CACHE_KEY = 'gr.tbr.card.v1';   // bump the suffix if the card shape changes
+let tbrInitialLoadDone = false;
+function tbrCacheRead() {
+    try { return sessionStorage.getItem(TBR_CACHE_KEY); } catch (_) { return null; }
+}
+function tbrCacheWrite(raw) {
+    try { sessionStorage.setItem(TBR_CACHE_KEY, raw); }
+    catch (_) { tbrCacheClear(); }   // quota exceeded / storage disabled: silently go uncached
+}
+function tbrCacheClear() {
+    try { sessionStorage.removeItem(TBR_CACHE_KEY); } catch (_) {}
+}
+function tbrRender(readings) {
+    allReadings = readings;
+    currentReadings = readings;
+    updateStats(readings);
+    // Apply current filters instead of showing all readings
+    applyFilters();
+}
+
 async function loadTBRReadings() {
+    // First load of the page renders instantly from the sessionStorage copy (if
+    // any), then revalidates below and redraws only if something changed. Later
+    // calls (after a mutation) always fetch fresh.
+    let cachedRaw = null, renderedFromCache = false;
+    if (!tbrInitialLoadDone) {
+        cachedRaw = tbrCacheRead();
+        if (cachedRaw) {
+            try {
+                const c = JSON.parse(cachedRaw);
+                if (c.progress) setReadingProgress(c.progress);
+                tbrRender(c.readings);
+                renderedFromCache = true;
+            } catch (_) { cachedRaw = null; }
+        }
+    }
+    tbrInitialLoadDone = true;
     try {
-        const readings = await GreatReads.apiCall('/readings/tbr');
-        allReadings = readings;
-        currentReadings = readings;
-        // Pull live reading positions before rendering so the progress bar matches
+        // Pull live reading positions alongside the list so the progress bar matches
         // what the reader shows (non-fatal if the Ereader feed is unreachable).
-        await loadReadingProgress();
-        updateStats(readings);
-        // Apply current filters instead of showing all readings
-        applyFilters();
+        const [readings, progress] = await Promise.all([
+            GreatReads.apiCall(TBR_LIST_URL),
+            loadReadingProgress(),
+        ]);
+        const freshRaw = JSON.stringify({ readings, progress });
+        tbrCacheWrite(freshRaw);
+        if (!renderedFromCache || freshRaw !== cachedRaw) tbrRender(readings);
     } catch (error) {
-        showErrorState();
+        if (!renderedFromCache) showErrorState();
     }
 }
 
@@ -1365,9 +1411,14 @@ function createReadingCard(reading, index) {
 // details (series/words/pages/WPD), an extra-info section (progress / planned),
 // and an Edit Reading action that opens the existing edit modal. Series/word/page
 // counts and WPD moved here off the card to make room for a bigger cover.
-function openReadingActions(readingId) {
-    const reading = currentReadings.find(r => r.id === readingId);
-    if (!reading || !reading.book) return;
+async function openReadingActions(readingId) {
+    const listed = currentReadings.find(r => r.id === readingId);
+    if (!listed || !listed.book) return;
+    // #411: the slim list has no description / tags / inventory — fetch the full
+    // book for the popup, falling back to the slim one if that fails.
+    let book = listed.book;
+    try { book = await GreatReads.apiCall(`/books/${listed.book.id}/details`) || book; } catch (_) {}
+    const reading = { ...listed, book };
 
     const wpd = getWpdForMedia(reading.media);
     const detailRows = wpd ? [['WPD', `${(wpd / 1000).toFixed(1)}k`]] : [];
@@ -2543,7 +2594,7 @@ async function submitNewReading() {
 async function moveToNextPosition(readingId, media) {
     try {
         // Get all TBR readings
-        const readings = await GreatReads.apiCall('/readings/tbr');
+        const readings = await GreatReads.apiCall(TBR_LIST_URL);
 
         // Find the current in-progress reading of the same media type
         const currentReading = readings.find(r =>
@@ -2592,7 +2643,7 @@ async function moveToNextPosition(readingId, media) {
 async function moveToNextMonth(readingId, media) {
     try {
         // Get all TBR readings
-        const readings = await GreatReads.apiCall('/readings/tbr');
+        const readings = await GreatReads.apiCall(TBR_LIST_URL);
 
         // Get current date info
         const now = new Date();
@@ -2639,7 +2690,7 @@ async function moveToNextMonth(readingId, media) {
 async function moveToNextYear(readingId, media) {
     try {
         // Get all TBR readings
-        const readings = await GreatReads.apiCall('/readings/tbr');
+        const readings = await GreatReads.apiCall(TBR_LIST_URL);
 
         // Get current year
         const now = new Date();
